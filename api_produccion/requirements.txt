@@ -5,3 +5,4 @@ sqlalchemy
 mysql-connector-python
 pandas
 openpyxl
+python-dotenv

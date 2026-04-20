@@ -8,13 +8,17 @@ import pandas as pd
 from io import BytesIO
 from fastapi.responses import StreamingResponse
 import logging
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # --- Logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("sigep")
 
 # --- CONFIGURACIÓN DE DB ---
-SQLALCHEMY_DATABASE_URL = "mysql+mysqlconnector://admin:3012@localhost:3306/produccion_detg"
+SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "mysql+mysqlconnector://root:password@localhost:3306/db_produccion")
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
