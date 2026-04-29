@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:fillViewport="true"
+    android:background="#F0F0F0">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="CONTROL DE PRODUCCIÓN"
+            android:textSize="26sp"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:textColor="#333333"
+            android:layout_marginBottom="30dp"/>
+
+        <LinearLayout
+            android:id="@+id/seccionConfiguracion"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <Spinner android:id="@+id/spinnerTipo" android:layout_width="match_parent" android:layout_height="50dp" android:layout_marginBottom="8dp"/>
+            <Spinner android:id="@+id/spinnerMaquina" android:layout_width="match_parent" android:layout_height="50dp" android:layout_marginBottom="8dp"/>
+            <Spinner android:id="@+id/spinnerOperador" android:layout_width="match_parent" android:layout_height="50dp" android:layout_marginBottom="8dp"/>
+            <Spinner android:id="@+id/spinnerMarca" android:layout_width="match_parent" android:layout_height="50dp" android:layout_marginBottom="8dp"/>
+            <Spinner android:id="@+id/spinnerPresentacion" android:layout_width="match_parent" android:layout_height="50dp" android:layout_marginBottom="8dp"/>
+            <Spinner android:id="@+id/spinnerFragancia" android:layout_width="match_parent" android:layout_height="50dp" android:layout_marginBottom="20dp"/>
+
+            <Button android:id="@+id/btnIniciarTurno" android:layout_width="match_parent" android:layout_height="60dp" android:text="INICIAR TURNO" android:backgroundTint="#4CAF50"/>
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/seccionProduccion"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <EditText android:id="@+id/etCantidadPacas" android:textColor="#000000" android:textColorHint="#757575" android:layout_width="match_parent" android:layout_height="60dp" android:inputType="number" android:hint="Cantidad de Pacas" android:textSize="20sp" android:layout_marginBottom="16dp"/>
+            <Button android:id="@+id/btnEnviarPallet" android:layout_width="match_parent" android:layout_height="60dp" android:text="ENVIAR REGISTRO" android:backgroundTint="#2196F3" android:layout_marginBottom="16dp"/>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="16dp">
+
+                <Button
+                    android:id="@+id/btnSolicitarInsumo"
+                    android:layout_width="0dp"
+                    android:layout_height="60dp"
+                    android:layout_weight="1"
+                    android:text="📦 SOLICITAR INS"
+                    android:textColor="#FFFFFF"
+                    android:textSize="10dp"
+                    android:textStyle="bold"
+                    android:backgroundTint="#3F51B5" />
+
+                <View
+                    android:layout_width="8dp"
+                    android:layout_height="match_parent"/>
+
+                <Button
+                    android:id="@+id/btnVerEstadoPedidos"
+                    android:layout_width="0dp"
+                    android:layout_height="60dp"
+                    android:layout_weight="1"
+                    android:text="📊 VER ESTADO"
+                    android:textSize="10dp"
+                    android:textColor="#3F51B5"
+                    android:textStyle="bold"
+                    android:backgroundTint="#E8EAF6" />
+            </LinearLayout>
+            <Button
+                android:id="@+id/btnTerminarTurno"
+                android:layout_width="match_parent"
+                android:layout_height="60dp"
+                android:text="CERRAR TURNO DE TRABAJO"
+                android:backgroundTint="#B71C1C"
+                android:layout_marginBottom="8dp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Historial de este turno:"
+                android:textStyle="bold"
+                android:textColor="#555555"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="4dp"/>
+
+            <ScrollView
+                android:layout_width="match_parent"
+                android:layout_height="120dp"
+                android:background="#F0F0F0"
+                android:padding="8dp"
+                android:layout_marginBottom="24dp">
+                <TextView
+                    android:id="@+id/tvHistorialPacas"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textSize="16sp"
+                    android:textColor="#1E293B"
+                    android:text=""/>
+            </ScrollView>
+
+            <Button
+                android:id="@+id/btnParo"
+                android:layout_width="match_parent"
+                android:layout_height="60dp"
+                android:text="REGISTRAR PARO"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:backgroundTint="#FA8400"
+                android:layout_marginBottom="32dp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/textViewDevelopedBy"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:layout_marginTop="20dp"
+            android:gravity="center"
+            android:text="Desarrollado por John Alexander Garcia | DETCUADOR S.A. | Versión 1.9.4"
+            android:textColor="#000000"
+            android:textSize="10sp"
+            android:textStyle="bold" />
+
+    </LinearLayout>
+</ScrollView>

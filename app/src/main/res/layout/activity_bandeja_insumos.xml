@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#E0E0E0"
+    android:fitsSystemWindows="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#212121"
+        android:padding="16dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="PEDIDOS"
+                android:textColor="#FFFFFF"
+                android:textSize="22sp"
+                android:textStyle="bold"/>
+            <TextView
+                android:id="@+id/tvUsuarioLogueado"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Insumista: Cargando..."
+                android:textColor="#4CAF50"
+                android:textSize="14sp"
+                android:layout_marginTop="4dp"/>
+        </LinearLayout>
+        <Button
+            android:id="@+id/btnCerrarSesion"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="0dp"
+            android:minWidth="0dp"
+            android:paddingHorizontal="10dp"
+            android:text="SALIR"
+            android:textSize="12sp"
+            android:backgroundTint="#D32F2F"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"/>
+    </LinearLayout>
+
+    <androidx.core.widget.NestedScrollView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="PEDIDOS ACEPTADOS"
+                android:textColor="#1976D2"
+                android:textStyle="bold"
+                android:padding="12dp"
+                android:textSize="16sp"
+                android:background="#BBDEFB"/>
+
+            <TextView
+                android:id="@+id/tvSinAsignados"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="No tienes entregas pendientes"
+                android:gravity="center"
+                android:padding="20dp"
+                android:textStyle="italic"
+                android:textColor="#757575"/>
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/rvAsignados"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:nestedScrollingEnabled="false" /> <View
+            android:layout_width="match_parent"
+            android:layout_height="4dp"
+            android:background="#9E9E9E"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="PEDIDOS NUEVOS"
+                android:textColor="#D32F2F"
+                android:textStyle="bold"
+                android:padding="12dp"
+                android:textSize="16sp"
+                android:background="#FFCDD2"/>
+
+            <TextView
+                android:id="@+id/tvSinPedidos"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Buscando pedidos..."
+                android:gravity="center"
+                android:padding="20dp"
+                android:textStyle="italic"
+                android:textColor="#757575"/>
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/rvPedidos"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:nestedScrollingEnabled="false" /> </LinearLayout>
+    </androidx.core.widget.NestedScrollView>
+
+</LinearLayout>
