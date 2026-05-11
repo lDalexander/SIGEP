@@ -176,10 +176,10 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val respuesta = RetrofitClient.apiService.obtenerDetallePedidos(sesionActualId!!)
-                withContext(Dispatchers.Main) {
-                    if (respuesta.isSuccessful && respuesta.body() != null) {
-                        val pedidos = respuesta.body()!!
+                val respDetalle = RetrofitClient.apiService.obtenerDetallePedidos(sesionActualId!!)
+                if (respDetalle.isSuccessful && respDetalle.body() != null) {
+                    val pedidos = respDetalle.body()!!
+                    withContext(Dispatchers.Main) {
                         if (pedidos.isEmpty()) {
                             tvContenido.text = "No has realizado ninguna solicitud en este turno."
                             return@withContext
@@ -208,8 +208,24 @@ class MainActivity : AppCompatActivity() {
                             sb.append("\n")
                         }
                         tvContenido.text = sb.toString().trimEnd()
-                    } else {
-                        tvContenido.text = "Error al obtener los datos.\nIntente de nuevo."
+                    }
+                } else {
+                    // Endpoint detallado aún no disponible en el backend — usar resumen básico
+                    val respBasico = RetrofitClient.apiService.obtenerEstadoPedidos(sesionActualId!!)
+                    withContext(Dispatchers.Main) {
+                        if (respBasico.isSuccessful && respBasico.body() != null) {
+                            val d = respBasico.body()!!
+                            tvContenido.text = if (d.pendientes == 0 && d.en_camino == 0 && d.entregados == 0) {
+                                "No has realizado ninguna solicitud en este turno."
+                            } else {
+                                "Solicitados:  ${d.pendientes + d.en_camino + d.entregados}\n" +
+                                "Pendientes:   ${d.pendientes}\n" +
+                                "En Camino:    ${d.en_camino}\n" +
+                                "Entregados:   ${d.entregados}"
+                            }
+                        } else {
+                            tvContenido.text = "Error al obtener los datos.\nIntente de nuevo."
+                        }
                     }
                 }
             } catch (e: Exception) {
