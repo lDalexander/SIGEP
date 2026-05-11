@@ -15,110 +15,107 @@ import kotlinx.coroutines.withContext
 
 class MenuRolesActivity : AppCompatActivity() {
 
-    // Variables para los perfiles normales
     private lateinit var btnOperador: Button
     private lateinit var btnInsumista: Button
-
-    // Variable para el acceso administrativo (Botón del engranaje)
     private lateinit var btnAdminAccess: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_menu_roles)
 
-        // 1. Vincular los botones de perfiles operativos
         btnOperador = findViewById(R.id.btnRolOperario)
         btnInsumista = findViewById(R.id.btnRolInsumista)
         val btnRolSupervisor = findViewById<Button>(R.id.btnRolSupervisor)
-
-        btnRolSupervisor.setOnClickListener {
-            val intent = Intent(this, LoginActivity::class.java)
-            intent.putExtra("rol", "SUPERVISOR") // Enviamos el disfraz de supervisor
-            startActivity(intent)
-        }
-
-        // 2. Vincular el botón administrativo
         btnAdminAccess = findViewById(R.id.btnAdminAccess)
 
-        // 3. Listeners para perfiles normales
+        btnRolSupervisor.setOnClickListener {
+            startActivity(Intent(this, LoginActivity::class.java).apply {
+                putExtra("rol", "SUPERVISOR")
+            })
+        }
+
+        // DISEÑO INTENCIONAL: El acceso de operario es compartido en turno.
+        // No se requiere PIN individual. Ver decisión de arquitectura v1.
         btnOperador.setOnClickListener {
-            // 🔥 El operador va DIRECTO a Control de Producción (MainActivity)
-            val intent = Intent(this, MainActivity::class.java)
-            startActivity(intent)
+            startActivity(Intent(this, MainActivity::class.java))
         }
 
         btnInsumista.setOnClickListener {
-            val intent = Intent(this, LoginActivity::class.java)
-            intent.putExtra("rol", "INSUMISTA")
-            startActivity(intent)
+            startActivity(Intent(this, LoginActivity::class.java).apply {
+                putExtra("rol", "INSUMISTA")
+            })
         }
 
-        // 4. Listener para el acceso administrativo
         btnAdminAccess.setOnClickListener {
-            showAdminAuthDialog()
+            mostrarDialogoAdminAuth()
         }
     }
 
-    private fun showAdminAuthDialog() {
-        // Inflamos la vista personalizada que creamos en el paso 1
-        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_admin_auth, null)
-        val etUser = dialogView.findViewById<TextInputEditText>(R.id.etAdminUser)
-        val etPassword = dialogView.findViewById<TextInputEditText>(R.id.etAdminPassword)
+    private fun mostrarDialogoAdminAuth() {
+        val vistaDialogo = LayoutInflater.from(this).inflate(R.layout.dialog_admin_auth, null)
+        val etUsuario = vistaDialogo.findViewById<TextInputEditText>(R.id.etAdminUser)
+        val etContrasena = vistaDialogo.findViewById<TextInputEditText>(R.id.etAdminPassword)
 
-        val dialog = MaterialAlertDialogBuilder(this)
-            .setView(dialogView)
+        val dialogo = MaterialAlertDialogBuilder(this)
+            .setView(vistaDialogo)
             .setCancelable(true)
             .setNegativeButton("Cancelar", null)
-            .setPositiveButton("Ingresar", null) // null para manejar la validación manual
+            // null para manejar la validación manualmente y evitar cierre automático en error
+            .setPositiveButton("Ingresar", null)
             .create()
 
-        dialog.show()
+        dialogo.show()
 
-        // Manejo manual del clic en "Ingresar" para evitar que se cierre si hay error
-        dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            val user = etUser.text.toString().trim()
-            val password = etPassword.text.toString().trim()
+        dialogo.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val usuario = etUsuario.text.toString().trim()
+            val contrasena = etContrasena.text.toString().trim()
 
-            if (user.isEmpty() || password.isEmpty()) {
+            if (usuario.isEmpty() || contrasena.isEmpty()) {
                 Toast.makeText(this@MenuRolesActivity, "Complete las credenciales", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
 
-            // 1. Damos feedback visual y evitamos doble clic
-            val btnIngresar = dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE)
+            val btnIngresar = dialogo.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE)
             btnIngresar.isEnabled = false
             btnIngresar.text = "Validando..."
 
-            // 2. Iniciamos el trabajo asíncrono (Comunicación con FastAPI)
             lifecycleScope.launch(Dispatchers.IO) {
                 try {
-                    // Empaquetamos los datos
-                    val request = AdminLoginRequest(user, password)
-                    // Hacemos la llamada al servidor
-                    val response = RetrofitClient.apiService.loginAdministrador(request)
+                    val solicitud = AdminLoginRequest(usuario, contrasena)
+                    val respuesta = RetrofitClient.apiService.loginAdministrador(solicitud)
 
-                    // 3. Volvemos al hilo principal para actualizar la pantalla
                     withContext(Dispatchers.Main) {
-                        if (response.isSuccessful && response.body() != null) {
-                            // CREDENCIALES CORRECTAS (Código 200)
-                            val datos = response.body()!!
-                            dialog.dismiss()
+                        if (respuesta.isSuccessful && respuesta.body() != null) {
+                            val datos = respuesta.body()!!
+                            dialogo.dismiss()
 
                             Toast.makeText(this@MenuRolesActivity, "Bienvenido, ${datos.nivel_acceso}", Toast.LENGTH_SHORT).show()
 
-                            // Navegar al panel de administración de D-Stock
-                            val intent = Intent(this@MenuRolesActivity, AdminDashboardActivity::class.java)
-                            startActivity(intent)
+                            getSharedPreferences("DetcuadorPrefs", MODE_PRIVATE).edit().apply {
+                                putInt("usuario_id", datos.admin_id)
+                                putString("usuario_nombre", "Admin")
+                                putString("usuario_rol", datos.nivel_acceso)
+                                apply()
+                            }
+
+                            // El nivel de acceso determina qué vista del dashboard se muestra,
+                            // evitando que Bodega vea datos de Planta y viceversa.
+                            when (datos.nivel_acceso.uppercase()) {
+                                "ADMINPLANTA", "ADMINBODEGA" -> {
+                                    startActivity(Intent(this@MenuRolesActivity, SupervisorDashboardActivity::class.java))
+                                }
+                                else -> {
+                                    startActivity(Intent(this@MenuRolesActivity, AdminDashboardActivity::class.java))
+                                }
+                            }
                         } else {
-                            // CREDENCIALES INCORRECTAS (Código 401)
                             btnIngresar.isEnabled = true
                             btnIngresar.text = "Ingresar"
-                            etPassword.error = "Usuario o contraseña incorrectos"
-                            etPassword.setText("")
+                            etContrasena.error = "Usuario o contraseña incorrectos"
+                            etContrasena.setText("")
                         }
                     }
                 } catch (e: Exception) {
-                    // ERROR DE RED O SERVIDOR CAÍDO
                     withContext(Dispatchers.Main) {
                         btnIngresar.isEnabled = true
                         btnIngresar.text = "Ingresar"

@@ -1,5 +1,6 @@
 plugins {
     alias(libs.plugins.android.application)
+    id("com.google.gms.google-services")
 }
 
 android {
@@ -52,4 +53,13 @@ dependencies {
     // Corrutinas para llamadas asíncronas
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.2")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
+    implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
+
+    // 🔥 WebSocket (OkHttp)
+    implementation("com.squareup.okhttp3:okhttp:4.11.0")
+
+    // 🔥 Firebase FCM
+    implementation(platform("com.google.firebase:firebase-bom:32.7.0"))
+    implementation("com.google.firebase:firebase-messaging-ktx")
 }

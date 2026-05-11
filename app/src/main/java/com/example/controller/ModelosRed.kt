@@ -1,5 +1,7 @@
 package com.example.controller
 
+import com.google.gson.annotations.SerializedName
+
 // --- PETICIONES (Lo que la tablet envía a Python) ---
 data class HistorialPallet(val cantidad_pacas: Int, val hora: String)
 
@@ -9,7 +11,8 @@ data class IniciarTurnoRequest(
     val operador: String,
     val marca: String,
     val presentacion: String,
-    val fragancia: String
+    val fragancia: String,
+    val request_id: String
 )
 
 data class RegistrarPalletRequest(
@@ -32,9 +35,17 @@ data class OperadorResponse(
     val nombre: String
 )
 
+data class MarcaResponse(
+    val nombre: String,
+    val presentaciones: List<String>
+)
+
+// El campo marcas es nulo mientras el backend no devuelva la jerarquía completa.
+// Ver TAREA 1: migración de datos hardcodeados a api/maquinas.
 data class MaquinaResponse(
     val id: Int,
-    val nombre: String
+    val nombre: String,
+    val marcas: List<MarcaResponse>? = null
 )
 
 data class RespuestaGenerica(
@@ -99,8 +110,8 @@ data class EstadoPedidosResponse(
 )
 
 data class AdminLoginRequest(
-    val username: String,
-    val password: String
+    val nombre: String,
+    val pin: String
 )
 
 data class AdminLoginResponse(
@@ -108,4 +119,52 @@ data class AdminLoginResponse(
     val mensaje: String,
     val admin_id: Int,
     val nivel_acceso: String
+)
+
+
+// ==========================================
+// NUEVO: FASE 5 - TORRE DE CONTROL (SUPERVISORES)
+// ==========================================
+data class EstadoMaquinaRealTime(
+    val maquina: String,
+    val operador: String,
+    val producto: String,
+    val tiempo_inicio: String,
+    val pacas_totales: Int,
+    val estado: String // "ACTIVA", "PARO", "OFFLINE"
+)
+
+data class HistorialPedidoSupervisor(
+    val id: Int,
+    val maquina: String,
+    val insumo: String,
+    val cantidad: Int,
+    val solicitado_a: String,
+    val aceptado_por: String?,
+    val entregado_en: String?,
+    val tiempo_respuesta: String?,
+    val status: String // "NUEVO", "ACEPTADO", "ENTREGADO"
+)
+
+// ==========================================
+// NUEVO: FASE 6 - UPDATER PRIVADO
+// ==========================================
+data class VersionResponse(
+    val version_code: Int,
+    val version_name: String,
+    val url_descarga: String
+)
+
+// usuario_id es nulo cuando el dispositivo aún no tiene sesión activa.
+// Con él el backend puede enviar FCM a un usuario específico en lugar de hacer broadcast.
+data class SolicitudTokenFcm(
+    @SerializedName("token")       val token: String,
+    @SerializedName("plataforma")  val plataforma: String = "android",
+    @SerializedName("usuario_id")  val usuarioId: Int? = null
+)
+
+// El mismo modelo sirve para registro (HTTP 201) y actualización (HTTP 200).
+data class RespuestaTokenFcm(
+    @SerializedName("mensaje") val mensaje: String,
+    @SerializedName("id")      val id: Int
 )

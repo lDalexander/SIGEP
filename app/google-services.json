@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "430471010248",
+    "project_id": "sigep-89ba4",
+    "storage_bucket": "sigep-89ba4.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:430471010248:android:e5cb2cf7d753dd8eb612fd",
+        "android_client_info": {
+          "package_name": "com.example.controller"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCmnEe0NMdFmPcScj3qI5ji1U_a_Ei_qI8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

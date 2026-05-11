@@ -56,7 +56,8 @@ class PedidoAdapter(
     override fun getItemCount(): Int = listaPedidos.size
 
     fun actualizarLista(nuevaLista: List<PedidoPendienteResponse>) {
-        listaPedidos = nuevaLista
+        this.listaPedidos = nuevaLista
+        // 🔥 EL GRITO: Sin esta línea, la lista jamás se moverá aunque tenga nuevos datos
         notifyDataSetChanged()
     }
 }

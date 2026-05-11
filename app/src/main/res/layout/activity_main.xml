@@ -81,6 +81,16 @@
                     android:textStyle="bold"
                     android:backgroundTint="#E8EAF6" />
             </LinearLayout>
+
+            <TextView
+                android:id="@+id/tvStatusPedidos"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/status_pedidos_vacio"
+                android:textColor="#3F51B5"
+                android:textStyle="bold"
+                android:gravity="center"
+                android:layout_marginBottom="16dp"/>
             <Button
                 android:id="@+id/btnTerminarTurno"
                 android:layout_width="match_parent"

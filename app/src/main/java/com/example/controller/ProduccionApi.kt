@@ -41,8 +41,14 @@ interface ProduccionApi {
     @GET("/api/sesion/{sesion_id}/insumos_permitidos")
     suspend fun obtenerInsumosPermitidos(@Path("sesion_id") sesionId: Int): Response<List<InsumoResponse>>
 
+    @GET("/api/sesion/{sesion_id}/estado_pedidos")
+    suspend fun obtenerEstadoPedidos(@Path("sesion_id") sesionId: Int): Response<EstadoPedidosResponse>
+
     @GET("/api/usuarios")
     suspend fun obtenerUsuarios(): Response<List<ListaUsuariosResponse>>
+
+    @GET("/api/admin/supervisores")
+    suspend fun obtenerSupervisores(): Response<List<ListaUsuariosResponse>>
 
     @POST("/api/admin/login")
     suspend fun loginAdministrador(@Body request: AdminLoginRequest): Response<AdminLoginResponse>
@@ -64,4 +70,21 @@ interface ProduccionApi {
 
     @GET("/api/insumos/asignados/{insumista_id}")
     suspend fun obtenerPedidosAsignados(@Path("insumista_id") insumistaId: Int): Response<List<PedidoPendienteResponse>>
+
+    // ==========================================
+    // NUEVO: FASE 5 - TORRE DE CONTROL (SUPERVISORES)
+    // ==========================================
+    @GET("/api/supervisor/planta/estado_realtime")
+    suspend fun obtenerEstadoPlanta(): Response<List<EstadoMaquinaRealTime>>
+
+    @GET("/api/supervisor/bodega/historial_pedidos")
+    suspend fun obtenerHistorialPedidosSupervisor(): Response<List<HistorialPedidoSupervisor>>
+
+    @GET("api/config/version")
+    suspend fun checkVersion(): Response<VersionResponse>
+
+    // Endpoint pendiente de implementar en el backend FastAPI.
+    // Necesario para que el servidor pueda enviar FCM a dispositivos específicos en lugar de broadcast.
+    @POST("api/dispositivos/token")
+    suspend fun registrarTokenFcm(@Body solicitud: SolicitudTokenFcm): Response<RespuestaTokenFcm>
 }

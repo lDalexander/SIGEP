@@ -70,22 +70,26 @@ class LoginActivity : AppCompatActivity() {
     }
 
     private fun cargarUsuarios() {
+        val rolSeleccionado = intent.getStringExtra("rol") ?: "ACCESO"
+
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val response = RetrofitClient.apiService.obtenerUsuarios()
+                // Seleccionamos el endpoint según el rol
+                val response = if (rolSeleccionado == "SUPERVISOR") {
+                    RetrofitClient.apiService.obtenerSupervisores()
+                } else {
+                    RetrofitClient.apiService.obtenerUsuarios()
+                }
+
                 withContext(Dispatchers.Main) {
                     if (response.isSuccessful && response.body() != null) {
                         listaUsuariosFull = response.body()!!
 
-                        // Armamos la lista para el Spinner
-                        val nombres = listOf("-- Seleccione Usuario --") + listaUsuariosFull.map { it.nombre }
+                        val tituloSpinner = if (rolSeleccionado == "SUPERVISOR") "-- Seleccione Supervisor --" else "-- Seleccione Usuario --"
+                        val nombres = listOf(tituloSpinner) + listaUsuariosFull.map { it.nombre }
 
-                        // Constructor con el molde cerrado (R.layout.item_spinner_negro)
                         val adapter = ArrayAdapter(this@LoginActivity, R.layout.item_spinner_negro, nombres)
-
-                        // INDICAMOS EL MOLDE ABIERTO para forzar fondo blanco
                         adapter.setDropDownViewResource(R.layout.item_spinner_dropdown_negro)
-
                         spinnerUsuarios.adapter = adapter
                     }
                 }
@@ -102,68 +106,93 @@ class LoginActivity : AppCompatActivity() {
     }
 
     private fun validarAcceso(nombre: String, pin: String) {
+        val rolSeleccionado = intent.getStringExtra("rol") ?: "ACCESO"
         btnIngresar.isEnabled = false
         btnIngresar.text = "Verificando..."
 
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val request = LoginRequest(nombre = nombre, pin = pin)
-                val response = RetrofitClient.apiService.iniciarSesion(request)
+                if (rolSeleccionado == "SUPERVISOR") {
+                    // --- LOGIN PARA LA TABLA DE ADMINISTRADORES ---
+                    val request = AdminLoginRequest(nombre = nombre, pin = pin)
+                    val response = RetrofitClient.apiService.loginAdministrador(request)
 
-                withContext(Dispatchers.Main) {
-                    btnIngresar.isEnabled = true
-                    btnIngresar.text = "INGRESAR"
+                    withContext(Dispatchers.Main) {
+                        btnIngresar.isEnabled = true
+                        btnIngresar.text = "INGRESAR"
 
-                    if (response.isSuccessful && response.body() != null) {
-                        val user = response.body()!!
+                        if (response.isSuccessful && response.body() != null) {
+                            val admin = response.body()!!
+                            
+                            // Guardar en AppState para control de alarmas
+                            AppState.usuarioRol = admin.nivel_acceso
 
-                        // Guardar sesión en la memoria de la tablet
-                        getSharedPreferences("DetcuadorPrefs", MODE_PRIVATE).edit().apply {
-                            putInt("usuario_id", user.id)
-                            putString("usuario_nombre", user.nombre)
-                            putString("usuario_rol", user.rol)
-                            putLong("tiempo_login", System.currentTimeMillis())
-                            apply()
-                        }
+                            getSharedPreferences("DetcuadorPrefs", MODE_PRIVATE).edit().apply {
+                                putInt("usuario_id", admin.admin_id)
+                                putString("usuario_nombre", nombre)
+                                putString("usuario_rol", admin.nivel_acceso)
+                                putLong("tiempo_login", System.currentTimeMillis())
+                                apply()
+                            }
 
-                        Toast.makeText(
-                            this@LoginActivity,
-                            "Bienvenido, ${user.nombre}",
-                            Toast.LENGTH_SHORT
-                        ).show()
-
-                        // 🔥 NUEVO: Enrutamiento industrial a 3 vías
-                        if (user.rol.uppercase() == "OPERADOR") {
-                            // Operador va a producción
-                            val intent = Intent(this@LoginActivity, MainActivity::class.java)
-                            startActivity(intent)
-                        } else if (user.rol.uppercase() == "SUPERVISOR") {
-                            // Supervisor va a la Torre de Control
+                            Toast.makeText(this@LoginActivity, "Bienvenido Supervisor, $nombre", Toast.LENGTH_SHORT).show()
+                            
                             val intent = Intent(this@LoginActivity, SupervisorDashboardActivity::class.java)
                             startActivity(intent)
+                            finish()
                         } else {
-                            // Insumista va a la bandeja de pedidos
-                            val intent = Intent(this@LoginActivity, BandejaInsumosActivity::class.java)
-                            startActivity(intent)
+                            // Intentamos obtener el error detallado del backend
+                            val errorMsg = response.errorBody()?.string() ?: "PIN de Administrador incorrecto"
+                            Toast.makeText(this@LoginActivity, "Error: $errorMsg", Toast.LENGTH_LONG).show()
+                            etPin.text.clear()
                         }
-                        finish() // Destruimos el Login para que no puedan volver atrás
+                    }
+                } else {
+                    // --- LOGIN PARA LA TABLA DE USUARIOS (OPERADORES/INSUMISTAS) ---
+                    val request = LoginRequest(nombre = nombre, pin = pin)
+                    val response = RetrofitClient.apiService.iniciarSesion(request)
 
-                    } else {
-                        Toast.makeText(this@LoginActivity, "PIN incorrecto", Toast.LENGTH_SHORT).show()
-                        etPin.text.clear()
+                    withContext(Dispatchers.Main) {
+                        btnIngresar.isEnabled = true
+                        btnIngresar.text = "INGRESAR"
+
+                        if (response.isSuccessful && response.body() != null) {
+                            val user = response.body()!!
+
+                            // Guardar en AppState para control de alarmas
+                            AppState.usuarioRol = user.rol
+
+                            getSharedPreferences("DetcuadorPrefs", MODE_PRIVATE).edit().apply {
+                                putInt("usuario_id", user.id)
+                                putString("usuario_nombre", user.nombre)
+                                putString("usuario_rol", user.rol)
+                                putLong("tiempo_login", System.currentTimeMillis())
+                                apply()
+                            }
+
+                            Toast.makeText(this@LoginActivity, "Bienvenido, ${user.nombre}", Toast.LENGTH_SHORT).show()
+
+                            if (user.rol.uppercase() == "OPERADOR") {
+                                val intent = Intent(this@LoginActivity, MainActivity::class.java)
+                                startActivity(intent)
+                            } else {
+                                val intent = Intent(this@LoginActivity, BandejaInsumosActivity::class.java)
+                                startActivity(intent)
+                            }
+                            finish()
+                        } else {
+                            Toast.makeText(this@LoginActivity, "PIN incorrecto", Toast.LENGTH_SHORT).show()
+                            etPin.text.clear()
+                        }
                     }
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     btnIngresar.isEnabled = true
                     btnIngresar.text = "INGRESAR"
-                    Toast.makeText(
-                        this@LoginActivity,
-                        "Sin conexión al servidor",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    Toast.makeText(this@LoginActivity, "Sin conexión al servidor", Toast.LENGTH_SHORT).show()
                 }
             }
         }
     }
-}-
+}

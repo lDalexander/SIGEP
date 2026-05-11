@@ -22,28 +22,34 @@ import android.widget.Chronometer
 import androidx.appcompat.app.AlertDialog
 import android.os.SystemClock
 import android.graphics.Color
+import android.content.Intent
+import android.os.Build
+import android.content.Context
+import android.provider.Settings
+import android.net.Uri
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
 class MainActivity : AppCompatActivity() {
 
     private var sesionActualId: Int? = null
+    // El token de idempotencia evita que el servidor registre el mismo turno dos veces
+    // si el usuario presiona el botón mientras la primera petición está en vuelo.
+    private var tokenIdempotencia: String = ""
     private lateinit var btnSolicitarInsumo: Button
-    private val PREFS_NAME = "DetcuadorPrefs"
     private lateinit var btnParo: Button
-    // Layouts y Vistas
-    private var isParoActivo = false
-    private var tiempoInicioParo: Long = 0
+
+    private var paroActivo = false
     private lateinit var seccionConfiguracion: LinearLayout
     private lateinit var seccionProduccion: LinearLayout
     private lateinit var etCantidadPacas: EditText
     private lateinit var btnIniciarTurno: Button
     private lateinit var btnEnviarPallet: Button
-
     private lateinit var tvHistorialPacas: TextView
     private lateinit var btnTerminarTurno: Button
+    private lateinit var tvStatusPedidos: TextView
+    private lateinit var btnVerEstadoPedidos: Button
 
-    // Spinners
     private lateinit var spinnerTipo: Spinner
     private lateinit var spinnerMaquina: Spinner
     private lateinit var spinnerOperador: Spinner
@@ -51,197 +57,182 @@ class MainActivity : AppCompatActivity() {
     private lateinit var spinnerPresentacion: Spinner
     private lateinit var spinnerFragancia: Spinner
 
-    // --- DICCIONARIOS DE DATOS ---
-    val tipos = arrayOf("-- Seleccione Tipo --", "Sólido", "Líquido")
+    private val NOMBRE_PREFS = "DetcuadorPrefs"
 
-    // Variables dinámicas (Se llenan desde MySQL)
+    val tipos = arrayOf("-- Seleccione Tipo --", "Sólido", "Líquido")
+    val fragancias = arrayOf("-- Seleccione Fragancia --", "Limón", "Floral")
+
     private var listaOperadoresServidor: List<String> = emptyList()
     private var listaMaquinasServidor: List<String> = emptyList()
 
-    // Fragancias globales
-    val fragancias = arrayOf("-- Seleccione Fragancia --", "Limón", "Floral")
+    // Jerarquía dinámica descargada con la lista de máquinas.
+    // Cuando el backend incluya `marcas` en api/maquinas, este mapa reemplaza los locales.
+    private var jerarquiaMaquinas: Map<String, List<MarcaResponse>> = emptyMap()
 
-    // Marcas según la Máquina
-    private val marcasPorMaquina = mapOf(
-        "Máquina 7" to arrayOf("-- Seleccione Marca --", "TORBELLINO", "ULTREX", "COMISARIATO"),
+    // Fallback local hasta que el backend devuelva la jerarquía en api/maquinas.
+    // Eliminar estos mapas cuando el servidor implemente el campo `marcas` en MaquinaResponse.
+    private val marcasPorMaquinaLocal = mapOf(
+        "Máquina 7"  to arrayOf("-- Seleccione Marca --", "TORBELLINO", "ULTREX", "COMISARIATO"),
         "Máquina 7B" to arrayOf("-- Seleccione Marca --", "ULTREX", "PQP", "COMISARIATO", "HIT"),
-        "Máquina 8" to arrayOf("-- Seleccione Marca --", "ULTREX", "HIT"),
-        "Máquina 9" to arrayOf("-- Seleccione Marca --", "TORBELLINO", "ULTREX", "COMISARIATO"),
-        "Máquina 16" to arrayOf("-- Seleccione Marca --", "Sin Asignar")
+        "Máquina 8"  to arrayOf("-- Seleccione Marca --", "ULTREX", "HIT"),
+        "Máquina 9"  to arrayOf("-- Seleccione Marca --", "TORBELLINO", "ULTREX", "COMISARIATO"),
+        "Máquina 16" to arrayOf("-- Seleccione Marca --", "TORBELLINO", "ULTREX", "COMISARIATO")
     )
 
-    // Presentaciones según "Máquina + Marca"
-    private val presentacionesPorMaquinaMarca = mapOf(
-        "Máquina 7|ULTREX" to arrayOf("-- Seleccione Presentación --", "1 KG", "2 KG", "3 KG"),
-        "Máquina 7|TORBELLINO" to arrayOf("-- Seleccione Presentación --", "1 KG"),
-        "Máquina 7|COMISARIATO" to arrayOf("-- Seleccione Presentación --", "1.2 KG"),
-        "Máquina 8|ULTREX" to arrayOf("-- Seleccione Presentación --", "100 GR", "250 GR", "500 GR"),
-        "Máquina 8|HIT" to arrayOf("-- Seleccione Presentación --", "360 GR"),
-        "Máquina 7B|PQP" to arrayOf("-- Seleccione Presentación --", "15 KG", "25 KG"),
-        "Máquina 7B|HIT" to arrayOf("-- Seleccione Presentación --", "5 KG"),
-        "Máquina 7B|ULTREX" to arrayOf("-- Seleccione Presentación --", "5 KG"),
+    private val presentacionesPorMaquinaMarcaLocal = mapOf(
+        "Máquina 7|ULTREX"       to arrayOf("-- Seleccione Presentación --", "1 KG", "2 KG", "3 KG"),
+        "Máquina 7|TORBELLINO"   to arrayOf("-- Seleccione Presentación --", "1 KG"),
+        "Máquina 7|COMISARIATO"  to arrayOf("-- Seleccione Presentación --", "1.2 KG"),
+        "Máquina 8|ULTREX"       to arrayOf("-- Seleccione Presentación --", "100 GR", "250 GR", "500 GR"),
+        "Máquina 8|HIT"          to arrayOf("-- Seleccione Presentación --", "360 GR"),
+        "Máquina 7B|PQP"         to arrayOf("-- Seleccione Presentación --", "15 KG", "25 KG"),
+        "Máquina 7B|HIT"         to arrayOf("-- Seleccione Presentación --", "5 KG"),
+        "Máquina 7B|ULTREX"      to arrayOf("-- Seleccione Presentación --", "5 KG"),
         "Máquina 7B|COMISARIATO" to arrayOf("-- Seleccione Presentación --", "5 KG"),
-        "Máquina 9|TORBELLINO" to arrayOf("-- Seleccione Presentación --", "1 KG"),
-        "Máquina 9|ULTREX" to arrayOf("-- Seleccione Presentación --", "1 KG"),
-        "Máquina 9|COMISARIATO" to arrayOf("-- Seleccione Presentación --", "1.2 KG")
+        "Máquina 9|TORBELLINO"   to arrayOf("-- Seleccione Presentación --", "1 KG"),
+        "Máquina 9|ULTREX"       to arrayOf("-- Seleccione Presentación --", "1 KG"),
+        "Máquina 9|COMISARIATO"  to arrayOf("-- Seleccione Presentación --", "1.2 KG"),
+        "Máquina 16|ULTREX"      to arrayOf("-- Seleccione Presentación --", "1 KG", "2 KG", "3 KG"),
+        "Máquina 16|TORBELLINO"  to arrayOf("-- Seleccione Presentación --", "1 KG"),
+        "Máquina 16|COMISARIATO" to arrayOf("-- Seleccione Presentación --", "1.2 KG")
     )
-    private lateinit var tvStatusPedidos: TextView
-    private lateinit var btnVerEstadoPedidos: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // 1. CONECTAR LOS CABLES (Vincular vistas) ANTES QUE NADA
-        tvHistorialPacas = findViewById(R.id.tvHistorialPacas)
-        btnVerEstadoPedidos = findViewById(R.id.btnVerEstadoPedidos) // ✅ Movido arriba
+        tvHistorialPacas    = findViewById(R.id.tvHistorialPacas)
+        btnVerEstadoPedidos = findViewById(R.id.btnVerEstadoPedidos)
         vincularVistas()
 
-        // 2. CONFIGURACIONES
+        // Token de idempotencia generado en cada sesión para evitar turnos duplicados
+        // si el operario presiona el botón mientras la petición está en vuelo.
+        tokenIdempotencia = java.util.UUID.randomUUID().toString()
+
         cargarCatalogosDesdeCache()
         configurarFiltrosEnCascada()
         configurarBotones()
 
-        // 3. 🔥 EL ESCUCHADOR DEL NUEVO BOTÓN (El que faltaba)
         btnVerEstadoPedidos.setOnClickListener {
             if (sesionActualId != null && sesionActualId != -1) {
                 mostrarVentanaEstadoPedidos()
             } else {
-                Toast.makeText(this, "⚠️ Debes iniciar turno primero", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Debes iniciar turno primero", Toast.LENGTH_SHORT).show()
             }
         }
 
-        // 4. LLAMADAS AL SERVIDOR
         descargarCatalogosDesdeServidor()
 
-        // --- RECUPERAR SESIÓN Y VALIDAR TIEMPO (TTL) ---
-        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-        val sesionGuardada = prefs.getInt("sesion_activa", -1)
+        val prefs = getSharedPreferences(NOMBRE_PREFS, MODE_PRIVATE)
+        val sesionGuardada  = prefs.getInt("sesion_activa", -1)
         val timestampInicio = prefs.getLong("hora_inicio_ms", 0L)
 
         if (sesionGuardada != -1) {
-            val tiempoActual = System.currentTimeMillis()
-            val diferenciaMs = tiempoActual - timestampInicio
-            val horasTranscurridas = diferenciaMs / (1000 * 60 * 60)
+            val horasTranscurridas = (System.currentTimeMillis() - timestampInicio) / (1000 * 60 * 60)
 
             if (horasTranscurridas >= 9) {
-                forzarReinicioPorError("Turno anterior caducado (Límite de 9h). Inicie uno nuevo.")
+                // Límite de 9h: evita que un turno del día anterior quede activo indefinidamente
+                // si el operario olvidó cerrarlo al final de su jornada.
+                forzarReinicioPorError("Turno anterior caducado (límite de 9h). Inicie uno nuevo.")
             } else {
-                // EL TURNO ES VÁLIDO: Restauramos la UI
                 sesionActualId = sesionGuardada
+                AppState.usuarioRol = prefs.getString("usuario_rol", "OPERADOR")
                 seccionConfiguracion.visibility = View.GONE
-                seccionProduccion.visibility = View.VISIBLE
+                seccionProduccion.visibility    = View.VISIBLE
                 Toast.makeText(this, "Turno recuperado", Toast.LENGTH_SHORT).show()
-
-                // ==========================================
-                // RECUPERAMOS EL HISTORIAL VISUAL
-                // ==========================================
                 recuperarHistorial(sesionGuardada)
+                iniciarRadarStatusPedidos(sesionGuardada)
             }
         }
     }
+
     private fun mostrarVentanaEstadoPedidos() {
-        // 1. Creamos la ventana emergente básica
-        val builder = androidx.appcompat.app.AlertDialog.Builder(this)
-        builder.setTitle("📊 Estado de tus Pedidos")
+        val builder = AlertDialog.Builder(this)
+        builder.setTitle("Estado de tus Pedidos")
         builder.setMessage("Consultando al servidor...")
         builder.setPositiveButton("CERRAR", null)
 
-        val dialog = builder.create()
-        dialog.show()
+        val dialogo = builder.create()
+        dialogo.show()
 
-        // 2. Buscamos los datos en el servidor
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val response = RetrofitClient.apiService.obtenerEstadoPedidos(sesionActualId!!)
-
+                val respuesta = RetrofitClient.apiService.obtenerEstadoPedidos(sesionActualId!!)
                 withContext(Dispatchers.Main) {
-                    if (response.isSuccessful && response.body() != null) {
-                        val datos = response.body()!!
-
+                    if (respuesta.isSuccessful && respuesta.body() != null) {
+                        val datos = respuesta.body()!!
                         if (datos.pendientes == 0 && datos.en_camino == 0 && datos.entregados == 0) {
-                            dialog.setMessage("No has realizado ninguna solicitud en este turno.")
+                            dialogo.setMessage("No has realizado ninguna solicitud en este turno.")
                         } else {
-                            // Formateamos el texto para que se vea bonito en el popup
-                            val mensaje = """
-                            ⏳ Pendientes: ${datos.pendientes}
-                            🚚 En Camino: ${datos.en_camino}
-                            ✅ Entregados: ${datos.entregados}
-                        """.trimIndent()
-
-                            dialog.setMessage(mensaje)
+                            dialogo.setMessage(
+                                "Pendientes: ${datos.pendientes}\n" +
+                                "En Camino:  ${datos.en_camino}\n" +
+                                "Entregados: ${datos.entregados}"
+                            )
                         }
                     } else {
-                        dialog.setMessage("Error al obtener los datos.")
+                        dialogo.setMessage("Error al obtener los datos.")
                     }
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    dialog.setMessage("Error de conexión. Revisa tu red.")
+                    dialogo.setMessage("Error de conexión. Revisa tu red.")
                 }
             }
         }
     }
+
     private fun iniciarRadarStatusPedidos(sesionId: Int) {
         lifecycleScope.launch(Dispatchers.IO) {
-            // El radar se mantiene vivo mientras el Activity exista
             while (isActive) {
                 try {
-                    val response = RetrofitClient.apiService.obtenerEstadoPedidos(sesionId)
+                    val respuesta = RetrofitClient.apiService.obtenerEstadoPedidos(sesionId)
                     withContext(Dispatchers.Main) {
-                        if (response.isSuccessful && response.body() != null) {
-                            val datos = response.body()!!
-
-                            if (datos.pendientes == 0 && datos.en_camino == 0 && datos.entregados == 0) {
-                                tvStatusPedidos.text = "Sin solicitudes aún"
+                        if (respuesta.isSuccessful && respuesta.body() != null) {
+                            val datos = respuesta.body()!!
+                            tvStatusPedidos.text = if (datos.pendientes == 0 && datos.en_camino == 0 && datos.entregados == 0) {
+                                "Sin solicitudes aún"
                             } else {
-                                // Actualización visual del tablero
-                                tvStatusPedidos.text = "⏳ Pendientes: ${datos.pendientes}\n" +
-                                        "🚚 En Camino: ${datos.en_camino}\n" +
-                                        "✅ Entregados: ${datos.entregados}"
+                                "Pendientes: ${datos.pendientes}\n" +
+                                "En Camino:  ${datos.en_camino}\n" +
+                                "Entregados: ${datos.entregados}"
                             }
                         }
                     }
                 } catch (e: Exception) {
-                    // Error silencioso para no interrumpir al operario
+                    // Falla silenciosa: el radar es informativo, no debe interrumpir al operario
                 }
-                delay(5000) // Consulta cada 5 segundos
+                delay(5000)
             }
         }
     }
+
     private fun vincularVistas() {
-        btnSolicitarInsumo = findViewById(R.id.btnSolicitarInsumo)
+        btnSolicitarInsumo   = findViewById(R.id.btnSolicitarInsumo)
         seccionConfiguracion = findViewById(R.id.seccionConfiguracion)
-        seccionProduccion = findViewById(R.id.seccionProduccion)
-
-        spinnerTipo = findViewById(R.id.spinnerTipo)
-        spinnerMaquina = findViewById(R.id.spinnerMaquina)
-        spinnerOperador = findViewById(R.id.spinnerOperador)
-        spinnerMarca = findViewById(R.id.spinnerMarca)
-        spinnerPresentacion = findViewById(R.id.spinnerPresentacion)
-        spinnerFragancia = findViewById(R.id.spinnerFragancia)
-
-        etCantidadPacas = findViewById(R.id.etCantidadPacas)
-        btnIniciarTurno = findViewById(R.id.btnIniciarTurno)
-        btnEnviarPallet = findViewById(R.id.btnEnviarPallet)
-        btnTerminarTurno = findViewById(R.id.btnTerminarTurno)
-        btnParo = findViewById(R.id.btnParo)
+        seccionProduccion    = findViewById(R.id.seccionProduccion)
+        spinnerTipo          = findViewById(R.id.spinnerTipo)
+        spinnerMaquina       = findViewById(R.id.spinnerMaquina)
+        spinnerOperador      = findViewById(R.id.spinnerOperador)
+        spinnerMarca         = findViewById(R.id.spinnerMarca)
+        spinnerPresentacion  = findViewById(R.id.spinnerPresentacion)
+        spinnerFragancia     = findViewById(R.id.spinnerFragancia)
+        etCantidadPacas      = findViewById(R.id.etCantidadPacas)
+        btnIniciarTurno      = findViewById(R.id.btnIniciarTurno)
+        btnEnviarPallet      = findViewById(R.id.btnEnviarPallet)
+        btnTerminarTurno     = findViewById(R.id.btnTerminarTurno)
+        btnParo              = findViewById(R.id.btnParo)
+        tvStatusPedidos      = findViewById(R.id.tvStatusPedidos)
     }
 
     private fun configurarFiltrosEnCascada() {
         spinnerTipo.adapter = ArrayAdapter(this, R.layout.spinner_item, tipos)
         bloquearSpinnersDesdeMaquina()
 
-        // EVENTO 1: Cuando cambian TIPO
         spinnerTipo.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 if (position > 0) {
-                    val tipoSeleccionado = tipos[position]
-                    if (tipoSeleccionado == "Sólido") {
-                        // USAMOS LOS DATOS DEL SERVIDOR
-                        if (listaMaquinasServidor.isEmpty()) {
-                            Toast.makeText(this@MainActivity, "Aún descargando máquinas...", Toast.LENGTH_SHORT).show()
-                        }
+                    if (tipos[position] == "Sólido") {
                         spinnerMaquina.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, listaMaquinasServidor)
                         spinnerMaquina.isEnabled = true
                     } else {
@@ -256,26 +247,28 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // EVENTO 2: Cuando cambian MAQUINA
         spinnerMaquina.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 if (position > 0) {
                     val maquinaSeleccionada = spinnerMaquina.selectedItem.toString()
 
-                    // USAMOS LOS DATOS DEL SERVIDOR PARA OPERADORES
                     spinnerOperador.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, listaOperadoresServidor)
                     spinnerOperador.isEnabled = true
-
                     spinnerFragancia.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, fragancias)
                     spinnerFragancia.isEnabled = true
 
-                    val marcas = marcasPorMaquina[maquinaSeleccionada] ?: arrayOf("-- Error --")
+                    // Usamos la jerarquía del servidor cuando ya está disponible;
+                    // el fallback local mantiene funcionalidad hasta que el backend la implemente.
+                    val marcas: List<String> = if (jerarquiaMaquinas.containsKey(maquinaSeleccionada)) {
+                        listOf("-- Seleccione Marca --") + jerarquiaMaquinas[maquinaSeleccionada]!!.map { it.nombre }
+                    } else {
+                        (marcasPorMaquinaLocal[maquinaSeleccionada] ?: arrayOf("-- Sin Configurar --")).toList()
+                    }
                     spinnerMarca.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, marcas)
                     spinnerMarca.isEnabled = true
 
                     spinnerPresentacion.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, arrayOf("-- Seleccione primero la Marca --"))
                     spinnerPresentacion.isEnabled = false
-
                     btnIniciarTurno.isEnabled = false
                 } else {
                     bloquearSpinnersDesdeOperador()
@@ -284,15 +277,19 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
-        // EVENTO 3: Cuando cambian MARCA
         spinnerMarca.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 if (position > 0) {
                     val maquinaActual = spinnerMaquina.selectedItem.toString()
-                    val marcaActual = spinnerMarca.selectedItem.toString()
-                    val llaveBuscadora = "$maquinaActual|$marcaActual"
-                    val presentaciones = presentacionesPorMaquinaMarca[llaveBuscadora] ?: arrayOf("-- Sin Configurar --")
+                    val marcaActual   = spinnerMarca.selectedItem.toString()
 
+                    val presentaciones: List<String> = if (jerarquiaMaquinas.containsKey(maquinaActual)) {
+                        val marcaEncontrada = jerarquiaMaquinas[maquinaActual]?.find { it.nombre == marcaActual }
+                        listOf("-- Seleccione Presentación --") + (marcaEncontrada?.presentaciones ?: emptyList())
+                    } else {
+                        val clave = "$maquinaActual|$marcaActual"
+                        (presentacionesPorMaquinaMarcaLocal[clave] ?: arrayOf("-- Sin Configurar --")).toList()
+                    }
                     spinnerPresentacion.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, presentaciones)
                     spinnerPresentacion.isEnabled = true
                     btnIniciarTurno.isEnabled = true
@@ -313,71 +310,66 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun bloquearSpinnersDesdeOperador() {
-        spinnerOperador.adapter = ArrayAdapter(this, R.layout.spinner_item, arrayOf("-- Bloqueado --"))
-        spinnerOperador.isEnabled = false
-        spinnerMarca.adapter = ArrayAdapter(this, R.layout.spinner_item, arrayOf("-- Bloqueado --"))
-        spinnerMarca.isEnabled = false
+        spinnerOperador.adapter    = ArrayAdapter(this, R.layout.spinner_item, arrayOf("-- Bloqueado --"))
+        spinnerMarca.adapter       = ArrayAdapter(this, R.layout.spinner_item, arrayOf("-- Bloqueado --"))
         spinnerPresentacion.adapter = ArrayAdapter(this, R.layout.spinner_item, arrayOf("-- Bloqueado --"))
+        spinnerFragancia.adapter   = ArrayAdapter(this, R.layout.spinner_item, arrayOf("-- Bloqueado --"))
+        spinnerOperador.isEnabled    = false
+        spinnerMarca.isEnabled       = false
         spinnerPresentacion.isEnabled = false
-        spinnerFragancia.adapter = ArrayAdapter(this, R.layout.spinner_item, arrayOf("-- Bloqueado --"))
-        spinnerFragancia.isEnabled = false
-        btnIniciarTurno.isEnabled = false
+        spinnerFragancia.isEnabled   = false
+        btnIniciarTurno.isEnabled    = false
     }
 
     private fun configurarBotones() {
         btnIniciarTurno.setOnClickListener {
+            btnIniciarTurno.isEnabled = false
+            btnIniciarTurno.text = "Iniciando..."
+
             if (spinnerMaquina.selectedItemPosition == 0 ||
                 spinnerOperador.selectedItemPosition == 0 ||
                 spinnerMarca.selectedItemPosition == 0 ||
                 spinnerPresentacion.selectedItemPosition == 0 ||
                 spinnerFragancia.selectedItemPosition == 0) {
 
-                Toast.makeText(this, "⚠️ ERROR: Debe completar todos los campos obligatorios.", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Debe completar todos los campos obligatorios.", Toast.LENGTH_LONG).show()
+                btnIniciarTurno.isEnabled = true
+                btnIniciarTurno.text = "INICIAR TURNO"
                 return@setOnClickListener
             }
 
-            val request = IniciarTurnoRequest(
-                tipo = spinnerTipo.selectedItem.toString(),
-                maquina = spinnerMaquina.selectedItem.toString(),
-                operador = spinnerOperador.selectedItem.toString(),
-                marca = spinnerMarca.selectedItem.toString(),
-                presentacion = spinnerPresentacion.selectedItem.toString(),
-                fragancia = spinnerFragancia.selectedItem.toString()
+            llamarApiIniciarTurno(
+                IniciarTurnoRequest(
+                    tipo        = spinnerTipo.selectedItem.toString(),
+                    maquina     = spinnerMaquina.selectedItem.toString(),
+                    operador    = spinnerOperador.selectedItem.toString(),
+                    marca       = spinnerMarca.selectedItem.toString(),
+                    presentacion = spinnerPresentacion.selectedItem.toString(),
+                    fragancia   = spinnerFragancia.selectedItem.toString(),
+                    request_id  = tokenIdempotencia
+                )
             )
-            llamarApiIniciarTurno(request)
         }
 
         btnEnviarPallet.setOnClickListener {
-            val cantidadStr = etCantidadPacas.text.toString()
-            if (cantidadStr.isEmpty() || cantidadStr.toInt() <= 0) {
+            val cantidad = etCantidadPacas.text.toString().toIntOrNull()
+            if (cantidad == null || cantidad <= 0) {
                 Toast.makeText(this, "Ingrese una cantidad válida", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
 
-            if (sesionActualId != null) {
-                if (sesionActualId == -99) {
-                    // --- MODO VIRTUAL (-99) ---
-                    // 1. Prohibido mandar a la API. Lo metemos a la caja fuerte local.
-                    val datosTemporales = RegistrarPalletRequest(sesionActualId!!, cantidadStr.toInt())
-                    guardarPacaPendiente(datosTemporales)
-
-                    // 2. Lo dibujamos en amarillo en el historial
-                    val horaActual = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
-                    val nuevaEntrada = "🟡 ${cantidadStr} pacas - $horaActual (Creando turno...)\n"
-                    val historialPrevio = tvHistorialPacas.text.toString()
-                    tvHistorialPacas.text = nuevaEntrada + historialPrevio
-                    etCantidadPacas.text.clear()
-
-                    // 3. ¡Despertamos al Sincronizador Maestro!
-                    // Él creará el turno en el servidor, cambiará el -99 por el ID real y enviará esta paca.
-                    Toast.makeText(this, "Reconectando y creando turno...", Toast.LENGTH_SHORT).show()
-                    iniciarSincronizacion()
-
-                } else {
-                    // --- MODO NORMAL (Ya tenemos ID Real) ---
-                    // Intentamos el envío directo al servidor
-                    llamarApiRegistrarPallet(RegistrarPalletRequest(sesionActualId!!, cantidadStr.toInt()))
-                }
+            if (sesionActualId == -99) {
+                // Modo offline: guardamos en cola local y disparamos la sincronización
+                // para que en cuanto vuelva la red se cree el turno real y se envíe la paca.
+                val datosTemporal = RegistrarPalletRequest(sesionActualId!!, cantidad)
+                guardarPacaPendiente(datosTemporal)
+                val horaActual = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+                tvHistorialPacas.text = "🟡 ${cantidad} pacas - $horaActual (Creando turno...)\n" + tvHistorialPacas.text
+                etCantidadPacas.text.clear()
+                Toast.makeText(this, "Reconectando y creando turno...", Toast.LENGTH_SHORT).show()
+                iniciarSincronizacion()
+            } else if (sesionActualId != null) {
+                llamarApiRegistrarPallet(RegistrarPalletRequest(sesionActualId!!, cantidad))
             }
         }
 
@@ -386,152 +378,162 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Debe tener red para solicitar insumos.", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            abrirModalInsumosInteligente() // <-- Llamamos a la nueva función
+            abrirModalInsumosInteligente()
         }
 
-        // --- AQUI ESTA LA MAGIA DE LA SINCRONIZACIÓN ---
         btnTerminarTurno.setOnClickListener {
             if (sesionActualId != null) {
                 val pendientes = obtenerPendientes()
-
                 if (pendientes.isNotEmpty()) {
-                    // Hay pacas en memoria: Forzamos envío antes de cerrar
+                    // Sincronizamos antes de cerrar para no perder pacas registradas sin conexión.
                     Toast.makeText(this, "Sincronizando pacas pendientes antes de cerrar...", Toast.LENGTH_LONG).show()
                     iniciarSincronizacion {
-                        // Cuando termine de enviar todas, dispara tu función de cierre normal
                         llamarApiFinalizarTurno(FinalizarTurnoRequest(sesionActualId!!))
                     }
                 } else {
-                    // Todo está al día: Cierra de inmediato
                     llamarApiFinalizarTurno(FinalizarTurnoRequest(sesionActualId!!))
                 }
             }
         }
+
         btnParo.setOnClickListener {
-            // Protección: No podemos registrar paros si estamos en modo Offline (Virtual -99)
             if (sesionActualId == null || sesionActualId == -99) {
                 Toast.makeText(this, "Debe tener red para registrar paros.", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
 
-            if (!isParoActivo) {
-                // --- MOSTRAR MODAL COMBINADO (SPINNER + TEXTO) ---
-                val builder = AlertDialog.Builder(this)
-                builder.setTitle("Registrar Tiempo Muerto")
-
-                // Crear un contenedor visual
-                val layout = LinearLayout(this)
-                layout.orientation = LinearLayout.VERTICAL
-                layout.setPadding(50, 40, 50, 20)
-
-                // 1. Crear el Spinner (Lista de categorías)
-                val tituloSpinner = TextView(this)
-                tituloSpinner.text = "Categoría del paro:"
-                tituloSpinner.setTypeface(null, android.graphics.Typeface.BOLD)
-                layout.addView(tituloSpinner)
-
-                val spinnerTipoParo = Spinner(this)
-                val categoriasParo = arrayOf("Mantenimiento", "Bodega", "Planeación", "Aseo/Limpieza", "Otro")
-                val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, categoriasParo)
-                spinnerTipoParo.adapter = adapter
-                spinnerTipoParo.setPadding(0, 0, 0, 30)
-                layout.addView(spinnerTipoParo)
-
-                // 2. Crear el EditText (Razón detallada)
-                val tituloTexto = TextView(this)
-                tituloTexto.text = "Motivo detallado:"
-                tituloTexto.setTypeface(null, android.graphics.Typeface.BOLD)
-                tituloTexto.setPadding(0, 20, 0, 0)
-                layout.addView(tituloTexto)
-
-                val inputMotivo = EditText(this)
-                inputMotivo.hint = "Ej: Por temas de arrastres..."
-                layout.addView(inputMotivo)
-
-                builder.setView(layout)
-
-                builder.setPositiveButton("Confirmar Paro") { dialog, _ ->
-                    val categoria = spinnerTipoParo.selectedItem.toString()
-                    val detalle = inputMotivo.text.toString().trim()
-
-                    if (detalle.isNotEmpty()) {
-                        // TRUCO DE ANALISTA: Concatenamos los datos para no modificar la Base de Datos
-                        val motivoCombinado = "[$categoria] - $detalle"
-                        llamarApiIniciarParo(motivoCombinado)
-                    } else {
-                        Toast.makeText(this, "Debe escribir el motivo detallado", Toast.LENGTH_SHORT).show()
-                    }
+            if (!paroActivo) {
+                val contenedor = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(50, 40, 50, 20)
                 }
-                builder.setNegativeButton("Cancelar") { dialog, _ -> dialog.cancel() }
-                builder.show()
 
+                val tituloSpinner = TextView(this).apply {
+                    text = "Categoría del paro:"
+                    setTypeface(null, android.graphics.Typeface.BOLD)
+                }
+                contenedor.addView(tituloSpinner)
+
+                val spinnerTipoParo = Spinner(this).apply {
+                    setPadding(0, 0, 0, 30)
+                    adapter = ArrayAdapter(
+                        this@MainActivity,
+                        android.R.layout.simple_spinner_dropdown_item,
+                        arrayOf("Mantenimiento", "Bodega", "Planeación", "Aseo/Limpieza", "Otro")
+                    )
+                }
+                contenedor.addView(spinnerTipoParo)
+
+                val tituloTexto = TextView(this).apply {
+                    text = "Motivo detallado:"
+                    setTypeface(null, android.graphics.Typeface.BOLD)
+                    setPadding(0, 20, 0, 0)
+                }
+                contenedor.addView(tituloTexto)
+
+                val inputMotivo = EditText(this).apply { hint = "Ej: Por temas de arrastres..." }
+                contenedor.addView(inputMotivo)
+
+                AlertDialog.Builder(this)
+                    .setTitle("Registrar Tiempo Muerto")
+                    .setView(contenedor)
+                    .setPositiveButton("Confirmar Paro") { _, _ ->
+                        val detalle = inputMotivo.text.toString().trim()
+                        if (detalle.isNotEmpty()) {
+                            // Concatenamos categoría y detalle en un solo campo
+                            // para no modificar el esquema de base de datos existente.
+                            llamarApiIniciarParo("[${spinnerTipoParo.selectedItem}] - $detalle")
+                        } else {
+                            Toast.makeText(this, "Debe escribir el motivo detallado", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    .setNegativeButton("Cancelar", null)
+                    .show()
             } else {
-                // --- REANUDAR OPERACIÓN ---
                 llamarApiFinalizarParo()
             }
         }
     }
 
-    // --- LLAMADAS A LA API ---
+    // ==========================================
+    // LLAMADAS A LA API
+    // ==========================================
+
     private fun descargarCatalogosDesdeServidor() {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val respuestaOperadores = RetrofitClient.apiService.obtenerOperadores()
-                val respuestaMaquinas = RetrofitClient.apiService.obtenerMaquinas()
+                val respOps  = RetrofitClient.apiService.obtenerOperadores()
+                val respMaqs = RetrofitClient.apiService.obtenerMaquinas()
 
-                if (respuestaOperadores.isSuccessful && respuestaMaquinas.isSuccessful) {
-                    val ops = listOf("-- Seleccione Operador --") + (respuestaOperadores.body()?.map { it.nombre } ?: emptyList())
-                    val maqs = listOf("-- Seleccione Máquina --") + (respuestaMaquinas.body()?.map { it.nombre } ?: emptyList())
+                if (respOps.isSuccessful && respMaqs.isSuccessful) {
+                    val operadores = listOf("-- Seleccione Operador --") + (respOps.body()?.map { it.nombre } ?: emptyList())
+                    val maquinas   = listOf("-- Seleccione Máquina --") + (respMaqs.body()?.map { it.nombre } ?: emptyList())
+
+                    // Extraemos la jerarquía si el backend ya la incluye en la respuesta.
+                    // Si el campo `marcas` es null, el fallback local sigue activo.
+                    val jerarquia = mutableMapOf<String, List<MarcaResponse>>()
+                    respMaqs.body()?.forEach { maquina ->
+                        if (!maquina.marcas.isNullOrEmpty()) {
+                            jerarquia[maquina.nombre] = maquina.marcas
+                        }
+                    }
 
                     withContext(Dispatchers.Main) {
-                        listaOperadoresServidor = ops
-                        listaMaquinasServidor = maqs
-                        // --- GUARDAMOS PARA LA PRÓXIMA VEZ QUE NO HAYA INTERNET ---
-                        guardarCatalogosEnCache(ops, maqs)
+                        listaOperadoresServidor = operadores
+                        listaMaquinasServidor   = maquinas
+                        if (jerarquia.isNotEmpty()) jerarquiaMaquinas = jerarquia
+                        guardarCatalogosEnCache(operadores, maquinas, jerarquia)
                     }
                 }
             } catch (e: Exception) {
-                // Si falla, no hacemos nada, porque onCreate ya cargó el cache
-                Log.e("SIGEP", "No se pudo actualizar el catálogo, usando cache.")
+                Log.d("SIGEP", "No se pudo actualizar el catálogo — usando caché local")
             }
         }
     }
 
     private fun llamarApiIniciarTurno(datos: IniciarTurnoRequest) {
-        btnIniciarTurno.isEnabled = false
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val response = RetrofitClient.apiService.iniciarTurno(datos)
+                val respuesta = RetrofitClient.apiService.iniciarTurno(datos)
                 withContext(Dispatchers.Main) {
-                    if (response.isSuccessful && response.body() != null) {
-                        val idRecibido = response.body()?.sesion_id
-                        val horaInicioActual = System.currentTimeMillis()
-
-                        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                        prefs.edit().apply {
-                            putInt("sesion_activa", idRecibido!!)
-                            putLong("hora_inicio_ms", horaInicioActual)
+                    if (respuesta.isSuccessful && respuesta.body() != null) {
+                        val idRecibido = respuesta.body()!!.sesion_id
+                        getSharedPreferences(NOMBRE_PREFS, MODE_PRIVATE).edit().apply {
+                            putInt("sesion_activa", idRecibido)
+                            putLong("hora_inicio_ms", System.currentTimeMillis())
                             apply()
                         }
-
                         sesionActualId = idRecibido
-                        Toast.makeText(this@MainActivity, "Turno Iniciado", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@MainActivity, "Turno Iniciado con Éxito", Toast.LENGTH_SHORT).show()
                         seccionConfiguracion.visibility = View.GONE
-                        seccionProduccion.visibility = View.VISIBLE
+                        seccionProduccion.visibility    = View.VISIBLE
+                        iniciarRadarStatusPedidos(idRecibido)
                     } else {
-                        Toast.makeText(this@MainActivity, "Error al iniciar en servidor", Toast.LENGTH_LONG).show()
+                        btnIniciarTurno.isEnabled = true
+                        btnIniciarTurno.text = "INICIAR TURNO"
+                        // Renovamos el token para que el reintento no sea bloqueado por idempotencia.
+                        tokenIdempotencia = java.util.UUID.randomUUID().toString()
+                        val codigo = respuesta.code()
+                        val cuerpoError = respuesta.errorBody()?.string()
+                        val mensaje = when (codigo) {
+                            400  -> cuerpoError ?: "Datos inválidos o turno duplicado."
+                            500  -> "Error 500: el servidor respondió con error interno."
+                            else -> "Error $codigo al iniciar en servidor"
+                        }
+                        Log.e("SIGEP_API", "Error al iniciar turno ($codigo): $cuerpoError")
+                        Toast.makeText(this@MainActivity, mensaje, Toast.LENGTH_LONG).show()
                     }
-                    btnIniciarTurno.isEnabled = true
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    guardarTurnoOffline(datos) // Guardamos para después
-                    sesionActualId = -99       // ID Virtual temporal
-
-                    seccionConfiguracion.visibility = View.GONE
-                    seccionProduccion.visibility = View.VISIBLE
-                    Toast.makeText(this@MainActivity, "Modo Offline: Turno iniciado localmente", Toast.LENGTH_LONG).show()
                     btnIniciarTurno.isEnabled = true
+                    btnIniciarTurno.text = "INICIAR TURNO"
+                    tokenIdempotencia = java.util.UUID.randomUUID().toString()
+                    guardarTurnoOffline(datos)
+                    sesionActualId = -99
+                    seccionConfiguracion.visibility = View.GONE
+                    seccionProduccion.visibility    = View.VISIBLE
+                    Toast.makeText(this@MainActivity, "Modo Offline: turno iniciado localmente", Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -541,27 +543,14 @@ class MainActivity : AppCompatActivity() {
         btnEnviarPallet.isEnabled = false
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val response = RetrofitClient.apiService.registrarPallet(datos)
+                val respuesta = RetrofitClient.apiService.registrarPallet(datos)
                 withContext(Dispatchers.Main) {
-                    if (response.isSuccessful) {
+                    if (respuesta.isSuccessful) {
                         Toast.makeText(this@MainActivity, "Registro exitoso", Toast.LENGTH_SHORT).show()
                         etCantidadPacas.text.clear()
-
-                        // --- NUEVO ORDEN: ÚLTIMO REGISTRO ARRIBA ---
-                        val horaActual = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
-
-                        // 1. Creamos la nueva línea con el círculo verde
-                        val nuevaEntrada = "🟢 ${datos.cantidad_pacas} pacas - $horaActual\n"
-
-                        // 2. Rescatamos lo que ya estaba escrito antes
-                        val historialPrevio = tvHistorialPacas.text.toString()
-
-                        // 3. Pegamos lo nuevo ARRIBA de lo viejo
-                        tvHistorialPacas.text = nuevaEntrada + historialPrevio
-                        // ------------------------------------------
+                        val hora = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+                        tvHistorialPacas.text = "🟢 ${datos.cantidad_pacas} pacas - $hora\n" + tvHistorialPacas.text
                         iniciarSincronizacion()
-                        // 4. Intenta mandar lo atrasado
-
                     } else {
                         forzarReinicioPorError("Sesión inválida en el servidor.")
                     }
@@ -569,18 +558,9 @@ class MainActivity : AppCompatActivity() {
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    // ¡Se cayó la red o el servidor Linux está apagado!
-
-                    // 1. Guardamos los datos en la memoria de la tablet
                     guardarPacaPendiente(datos)
-
-                    // 2. Le avisamos a la UI que quedó encolado (Círculo Amarillo 🟡)
-                    val horaActual = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
-                    val nuevaEntrada = "🟡 ${datos.cantidad_pacas} pacas - $horaActual (PENDIENTE)\n"
-
-                    val historialPrevio = tvHistorialPacas.text.toString()
-                    tvHistorialPacas.text = nuevaEntrada + historialPrevio
-
+                    val hora = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+                    tvHistorialPacas.text = "🟡 ${datos.cantidad_pacas} pacas - $hora (PENDIENTE)\n" + tvHistorialPacas.text
                     Toast.makeText(this@MainActivity, "Sin red. Paca guardada en cola local.", Toast.LENGTH_LONG).show()
                     etCantidadPacas.text.clear()
                     btnEnviarPallet.isEnabled = true
@@ -593,11 +573,10 @@ class MainActivity : AppCompatActivity() {
         btnTerminarTurno.isEnabled = false
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val response = RetrofitClient.apiService.finalizarTurno(datos)
+                val respuesta = RetrofitClient.apiService.finalizarTurno(datos)
                 withContext(Dispatchers.Main) {
-                    if (response.isSuccessful) {
+                    if (respuesta.isSuccessful) {
                         tvHistorialPacas.text = ""
-                        Toast.makeText(this@MainActivity, "Turno cerrado.", Toast.LENGTH_LONG).show()
                         forzarReinicioPorError("Turno Cerrado Correctamente")
                     } else {
                         forzarReinicioPorError("No se encontró este turno.")
@@ -614,108 +593,76 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun forzarReinicioPorError(mensaje: String) {
-        Toast.makeText(this@MainActivity, "⚠️ $mensaje", Toast.LENGTH_LONG).show()
+        Toast.makeText(this@MainActivity, mensaje, Toast.LENGTH_LONG).show()
         sesionActualId = null
-        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-        prefs.edit().remove("sesion_activa").apply()
+        getSharedPreferences(NOMBRE_PREFS, MODE_PRIVATE).edit().remove("sesion_activa").apply()
         etCantidadPacas.text.clear()
         spinnerTipo.setSelection(0)
         bloquearSpinnersDesdeMaquina()
-        seccionProduccion.visibility = View.GONE
-        seccionConfiguracion.visibility = View.VISIBLE
         limpiarEstadoParo()
-        seccionProduccion.visibility = View.GONE
+        seccionProduccion.visibility    = View.GONE
         seccionConfiguracion.visibility = View.VISIBLE
     }
+
+    // ==========================================
+    // COLA OFFLINE
+    // ==========================================
+
     private fun guardarPacaPendiente(datos: RegistrarPalletRequest) {
         val prefs = getSharedPreferences("SIGEP_OFFLINE", MODE_PRIVATE)
-        val gson = Gson()
-
-        // Leemos lo que ya estaba en la caja fuerte (si no hay nada, trae una lista vacía "[]")
-        val jsonActual = prefs.getString("cola_pendientes", "[]")
-        val type = object : TypeToken<MutableList<RegistrarPalletRequest>>() {}.type
-        val listaPendientes: MutableList<RegistrarPalletRequest> = gson.fromJson(jsonActual, type)
-
-        // Agregamos la nueva paca a la fila
-        listaPendientes.add(datos)
-
-        // Volvemos a cerrar la caja fuerte
-        prefs.edit().putString("cola_pendientes", gson.toJson(listaPendientes)).apply()
-    }
-    private fun intentarSincronizarPendientes() {
-        val pendientes = obtenerPendientes()
-        if (pendientes.isEmpty()) return // Si no hay nada pendiente, no hacemos nada
-
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                // Para simplificar, intentamos enviar la primera paca de la lista
-                val pacaAEnviar = pendientes.first()
-                val response = RetrofitClient.apiService.registrarPallet(pacaAEnviar)
-
-                if (response.isSuccessful) {
-                    // ¡Se envió con éxito! La quitamos de la fila
-                    pendientes.removeAt(0)
-
-                    // Guardamos la fila actualizada
-                    val prefs = getSharedPreferences("SIGEP_OFFLINE", MODE_PRIVATE)
-                    prefs.edit().putString("cola_pendientes", Gson().toJson(pendientes)).apply()
-
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(this@MainActivity, "Sincronización exitosa. Quedan ${pendientes.size}", Toast.LENGTH_SHORT).show()
-                        // Si aún quedan, se vuelve a llamar a sí misma
-                        if (pendientes.isNotEmpty()) {
-                            intentarSincronizarPendientes()
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                // Sigue sin haber red, lo dejamos para después. Falla silenciosamente.
-            }
-        }
+        val lista = obtenerPendientes()
+        lista.add(datos)
+        prefs.edit().putString("cola_pendientes", Gson().toJson(lista)).apply()
     }
 
-
-    // 2. Extrae la lista para intentar enviarla después
     private fun obtenerPendientes(): MutableList<RegistrarPalletRequest> {
         val prefs = getSharedPreferences("SIGEP_OFFLINE", MODE_PRIVATE)
-        val jsonActual = prefs.getString("cola_pendientes", "[]")
-        val type = object : TypeToken<MutableList<RegistrarPalletRequest>>() {}.type
-        return Gson().fromJson(jsonActual, type) ?: mutableListOf()
+        val json  = prefs.getString("cola_pendientes", "[]")
+        val tipo  = object : TypeToken<MutableList<RegistrarPalletRequest>>() {}.type
+        return Gson().fromJson(json, tipo) ?: mutableListOf()
     }
 
-    // 3. Limpia la caja fuerte una vez que el servidor confirma que recibió todo
-    private fun limpiarPendientes() {
-        val prefs = getSharedPreferences("SIGEP_OFFLINE", MODE_PRIVATE)
-        prefs.edit().remove("cola_pendientes").apply()
+    private fun guardarListaActualizada(lista: List<RegistrarPalletRequest>) {
+        getSharedPreferences("SIGEP_OFFLINE", MODE_PRIVATE)
+            .edit().putString("cola_pendientes", Gson().toJson(lista)).apply()
     }
-    private fun actualizarInterfazPendientes() {}
 
-    // Proceso de sincronización mejorado
+    private fun guardarTurnoOffline(solicitud: IniciarTurnoRequest) {
+        getSharedPreferences("SIGEP_OFFLINE", MODE_PRIVATE)
+            .edit().putString("turno_pendiente_crear", Gson().toJson(solicitud)).apply()
+    }
+
+    private fun obtenerTurnoPendiente(): IniciarTurnoRequest? {
+        val json = getSharedPreferences("SIGEP_OFFLINE", MODE_PRIVATE)
+            .getString("turno_pendiente_crear", null) ?: return null
+        return Gson().fromJson(json, IniciarTurnoRequest::class.java)
+    }
+
+    private fun actualizarIdEnPalletsPendientes(nuevoId: Int) {
+        val lista = obtenerPendientes()
+        lista.forEach { it.sesion_id = nuevoId }
+        guardarListaActualizada(lista)
+    }
+
+    // Sincronización en dos fases: primero crea el turno si no existe en servidor,
+    // luego envía los pallets uno a uno hasta vaciar la cola.
     private fun iniciarSincronizacion(alFinalizar: () -> Unit = {}) {
         val turnoPendiente = obtenerTurnoPendiente()
-
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                // PASO 1: ¿Hay un turno que no se ha creado en el servidor?
                 if (turnoPendiente != null) {
                     val resTurno = RetrofitClient.apiService.iniciarTurno(turnoPendiente)
                     if (resTurno.isSuccessful) {
-                        val nuevoIdReal = resTurno.body()?.sesion_id ?: -1
-                        sesionActualId = nuevoIdReal // Actualizamos la sesión activa
-
-                        // Limpiamos el turno pendiente del cache
-                        getSharedPreferences("SIGEP_OFFLINE", MODE_PRIVATE).edit().remove("turno_pendiente_crear").apply()
-
-                        // IMPORTANTE: Actualizar todos los pallets pendientes con el nuevo ID Real
-                        actualizarIdEnPalletsPendientes(nuevoIdReal)
-
-                        // Ahora que el "Padre" existe, procedemos con los "Hijos" (Recursión)
+                        val nuevoId = resTurno.body()?.sesion_id ?: -1
+                        sesionActualId = nuevoId
+                        getSharedPreferences("SIGEP_OFFLINE", MODE_PRIVATE)
+                            .edit().remove("turno_pendiente_crear").apply()
+                        actualizarIdEnPalletsPendientes(nuevoId)
                         withContext(Dispatchers.Main) { iniciarSincronizacion(alFinalizar) }
                         return@launch
                     }
                 }
 
-                // PASO 2: Si no hay turnos pendientes, seguimos con los pallets (tu lógica actual)
                 val pendientes = obtenerPendientes()
                 if (pendientes.isEmpty()) {
                     withContext(Dispatchers.Main) { alFinalizar() }
@@ -723,19 +670,12 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 val pacaActual = pendientes.first()
-                val response = RetrofitClient.apiService.registrarPallet(pacaActual)
-
-                if (response.isSuccessful) {
+                val respuesta  = RetrofitClient.apiService.registrarPallet(pacaActual)
+                if (respuesta.isSuccessful) {
                     pendientes.removeAt(0)
                     guardarListaActualizada(pendientes)
                     withContext(Dispatchers.Main) {
-                        actualizarInterfazPendientes()
-
-                        // --- AQUÍ ESTÁ LA NUEVA LÍNEA ---
-                        // Cambia el texto a verde justo después de actualizar el contador
                         actualizarHistorialVisual(pacaActual.cantidad_pacas)
-                        // --------------------------------
-
                         iniciarSincronizacion(alFinalizar)
                     }
                 }
@@ -744,82 +684,67 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-    private fun actualizarIdEnPalletsPendientes(nuevoId: Int) {
-        val lista = obtenerPendientes()
-        lista.forEach { it.sesion_id = nuevoId } // Actualizamos el ID en cada objeto
-        guardarListaActualizada(lista)
+
+    private fun actualizarHistorialVisual(cantidad: Int) {
+        val regex = Regex("🟡 $cantidad pacas(.*?)(?:\\(PENDIENTE\\)|\\(Creando turno...\\))")
+        tvHistorialPacas.text = tvHistorialPacas.text.toString()
+            .replaceFirst(regex, "🟢 $cantidad pacas\$1(Sincronizado)")
     }
 
-    // Función auxiliar para guardar la lista tras borrar un elemento
-    private fun guardarListaActualizada(lista: List<RegistrarPalletRequest>) {
-        val prefs = getSharedPreferences("SIGEP_OFFLINE", MODE_PRIVATE)
-        prefs.edit().putString("cola_pendientes", Gson().toJson(lista)).apply()
-    }
-    private fun guardarCatalogosEnCache(operadores: List<String>, maquinas: List<String>) {
-        val prefs = getSharedPreferences("SIGEP_CATALOGOS", MODE_PRIVATE)
+    // ==========================================
+    // CACHÉ LOCAL DE CATÁLOGOS
+    // ==========================================
+
+    private fun guardarCatalogosEnCache(
+        operadores: List<String>,
+        maquinas: List<String>,
+        jerarquia: Map<String, List<MarcaResponse>>
+    ) {
         val gson = Gson()
-        prefs.edit().apply {
+        getSharedPreferences("SIGEP_CATALOGOS", MODE_PRIVATE).edit().apply {
             putString("cache_operadores", gson.toJson(operadores))
             putString("cache_maquinas", gson.toJson(maquinas))
+            if (jerarquia.isNotEmpty()) {
+                putString("cache_jerarquia_maquinas", gson.toJson(jerarquia))
+            }
             apply()
         }
     }
+
     private fun cargarCatalogosDesdeCache() {
         val prefs = getSharedPreferences("SIGEP_CATALOGOS", MODE_PRIVATE)
-        val gson = Gson()
-        val type = object : TypeToken<List<String>>() {}.type
+        val gson  = Gson()
+        val tipoLista = object : TypeToken<List<String>>() {}.type
 
-        val jsonOp = prefs.getString("cache_operadores", null)
+        val jsonOp  = prefs.getString("cache_operadores", null)
         val jsonMaq = prefs.getString("cache_maquinas", null)
-
         if (jsonOp != null && jsonMaq != null) {
-            listaOperadoresServidor = gson.fromJson(jsonOp, type)
-            listaMaquinasServidor = gson.fromJson(jsonMaq, type)
-            // OJO: Como ya tenemos datos, desbloqueamos la UI de una vez
-            Log.d("SIGEP", "Catálogos cargados desde CACHE local.")
+            listaOperadoresServidor = gson.fromJson(jsonOp, tipoLista)
+            listaMaquinasServidor   = gson.fromJson(jsonMaq, tipoLista)
+        }
+
+        val jsonJerarquia = prefs.getString("cache_jerarquia_maquinas", null)
+        if (jsonJerarquia != null) {
+            val tipoJerarquia = object : TypeToken<Map<String, List<MarcaResponse>>>() {}.type
+            jerarquiaMaquinas = gson.fromJson(jsonJerarquia, tipoJerarquia) ?: emptyMap()
         }
     }
-    // Guarda el inicio de turno si no hay red
-    private fun guardarTurnoOffline(request: IniciarTurnoRequest) {
-        val prefs = getSharedPreferences("SIGEP_OFFLINE", MODE_PRIVATE)
-        val gson = Gson()
-        prefs.edit().putString("turno_pendiente_crear", gson.toJson(request)).apply()
-    }
 
-    // Recupera el turno pendiente
-    private fun obtenerTurnoPendiente(): IniciarTurnoRequest? {
-        val prefs = getSharedPreferences("SIGEP_OFFLINE", MODE_PRIVATE)
-        val json = prefs.getString("turno_pendiente_crear", null) ?: return null
-        return Gson().fromJson(json, IniciarTurnoRequest::class.java)
-    }
-    private fun actualizarHistorialVisual(cantidad: Int) {
-        val textoActual = tvHistorialPacas.text.toString()
+    // ==========================================
+    // PAROS
+    // ==========================================
 
-        // Usamos Regex (Expresiones Regulares) para buscar la línea exacta.
-        // Esto busca: 🟡 + la cantidad exacta de pacas + cualquier hora + (PENDIENTE) o (Creando turno...)
-        val regex = Regex("🟡 $cantidad pacas(.*?)(?:\\(PENDIENTE\\)|\\(Creando turno...\\))")
-
-        // Reemplazamos esa línea exacta por el círculo verde y la marca de Sincronizado
-        val textoNuevo = textoActual.replaceFirst(regex, "🟢 $cantidad pacas$1(Sincronizado)")
-
-        tvHistorialPacas.text = textoNuevo
-    }
     private fun llamarApiIniciarParo(motivo: String) {
         btnParo.isEnabled = false
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val request = IniciarParoRequest(sesion_id = sesionActualId!!, motivo = motivo)
-                val response = RetrofitClient.apiService.iniciarParo(request)
-
+                val solicitud = IniciarParoRequest(sesion_id = sesionActualId!!, motivo = motivo)
+                val respuesta = RetrofitClient.apiService.iniciarParo(solicitud)
                 withContext(Dispatchers.Main) {
-                    if (response.isSuccessful) {
-                        isParoActivo = true
-
-                        // Cambiamos el botón a Verde (Reanudar)
+                    if (respuesta.isSuccessful) {
+                        paroActivo = true
                         btnParo.text = "REANUDAR OPERACIÓN"
                         btnParo.setBackgroundColor(Color.parseColor("#4CAF50"))
-
-                        // BLOQUEAMOS EL ENVÍO DE PACAS
                         btnEnviarPallet.isEnabled = false
                         btnEnviarPallet.setBackgroundColor(Color.GRAY)
                         Toast.makeText(this@MainActivity, "Paro Registrado", Toast.LENGTH_SHORT).show()
@@ -841,18 +766,13 @@ class MainActivity : AppCompatActivity() {
         btnParo.isEnabled = false
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val request = FinalizarParoRequest(sesion_id = sesionActualId!!)
-                val response = RetrofitClient.apiService.finalizarParo(request)
-
+                val solicitud = FinalizarParoRequest(sesion_id = sesionActualId!!)
+                val respuesta = RetrofitClient.apiService.finalizarParo(solicitud)
                 withContext(Dispatchers.Main) {
-                    if (response.isSuccessful) {
-                        isParoActivo = false
-
-                        // Regresamos el botón a Rojo (Registrar Paro)
+                    if (respuesta.isSuccessful) {
+                        paroActivo = false
                         btnParo.text = "REGISTRAR PARO"
                         btnParo.setBackgroundColor(Color.parseColor("#FA8400"))
-
-                        // DESBLOQUEAMOS EL ENVÍO DE PACAS
                         btnEnviarPallet.isEnabled = true
                         btnEnviarPallet.setBackgroundColor(Color.parseColor("#2196F3"))
                         Toast.makeText(this@MainActivity, "Operación Reanudada", Toast.LENGTH_SHORT).show()
@@ -869,156 +789,124 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-    private fun limpiarEstadoParo() {
-        isParoActivo = false
 
-        // Resetear el botón de Paro a Rojo
+    private fun limpiarEstadoParo() {
+        paroActivo = false
         btnParo.text = "REGISTRAR PARO"
         btnParo.setBackgroundColor(Color.parseColor("#FA8400"))
         btnParo.isEnabled = true
-
-        // Desbloquear botón de Pallets a Azul
         btnEnviarPallet.isEnabled = true
         btnEnviarPallet.setBackgroundColor(Color.parseColor("#2196F3"))
-
     }
-    private fun recuperarHistorial(idSesion: Int) {
-        // Ponemos un mensaje temporal mientras carga
-        tvHistorialPacas.text = "Cargando historial..."
 
+    // ==========================================
+    // HISTORIAL Y MÓDULO DE INSUMOS
+    // ==========================================
+
+    private fun recuperarHistorial(idSesion: Int) {
+        tvHistorialPacas.text = "Cargando historial..."
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                // 1. Pedimos la verdad absoluta al servidor
-                val response = RetrofitClient.apiService.obtenerHistorialSesion(idSesion)
-
+                val respuesta = RetrofitClient.apiService.obtenerHistorialSesion(idSesion)
                 withContext(Dispatchers.Main) {
-                    var textoHistorial = ""
-
-                    // 2. Primero, revisamos si hay pacas huérfanas/offline de esta sesión
-                    val pendientes = obtenerPendientes()
-                    val pendientesDeEstaSesion = pendientes.filter { it.sesion_id == idSesion }
-
+                    var texto = ""
+                    val pendientesDeEstaSesion = obtenerPendientes().filter { it.sesion_id == idSesion }
                     for (p in pendientesDeEstaSesion) {
-                        // Como no tienen hora de servidor aún, les ponemos la actual
-                        val horaActual = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
-                        textoHistorial += "🟡 ${p.cantidad_pacas} pacas - $horaActual (PENDIENTE)\n"
+                        val hora = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+                        texto += "🟡 ${p.cantidad_pacas} pacas - $hora (PENDIENTE)\n"
                     }
-
-                    // 3. Luego, agregamos las pacas confirmadas por el servidor
-                    if (response.isSuccessful && response.body() != null) {
-                        val listaServidor = response.body()!!
-                        for (p in listaServidor) {
-                            textoHistorial += "🟢 ${p.cantidad_pacas} pacas - ${p.hora}\n"
+                    if (respuesta.isSuccessful && respuesta.body() != null) {
+                        for (p in respuesta.body()!!) {
+                            texto += "🟢 ${p.cantidad_pacas} pacas - ${p.hora}\n"
                         }
                     }
-
-                    // 4. Mostramos todo en pantalla
-                    if (textoHistorial.isEmpty()) {
-                        tvHistorialPacas.text = "No hay registros aún."
-                    } else {
-                        tvHistorialPacas.text = textoHistorial
-                    }
+                    tvHistorialPacas.text = if (texto.isEmpty()) "No hay registros aún." else texto
                 }
             } catch (e: Exception) {
-                // Si no hay red, al menos mostramos lo offline y dejamos el resto en blanco
                 withContext(Dispatchers.Main) {
                     val pendientes = obtenerPendientes().filter { it.sesion_id == idSesion }
-                    if (pendientes.isNotEmpty()) {
-                        var textoOffline = "⚠️ Modo Sin Red:\n"
-                        for (p in pendientes) {
-                            textoOffline += "🟡 ${p.cantidad_pacas} pacas (PENDIENTE)\n"
-                        }
-                        tvHistorialPacas.text = textoOffline
+                    tvHistorialPacas.text = if (pendientes.isNotEmpty()) {
+                        "Sin red:\n" + pendientes.joinToString("") { "🟡 ${it.cantidad_pacas} pacas (PENDIENTE)\n" }
                     } else {
-                        tvHistorialPacas.text = "Sin red para cargar historial anterior."
+                        "Sin red para cargar historial anterior."
                     }
                 }
             }
         }
     }
-    // ==========================================
-    //  MÓDULO DE INSUMOS (DINÁMICO)
-    // ==========================================
+
     private fun abrirModalInsumosInteligente() {
-        val builder = AlertDialog.Builder(this)
-        builder.setTitle("📦 Solicitar a Bodega")
+        val contenedor = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(50, 40, 50, 20)
+        }
 
-        val layout = LinearLayout(this)
-        layout.orientation = LinearLayout.VERTICAL
-        layout.setPadding(50, 40, 50, 20)
-
-        // 1. Selector de Insumos (Opciones simples para el operario)
-        val tituloSpinner = TextView(this)
-        tituloSpinner.text = "Insumo Requerido:"
-        tituloSpinner.setTypeface(null, android.graphics.Typeface.BOLD)
-        layout.addView(tituloSpinner)
+        val tituloSpinner = TextView(this).apply {
+            text = "Insumo Requerido:"
+            setTypeface(null, android.graphics.Typeface.BOLD)
+        }
+        contenedor.addView(tituloSpinner)
 
         val spinnerInsumos = Spinner(this)
         val maquinaActual = spinnerMaquina.selectedItem.toString()
-
-        // --- REGLAS DE NEGOCIO ---
-        val opcionesInsumo = mutableListOf("Materia Prima (Granel)")
-        if (maquinaActual == "Máquina 7B") {
-            opcionesInsumo.add(0, "Sacos Tejidos") // 7B usa sacos
+        // La Máquina 7B usa sacos tejidos; las demás usan lámina en rollo.
+        val opcionesInsumo = if (maquinaActual == "Máquina 7B") {
+            mutableListOf("Sacos Tejidos", "Materia Prima (Granel)")
         } else {
-            opcionesInsumo.add(0, "Lámina (Rollo)") // Las demás usan Lámina
+            mutableListOf("Lámina (Rollo)", "Materia Prima (Granel)")
         }
-
         spinnerInsumos.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, opcionesInsumo)
         spinnerInsumos.setPadding(0, 0, 0, 30)
-        layout.addView(spinnerInsumos)
+        contenedor.addView(spinnerInsumos)
 
-        // 2. Campo de Cantidad
-        val tituloCantidad = TextView(this)
-        tituloCantidad.text = "Cantidad a solicitar:"
-        tituloCantidad.setTypeface(null, android.graphics.Typeface.BOLD)
-        tituloCantidad.setPadding(0, 20, 0, 0)
-        layout.addView(tituloCantidad)
-
-        val inputCantidad = EditText(this)
-        inputCantidad.hint = "Ej: 2"
-        inputCantidad.inputType = android.text.InputType.TYPE_CLASS_NUMBER
-        layout.addView(inputCantidad)
-
-        builder.setView(layout)
-
-        builder.setPositiveButton("Enviar Pedido") { dialog, _ ->
-            val cantidadStr = inputCantidad.text.toString()
-            if (cantidadStr.isNotEmpty() && cantidadStr.toInt() > 0) {
-
-                // --- ARMADOR DEL TEXTO PARA EL INSUMISTA ---
-                val seleccionOperario = spinnerInsumos.selectedItem.toString()
-                val marca = spinnerMarca.selectedItem.toString()
-                val fragancia = spinnerFragancia.selectedItem.toString()
-                val presentacion = spinnerPresentacion.selectedItem.toString()
-
-                var textoArmado = ""
-                if (seleccionOperario.contains("Lámina") || seleccionOperario.contains("Sacos")) {
-                    // Empaque requiere Marca + Fragancia + Presentación
-                    textoArmado = "$seleccionOperario - $marca - $fragancia - $presentacion"
-                } else {
-                    // Granel requiere PRETEN + Marca + Fragancia (No requiere presentación)
-                    textoArmado = "Preten $marca $fragancia (Granel)"
-                }
-
-                // Aquí ya no mandamos un ID numérico, mandamos el texto que acabamos de armar
-                val request = SolicitarInsumoRequest(sesionActualId!!, textoArmado, cantidadStr.toInt())
-                enviarPeticionInsumo(request)
-
-            } else {
-                Toast.makeText(this, "Debe ingresar una cantidad válida", Toast.LENGTH_SHORT).show()
-            }
+        val tituloCantidad = TextView(this).apply {
+            text = "Cantidad a solicitar:"
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setPadding(0, 20, 0, 0)
         }
-        builder.setNegativeButton("Cancelar") { dialog, _ -> dialog.cancel() }
-        builder.show()
+        contenedor.addView(tituloCantidad)
+
+        val inputCantidad = EditText(this).apply {
+            hint = "Ej: 2"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+        }
+        contenedor.addView(inputCantidad)
+
+        AlertDialog.Builder(this)
+            .setTitle("Solicitar a Bodega")
+            .setView(contenedor)
+            .setPositiveButton("Enviar Pedido") { _, _ ->
+                val cantidad = inputCantidad.text.toString().toIntOrNull()
+                if (cantidad != null && cantidad > 0) {
+                    val seleccion = spinnerInsumos.selectedItem.toString()
+                    val marca = spinnerMarca.selectedItem.toString()
+                    val fragancia = spinnerFragancia.selectedItem.toString()
+                    val presentacion = spinnerPresentacion.selectedItem.toString()
+
+                    // El texto armado describe exactamente qué producto necesita el operario,
+                    // sin requerir cambios en el modelo de base de datos.
+                    val textoArmado = if (seleccion.contains("Lámina") || seleccion.contains("Sacos")) {
+                        "$seleccion - $marca - $fragancia - $presentacion"
+                    } else {
+                        "Preten $marca $fragancia (Granel)"
+                    }
+
+                    enviarPeticionInsumo(SolicitarInsumoRequest(sesionActualId!!, textoArmado, cantidad))
+                } else {
+                    Toast.makeText(this, "Debe ingresar una cantidad válida", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
     }
-    private fun enviarPeticionInsumo(request: SolicitarInsumoRequest) {
+
+    private fun enviarPeticionInsumo(solicitud: SolicitarInsumoRequest) {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val response = RetrofitClient.apiService.solicitarInsumo(request)
+                val respuesta = RetrofitClient.apiService.solicitarInsumo(solicitud)
                 withContext(Dispatchers.Main) {
-                    if (response.isSuccessful) {
-                        Toast.makeText(this@MainActivity, "✅ Pedido enviado al Insumista", Toast.LENGTH_LONG).show()
+                    if (respuesta.isSuccessful) {
+                        Toast.makeText(this@MainActivity, "Pedido enviado al Insumista", Toast.LENGTH_LONG).show()
                     } else {
                         Toast.makeText(this@MainActivity, "Error al enviar el pedido", Toast.LENGTH_SHORT).show()
                     }

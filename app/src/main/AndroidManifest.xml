@@ -4,6 +4,13 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="replace" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:allowBackup="true"
@@ -40,10 +47,44 @@
             android:exported="false" />
         <activity
             android:name=".BandejaInsumosActivity"
-            android:exported="false" />
+            android:exported="false"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true" />
         <activity
             android:name=".SupervisorDashboardActivity"
             android:exported="false" />
+
+        <activity
+            android:name=".AlertaPedidoActivity"
+            android:configChanges="orientation|screenSize|screenLayout"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleInstance"
+            android:showWhenLocked="true"
+            android:theme="@style/Theme.AppCompat.Light.NoActionBar"
+            android:turnScreenOn="true" />
+
+        <!-- 🔥 LIMPIEZA: Se eliminó AlarmaInsumosService de polling -->
+
+        <!-- 🔥 Servicio de Mensajería Firebase FCM -->
+        <service
+            android:name=".SigepFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/provider_paths" />
+        </provider>
+
     </application>
 
 </manifest>

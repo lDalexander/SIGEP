@@ -11,7 +11,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="D-Stock"
+        android:text="SIGEP"
         android:textSize="48sp"
         android:textStyle="bold"
         android:textColor="#1E293B"
@@ -20,7 +20,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Seleccione su perfil de acceso:"
+        android:text="Seleccione un perfil:"
         android:textSize="18sp"
         android:textColor="#555555"
         android:layout_marginBottom="40dp"/>
