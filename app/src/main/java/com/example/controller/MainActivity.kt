@@ -186,12 +186,12 @@ class MainActivity : AppCompatActivity() {
                         }
                         val sb = StringBuilder()
                         pedidos.forEach { p ->
-                            val (emoji, estadoTexto) = when (p.estado) {
-                                "PENDIENTE"           -> "🕐" to "Pendiente de atención"
-                                "EN_CAMINO"           -> "🚶" to "En camino"
-                                "ENTREGADO_INSUMISTA" -> "⏳" to "Entregado — esperando tu confirmación"
-                                "ENTREGADO"           -> "✅" to "Completado"
-                                else                  -> "❓" to p.estado
+                            val (emoji, estadoTexto) = when (p.estado.lowercase()) {
+                                "pendiente"                    -> "🕐" to "Pendiente de atención"
+                                "en_camino", "en camino"       -> "🚶" to "En camino"
+                                "entregado_insumista"          -> "⏳" to "Entregado — esperando tu confirmación"
+                                "entregado"                    -> "✅" to "Completado"
+                                else                           -> "❓" to p.estado
                             }
                             sb.append("━━━━━━━━━━━━━━━━━━━━\n")
                             sb.append("📦 ${p.cantidad}x ${p.detalle}\n")

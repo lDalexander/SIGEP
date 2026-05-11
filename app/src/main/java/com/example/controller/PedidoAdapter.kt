@@ -41,7 +41,7 @@ class PedidoAdapter(
                 holder.btnAccion.text = "✅ CONFIRMAR RECEPCIÓN"
                 holder.btnAccion.setBackgroundColor(Color.parseColor("#4CAF50"))
             }
-            esAsignado && pedido.estado == "ENTREGADO_INSUMISTA" -> {
+            esAsignado && pedido.estado.equals("Entregado_Insumista", ignoreCase = true) -> {
                 holder.btnAccion.text = "⏳ ESPERANDO OPERARIO"
                 holder.btnAccion.setBackgroundColor(Color.parseColor("#9E9E9E"))
                 holder.btnAccion.isEnabled = false
