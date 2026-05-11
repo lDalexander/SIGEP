@@ -71,6 +71,15 @@ interface ProduccionApi {
     @GET("/api/insumos/asignados/{insumista_id}")
     suspend fun obtenerPedidosAsignados(@Path("insumista_id") insumistaId: Int): Response<List<PedidoPendienteResponse>>
 
+    @GET("/api/sesion/{sesion_id}/detalle_pedidos")
+    suspend fun obtenerDetallePedidos(@Path("sesion_id") sesionId: Int): Response<List<DetallePedidoOperador>>
+
+    @PUT("/api/insumos/confirmar_recepcion")
+    suspend fun confirmarRecepcion(@Body request: ConfirmarRecepcionRequest): Response<RespuestaGenerica>
+
+    @GET("/api/insumos/pendientes_confirmacion/{sesion_id}")
+    suspend fun obtenerPendientesConfirmacion(@Path("sesion_id") sesionId: Int): Response<List<PedidoPendienteResponse>>
+
     // ==========================================
     // NUEVO: FASE 5 - TORRE DE CONTROL (SUPERVISORES)
     // ==========================================

@@ -29,6 +29,8 @@ import android.provider.Settings
 import android.net.Uri
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 
 class MainActivity : AppCompatActivity() {
 
@@ -49,6 +51,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnTerminarTurno: Button
     private lateinit var tvStatusPedidos: TextView
     private lateinit var btnVerEstadoPedidos: Button
+    private lateinit var rvPendientesConfirmacion: RecyclerView
+    private lateinit var tvPendientesConfirmacionLabel: TextView
+    private lateinit var adapterPendientesConfirmacion: PedidoAdapter
 
     private lateinit var spinnerTipo: Spinner
     private lateinit var spinnerMaquina: Spinner
@@ -105,6 +110,13 @@ class MainActivity : AppCompatActivity() {
         btnVerEstadoPedidos = findViewById(R.id.btnVerEstadoPedidos)
         vincularVistas()
 
+        rvPendientesConfirmacion.layoutManager = LinearLayoutManager(this)
+        adapterPendientesConfirmacion = PedidoAdapter(emptyList(), esAsignado = false, esConfirmacion = true) { pedido ->
+            confirmarRecepcion(pedido.id)
+        }
+        rvPendientesConfirmacion.adapter = adapterPendientesConfirmacion
+        rvPendientesConfirmacion.isNestedScrollingEnabled = false
+
         // Token de idempotencia generado en cada sesión para evitar turnos duplicados
         // si el operario presiona el botón mientras la petición está en vuelo.
         tokenIdempotencia = java.util.UUID.randomUUID().toString()
@@ -147,36 +159,62 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun mostrarVentanaEstadoPedidos() {
-        val builder = AlertDialog.Builder(this)
-        builder.setTitle("Estado de tus Pedidos")
-        builder.setMessage("Consultando al servidor...")
-        builder.setPositiveButton("CERRAR", null)
+        val tvContenido = android.widget.TextView(this).apply {
+            setPadding(50, 30, 50, 30)
+            textSize = 14f
+            setTextColor(android.graphics.Color.parseColor("#1E293B"))
+            text = "Consultando al servidor..."
+        }
+        val scrollView = android.widget.ScrollView(this).apply { addView(tvContenido) }
 
-        val dialogo = builder.create()
+        val dialogo = AlertDialog.Builder(this)
+            .setTitle("Mis Pedidos de Insumos")
+            .setView(scrollView)
+            .setPositiveButton("CERRAR", null)
+            .create()
         dialogo.show()
 
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val respuesta = RetrofitClient.apiService.obtenerEstadoPedidos(sesionActualId!!)
+                val respuesta = RetrofitClient.apiService.obtenerDetallePedidos(sesionActualId!!)
                 withContext(Dispatchers.Main) {
                     if (respuesta.isSuccessful && respuesta.body() != null) {
-                        val datos = respuesta.body()!!
-                        if (datos.pendientes == 0 && datos.en_camino == 0 && datos.entregados == 0) {
-                            dialogo.setMessage("No has realizado ninguna solicitud en este turno.")
-                        } else {
-                            dialogo.setMessage(
-                                "Pendientes: ${datos.pendientes}\n" +
-                                "En Camino:  ${datos.en_camino}\n" +
-                                "Entregados: ${datos.entregados}"
-                            )
+                        val pedidos = respuesta.body()!!
+                        if (pedidos.isEmpty()) {
+                            tvContenido.text = "No has realizado ninguna solicitud en este turno."
+                            return@withContext
                         }
+                        val sb = StringBuilder()
+                        pedidos.forEach { p ->
+                            val (emoji, estadoTexto) = when (p.estado) {
+                                "PENDIENTE"           -> "🕐" to "Pendiente de atención"
+                                "EN_CAMINO"           -> "🚶" to "En camino"
+                                "ENTREGADO_INSUMISTA" -> "⏳" to "Entregado — esperando tu confirmación"
+                                "ENTREGADO"           -> "✅" to "Completado"
+                                else                  -> "❓" to p.estado
+                            }
+                            sb.append("━━━━━━━━━━━━━━━━━━━━\n")
+                            sb.append("📦 ${p.cantidad}x ${p.detalle}\n")
+                            sb.append("⏰ Solicitado: ${p.hora_solicitud}\n")
+                            sb.append("$emoji $estadoTexto\n")
+                            if (p.insumista != null) {
+                                sb.append("👤 Insumista: ${p.insumista}")
+                                if (p.hora_aceptacion != null) sb.append("  (aceptó: ${p.hora_aceptacion})")
+                                sb.append("\n")
+                            }
+                            if (p.hora_entrega != null) {
+                                sb.append("📬 Insumista entregó: ${p.hora_entrega}\n")
+                            }
+                            sb.append("\n")
+                        }
+                        tvContenido.text = sb.toString().trimEnd()
                     } else {
-                        dialogo.setMessage("Error al obtener los datos.")
+                        tvContenido.text = "Error al obtener los datos.\nIntente de nuevo."
                     }
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    dialogo.setMessage("Error de conexión. Revisa tu red.")
+                    tvContenido.text = "Error de conexión. Revisa tu red."
                 }
             }
         }
@@ -189,20 +227,66 @@ class MainActivity : AppCompatActivity() {
                     val respuesta = RetrofitClient.apiService.obtenerEstadoPedidos(sesionId)
                     withContext(Dispatchers.Main) {
                         if (respuesta.isSuccessful && respuesta.body() != null) {
-                            val datos = respuesta.body()!!
-                            tvStatusPedidos.text = if (datos.pendientes == 0 && datos.en_camino == 0 && datos.entregados == 0) {
+                            val d = respuesta.body()!!
+                            val sinActividad = d.pendientes == 0 && d.en_camino == 0 &&
+                                               d.entregados == 0 && d.pendiente_confirmacion == 0
+                            tvStatusPedidos.text = if (sinActividad) {
                                 "Sin solicitudes aún"
                             } else {
-                                "Pendientes: ${datos.pendientes}\n" +
-                                "En Camino:  ${datos.en_camino}\n" +
-                                "Entregados: ${datos.entregados}"
+                                buildString {
+                                    if (d.pendientes > 0)             append("Pendientes: ${d.pendientes}\n")
+                                    if (d.en_camino > 0)              append("En Camino:  ${d.en_camino}\n")
+                                    if (d.pendiente_confirmacion > 0) append("⚠️ Por confirmar: ${d.pendiente_confirmacion}\n")
+                                    if (d.entregados > 0)             append("Entregados: ${d.entregados}")
+                                }.trimEnd()
                             }
                         }
                     }
+                    cargarPendientesConfirmacion(sesionId)
                 } catch (e: Exception) {
                     // Falla silenciosa: el radar es informativo, no debe interrumpir al operario
                 }
                 delay(5000)
+            }
+        }
+    }
+
+    private fun cargarPendientesConfirmacion(sesionId: Int) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val resp = RetrofitClient.apiService.obtenerPendientesConfirmacion(sesionId)
+                withContext(Dispatchers.Main) {
+                    if (resp.isSuccessful) {
+                        val lista = resp.body() ?: emptyList()
+                        val tieneItems = lista.isNotEmpty()
+                        tvPendientesConfirmacionLabel.visibility = if (tieneItems) View.VISIBLE else View.GONE
+                        rvPendientesConfirmacion.visibility      = if (tieneItems) View.VISIBLE else View.GONE
+                        adapterPendientesConfirmacion.actualizarLista(lista)
+                    }
+                }
+            } catch (e: Exception) { /* silencioso */ }
+        }
+    }
+
+    private fun confirmarRecepcion(pedidoId: Int) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val resp = RetrofitClient.apiService.confirmarRecepcion(
+                    ConfirmarRecepcionRequest(pedidoId, sesionActualId!!)
+                )
+                withContext(Dispatchers.Main) {
+                    if (resp.isSuccessful) {
+                        Toast.makeText(this@MainActivity, "Recepción confirmada", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(this@MainActivity, "Error al confirmar recepción", Toast.LENGTH_SHORT).show()
+                    }
+                    cargarPendientesConfirmacion(sesionActualId!!)
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "Error de red", Toast.LENGTH_SHORT).show()
+                    cargarPendientesConfirmacion(sesionActualId!!)
+                }
             }
         }
     }
@@ -222,7 +306,9 @@ class MainActivity : AppCompatActivity() {
         btnEnviarPallet      = findViewById(R.id.btnEnviarPallet)
         btnTerminarTurno     = findViewById(R.id.btnTerminarTurno)
         btnParo              = findViewById(R.id.btnParo)
-        tvStatusPedidos      = findViewById(R.id.tvStatusPedidos)
+        tvStatusPedidos               = findViewById(R.id.tvStatusPedidos)
+        rvPendientesConfirmacion      = findViewById(R.id.rvPendientesConfirmacion)
+        tvPendientesConfirmacionLabel = findViewById(R.id.tvPendientesConfirmacionLabel)
     }
 
     private fun configurarFiltrosEnCascada() {

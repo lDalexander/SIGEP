@@ -10,7 +10,8 @@ import androidx.recyclerview.widget.RecyclerView
 
 class PedidoAdapter(
     private var listaPedidos: List<PedidoPendienteResponse>,
-    private val esAsignado: Boolean, // ✅ LA NUEVA VARIABLE MÁGICA
+    private val esAsignado: Boolean,
+    private val esConfirmacion: Boolean = false,
     private val onBotonClick: (PedidoPendienteResponse) -> Unit
 ) : RecyclerView.Adapter<PedidoAdapter.PedidoViewHolder>() {
 
@@ -33,22 +34,36 @@ class PedidoAdapter(
         holder.tvMaquina.text = "${pedido.maquina} - ${pedido.operador}"
         holder.tvDetalle.text = "${pedido.cantidad} x ${pedido.detalle}"
 
-        // 🔥 ESTA ES LA LÍNEA SALVAVIDAS (Resetea el botón de la tarjeta reciclada)
         holder.btnAccion.isEnabled = true
 
-        // LÓGICA DE PANTALLA DIVIDIDA
-        if (esAsignado) {
-            holder.btnAccion.text = "✅ MARCAR ENTREGADO"
-            holder.btnAccion.setBackgroundColor(Color.parseColor("#1976D2")) // Azul
-        } else {
-            holder.btnAccion.text = "✋ ACEPTAR PEDIDO"
-            holder.btnAccion.setBackgroundColor(Color.parseColor("#4CAF50")) // Verde
+        when {
+            esConfirmacion -> {
+                holder.btnAccion.text = "✅ CONFIRMAR RECEPCIÓN"
+                holder.btnAccion.setBackgroundColor(Color.parseColor("#4CAF50"))
+            }
+            esAsignado && pedido.estado == "ENTREGADO_INSUMISTA" -> {
+                holder.btnAccion.text = "⏳ ESPERANDO OPERARIO"
+                holder.btnAccion.setBackgroundColor(Color.parseColor("#9E9E9E"))
+                holder.btnAccion.isEnabled = false
+            }
+            esAsignado -> {
+                holder.btnAccion.text = "✅ MARCAR ENTREGADO"
+                holder.btnAccion.setBackgroundColor(Color.parseColor("#1976D2"))
+            }
+            else -> {
+                holder.btnAccion.text = "✋ ACEPTAR PEDIDO"
+                holder.btnAccion.setBackgroundColor(Color.parseColor("#4CAF50"))
+            }
         }
 
         holder.btnAccion.setOnClickListener {
-            // Aquí lo apagamos temporalmente para evitar doble clic de red
+            if (!holder.btnAccion.isEnabled) return@setOnClickListener
             holder.btnAccion.isEnabled = false
-            holder.btnAccion.text = if (esAsignado) "Entregando..." else "Asignando..."
+            holder.btnAccion.text = when {
+                esConfirmacion -> "Confirmando..."
+                esAsignado     -> "Entregando..."
+                else           -> "Asignando..."
+            }
             onBotonClick(pedido)
         }
     }

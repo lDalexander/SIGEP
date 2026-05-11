@@ -95,7 +95,8 @@ data class PedidoPendienteResponse(
     val operador: String,
     val detalle: String,
     val cantidad: Int,
-    val hora: String
+    val hora: String,
+    val estado: String = "PENDIENTE"
 )
 
 data class PedidoAccionRequest(
@@ -106,7 +107,24 @@ data class PedidoAccionRequest(
 data class EstadoPedidosResponse(
     val pendientes: Int,
     val en_camino: Int,
-    val entregados: Int
+    val entregados: Int,
+    val pendiente_confirmacion: Int = 0
+)
+
+data class DetallePedidoOperador(
+    val id: Int,
+    val detalle: String,
+    val cantidad: Int,
+    val hora_solicitud: String,
+    val hora_aceptacion: String?,
+    val insumista: String?,
+    val hora_entrega: String?,
+    val estado: String
+)
+
+data class ConfirmarRecepcionRequest(
+    val pedido_id: Int,
+    val sesion_id: Int
 )
 
 data class AdminLoginRequest(

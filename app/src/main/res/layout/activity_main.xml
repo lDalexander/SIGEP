@@ -91,6 +91,24 @@
                 android:textStyle="bold"
                 android:gravity="center"
                 android:layout_marginBottom="16dp"/>
+            <TextView
+                android:id="@+id/tvPendientesConfirmacionLabel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="📬 Confirmar entregas recibidas:"
+                android:textColor="#E65100"
+                android:textStyle="bold"
+                android:textSize="14sp"
+                android:layout_marginBottom="4dp"
+                android:visibility="gone"/>
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/rvPendientesConfirmacion"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                android:visibility="gone"/>
+
             <Button
                 android:id="@+id/btnTerminarTurno"
                 android:layout_width="match_parent"
