@@ -210,18 +210,22 @@ class MainActivity : AppCompatActivity() {
                         tvContenido.text = sb.toString().trimEnd()
                     }
                 } else {
-                    // Endpoint detallado aún no disponible en el backend — usar resumen básico
+                    // Endpoint detallado aún no disponible — usar resumen básico
                     val respBasico = RetrofitClient.apiService.obtenerEstadoPedidos(sesionActualId!!)
                     withContext(Dispatchers.Main) {
                         if (respBasico.isSuccessful && respBasico.body() != null) {
                             val d = respBasico.body()!!
-                            tvContenido.text = if (d.pendientes == 0 && d.en_camino == 0 && d.entregados == 0) {
+                            val sinActividad = d.pendientes == 0 && d.en_camino == 0 &&
+                                               d.entregados == 0 && d.pendiente_confirmacion == 0
+                            tvContenido.text = if (sinActividad) {
                                 "No has realizado ninguna solicitud en este turno."
                             } else {
-                                "Solicitados:  ${d.pendientes + d.en_camino + d.entregados}\n" +
-                                "Pendientes:   ${d.pendientes}\n" +
-                                "En Camino:    ${d.en_camino}\n" +
-                                "Entregados:   ${d.entregados}"
+                                buildString {
+                                    if (d.pendientes > 0)             append("Pendientes:   ${d.pendientes}\n")
+                                    if (d.en_camino > 0)              append("En Camino:    ${d.en_camino}\n")
+                                    if (d.pendiente_confirmacion > 0) append("Por confirmar: ${d.pendiente_confirmacion}\n")
+                                    if (d.entregados > 0)             append("Entregados:   ${d.entregados}")
+                                }.trimEnd()
                             }
                         } else {
                             tvContenido.text = "Error al obtener los datos.\nIntente de nuevo."
