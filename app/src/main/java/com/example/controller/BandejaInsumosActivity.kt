@@ -365,15 +365,17 @@ class BandejaInsumosActivity : AppCompatActivity() {
                 val respuesta = RetrofitClient.apiService.entregarPedido(solicitud)
                 withContext(Dispatchers.Main) {
                     if (respuesta.isSuccessful) {
-                        Toast.makeText(this@BandejaInsumosActivity, "Entrega confirmada", Toast.LENGTH_SHORT).show()
-                        actualizarListasManualmente()
+                        Toast.makeText(this@BandejaInsumosActivity,
+                            "Entregado. Esperando confirmación del operario.", Toast.LENGTH_LONG).show()
                     } else {
                         Toast.makeText(this@BandejaInsumosActivity, "Error al confirmar entrega", Toast.LENGTH_LONG).show()
                     }
+                    actualizarListasManualmente()
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@BandejaInsumosActivity, "Error de red al confirmar entrega", Toast.LENGTH_SHORT).show()
+                    actualizarListasManualmente()
                 }
             }
         }
