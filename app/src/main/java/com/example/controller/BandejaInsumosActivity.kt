@@ -513,22 +513,16 @@ class BandejaInsumosActivity : AppCompatActivity() {
 
         // Foto
         cont.addView(TextView(this).apply { text = "Evidencia fotográfica:"; setTypeface(null, android.graphics.Typeface.BOLD); setPadding(0, 20, 0, 0) })
-        val layoutFoto = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 8, 0, 0) }
         val btnCam = Button(this).apply {
-            text = "📷 Cámara"
+            text = "📷 TOMAR FOTO"
             setBackgroundColor(android.graphics.Color.parseColor("#455A64"))
             setTextColor(android.graphics.Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = 8 }
         }
-        val btnGal = Button(this).apply {
-            text = "🖼️ Galería"
-            setBackgroundColor(android.graphics.Color.parseColor("#607D8B"))
-            setTextColor(android.graphics.Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = 16 }
-        }
-        layoutFoto.addView(btnCam)
-        layoutFoto.addView(btnGal)
-        cont.addView(layoutFoto)
+        cont.addView(btnCam)
 
         val tvFoto = TextView(this).apply { text = "Sin foto adjunta"; setTextColor(android.graphics.Color.GRAY); setPadding(0, 8, 0, 0) }
         tvFotoEstado = tvFoto
@@ -544,7 +538,6 @@ class BandejaInsumosActivity : AppCompatActivity() {
             fotoUri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", tmp)
             launcherCamara.launch(fotoUri!!)
         }
-        btnGal.setOnClickListener { launcherGaleria.launch("image/*") }
 
         AlertDialog.Builder(this)
             .setTitle("Registrar Entrega de Insumo")
