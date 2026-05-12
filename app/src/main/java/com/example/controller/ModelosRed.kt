@@ -181,6 +181,26 @@ data class SolicitudTokenFcm(
     @SerializedName("usuario_id")  val usuarioId: Int? = null
 )
 
+// ==========================================
+// ENTREGA PROACTIVA (INSUMISTA → MÁQUINA)
+// ==========================================
+data class EntregaProactivaResponse(
+    val id: Int,
+    val mensaje: String,
+    val foto_url: String?
+)
+
+data class EntregaProactivaHistorial(
+    val id: Int,
+    val tipo_producto: String,
+    val insumo: String,
+    val cantidad: Int,
+    val maquina: String,
+    val observaciones: String?,
+    val foto_path: String?,
+    val fecha_hora: String
+)
+
 // El mismo modelo sirve para registro (HTTP 201) y actualización (HTTP 200).
 data class RespuestaTokenFcm(
     @SerializedName("mensaje") val mensaje: String,

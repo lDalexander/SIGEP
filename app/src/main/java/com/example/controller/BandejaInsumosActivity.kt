@@ -4,12 +4,23 @@ import androidx.core.content.ContextCompat
 import android.content.BroadcastReceiver
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
 import android.os.Bundle
+import android.os.Environment
 import android.view.View
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -29,6 +40,13 @@ import android.util.Log
 import androidx.appcompat.app.AlertDialog
 import android.os.Vibrator
 import android.os.VibrationEffect
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class BandejaInsumosActivity : AppCompatActivity() {
 
@@ -45,11 +63,19 @@ class BandejaInsumosActivity : AppCompatActivity() {
 
     private lateinit var tvUsuarioLogueado: TextView
     private lateinit var btnCerrarSesion: Button
+    private lateinit var btnEntregarInsumo: Button
 
     private var usuarioId: Int = -1
     private var usuarioRol: String = ""
     private var tipoInsumoUsuario: String = ""
     private var gestorWebSocket: SigepWebSocketManager? = null
+
+    private var fotoUri: Uri? = null
+    private var fotoFile: File? = null
+    private var tvFotoEstado: TextView? = null
+    private var listaMaquinas: List<String> = emptyList()
+    private lateinit var launcherCamara: ActivityResultLauncher<Uri>
+    private lateinit var launcherGaleria: ActivityResultLauncher<String>
 
     // Código de solicitud para el diálogo de permisos de notificación en Android 13+.
     companion object {
@@ -82,6 +108,15 @@ class BandejaInsumosActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        launcherCamara = registerForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+            if (ok) tvFotoEstado?.text = "📷 Foto capturada"
+            else { fotoUri = null; fotoFile = null }
+        }
+        launcherGaleria = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+            if (uri != null) { fotoUri = uri; fotoFile = null; tvFotoEstado?.text = "🖼️ Imagen seleccionada" }
+        }
+
         setContentView(R.layout.activity_bandeja_insumos)
 
         rvAsignados      = findViewById(R.id.rvAsignados)
@@ -89,7 +124,8 @@ class BandejaInsumosActivity : AppCompatActivity() {
         rvPedidos        = findViewById(R.id.rvPedidos)
         tvSinPedidos     = findViewById(R.id.tvSinPedidos)
         tvUsuarioLogueado = findViewById(R.id.tvUsuarioLogueado)
-        btnCerrarSesion  = findViewById(R.id.btnCerrarSesion)
+        btnCerrarSesion   = findViewById(R.id.btnCerrarSesion)
+        btnEntregarInsumo = findViewById(R.id.btnEntregarInsumo)
 
         val prefs = getSharedPreferences("DetcuadorPrefs", MODE_PRIVATE)
         usuarioId         = prefs.getInt("usuario_id", -1)
@@ -113,6 +149,8 @@ class BandejaInsumosActivity : AppCompatActivity() {
         }
 
         btnCerrarSesion.setOnClickListener { cerrarSesion("Sesión cerrada correctamente") }
+        btnEntregarInsumo.setOnClickListener { abrirFormularioEntregaProactiva() }
+        cargarMaquinas()
 
         vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
 
@@ -393,6 +431,176 @@ class BandejaInsumosActivity : AppCompatActivity() {
             mediaPlayer?.seekTo(0)
         }
         vibrator?.cancel()
+    }
+
+    private fun cargarMaquinas() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val resp = RetrofitClient.apiService.obtenerMaquinas()
+                withContext(Dispatchers.Main) {
+                    if (resp.isSuccessful && resp.body() != null) {
+                        listaMaquinas = resp.body()!!.map { it.nombre }
+                    }
+                }
+            } catch (e: Exception) { /* silencioso */ }
+        }
+    }
+
+    private fun crearArchivoTemporal(): File {
+        val nombre = "SIGEP_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}"
+        val dir = getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+        return File.createTempFile(nombre, ".jpg", dir)
+    }
+
+    private fun abrirFormularioEntregaProactiva() {
+        fotoUri = null
+        fotoFile = null
+        val esGranel = usuarioRol.contains("Granel", ignoreCase = true)
+
+        val scroll = ScrollView(this)
+        val cont = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(50, 40, 50, 20)
+        }
+        scroll.addView(cont)
+
+        // Tipo de producto (solo Empaque)
+        var spinnerTipo: Spinner? = null
+        if (!esGranel) {
+            cont.addView(TextView(this).apply { text = "Tipo de producto:"; setTypeface(null, android.graphics.Typeface.BOLD) })
+            spinnerTipo = Spinner(this).also { cont.addView(it) }
+            spinnerTipo.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, listOf("Sólido", "Líquido"))
+        }
+
+        // Insumo
+        cont.addView(TextView(this).apply { text = "Insumo:"; setTypeface(null, android.graphics.Typeface.BOLD); setPadding(0, 20, 0, 0) })
+        val spinnerInsumo = Spinner(this).also { cont.addView(it) }
+
+        fun actualizarInsumos(tipo: String) {
+            val opciones = when {
+                esGranel        -> listOf("Materia Prima", "Preten")
+                tipo == "Sólido" -> listOf("Lámina")
+                else            -> listOf("Cajas", "Botellas", "Fajillas", "Etiquetas", "Tapas")
+            }
+            spinnerInsumo.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, opciones)
+        }
+        actualizarInsumos(if (esGranel) "Líquido" else "Sólido")
+
+        spinnerTipo?.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                actualizarInsumos(spinnerTipo.selectedItem.toString())
+            }
+            override fun onNothingSelected(p: AdapterView<*>?) {}
+        }
+
+        // Máquina
+        cont.addView(TextView(this).apply { text = "Máquina destino:"; setTypeface(null, android.graphics.Typeface.BOLD); setPadding(0, 20, 0, 0) })
+        val spinnerMaquina = Spinner(this).also { cont.addView(it) }
+        spinnerMaquina.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item,
+            listaMaquinas.ifEmpty { listOf("(Sin máquinas cargadas)") })
+
+        // Cantidad
+        cont.addView(TextView(this).apply { text = "Cantidad:"; setTypeface(null, android.graphics.Typeface.BOLD); setPadding(0, 20, 0, 0) })
+        val etCantidad = EditText(this).apply { hint = "Ej: 3"; inputType = android.text.InputType.TYPE_CLASS_NUMBER }
+        cont.addView(etCantidad)
+
+        // Observaciones
+        cont.addView(TextView(this).apply { text = "Observaciones (opcional):"; setTypeface(null, android.graphics.Typeface.BOLD); setPadding(0, 20, 0, 0) })
+        val etObs = EditText(this).apply { hint = "Nota adicional..." }
+        cont.addView(etObs)
+
+        // Foto
+        cont.addView(TextView(this).apply { text = "Evidencia fotográfica:"; setTypeface(null, android.graphics.Typeface.BOLD); setPadding(0, 20, 0, 0) })
+        val layoutFoto = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 8, 0, 0) }
+        val btnCam = Button(this).apply {
+            text = "📷 Cámara"
+            setBackgroundColor(android.graphics.Color.parseColor("#455A64"))
+            setTextColor(android.graphics.Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val btnGal = Button(this).apply {
+            text = "🖼️ Galería"
+            setBackgroundColor(android.graphics.Color.parseColor("#607D8B"))
+            setTextColor(android.graphics.Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = 16 }
+        }
+        layoutFoto.addView(btnCam)
+        layoutFoto.addView(btnGal)
+        cont.addView(layoutFoto)
+
+        val tvFoto = TextView(this).apply { text = "Sin foto adjunta"; setTextColor(android.graphics.Color.GRAY); setPadding(0, 8, 0, 0) }
+        tvFotoEstado = tvFoto
+        cont.addView(tvFoto)
+
+        btnCam.setOnClickListener {
+            if (checkSelfPermission(android.Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(android.Manifest.permission.CAMERA), 202)
+                return@setOnClickListener
+            }
+            val tmp = crearArchivoTemporal()
+            fotoFile = tmp
+            fotoUri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", tmp)
+            launcherCamara.launch(fotoUri!!)
+        }
+        btnGal.setOnClickListener { launcherGaleria.launch("image/*") }
+
+        AlertDialog.Builder(this)
+            .setTitle("Registrar Entrega de Insumo")
+            .setView(scroll)
+            .setPositiveButton("REGISTRAR") { _, _ ->
+                val cantidad = etCantidad.text.toString().toIntOrNull()
+                if (cantidad == null || cantidad <= 0) {
+                    Toast.makeText(this, "Ingrese una cantidad válida", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                val maq = spinnerMaquina.selectedItem?.toString() ?: ""
+                if (maq.isEmpty() || maq.startsWith("(")) {
+                    Toast.makeText(this, "Seleccione una máquina", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                val tipo  = spinnerTipo?.selectedItem?.toString() ?: "Líquido"
+                val ins   = spinnerInsumo.selectedItem?.toString() ?: ""
+                val obs   = etObs.text.toString().trim().ifEmpty { null }
+                enviarEntregaProactiva(tipo, ins, cantidad, maq, obs)
+            }
+            .setNegativeButton("Cancelar", null)
+            .setOnDismissListener { tvFotoEstado = null }
+            .show()
+    }
+
+    private fun enviarEntregaProactiva(tipo: String, insumo: String, cantidad: Int, maquina: String, obs: String?) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val fotoPart: MultipartBody.Part? = fotoUri?.let { uri ->
+                    val stream = contentResolver.openInputStream(uri) ?: return@let null
+                    val bytes = stream.readBytes(); stream.close()
+                    val body = bytes.toRequestBody("image/jpeg".toMediaType())
+                    MultipartBody.Part.createFormData("foto", "entrega_${usuarioId}.jpg", body)
+                }
+                val resp = RetrofitClient.apiService.registrarEntregaProactiva(
+                    insumistaId   = usuarioId.toString().toRequestBody("text/plain".toMediaType()),
+                    tipoProducto  = tipo.toRequestBody("text/plain".toMediaType()),
+                    insumo        = insumo.toRequestBody("text/plain".toMediaType()),
+                    cantidad      = cantidad.toString().toRequestBody("text/plain".toMediaType()),
+                    maquina       = maquina.toRequestBody("text/plain".toMediaType()),
+                    observaciones = obs?.toRequestBody("text/plain".toMediaType()),
+                    foto          = fotoPart
+                )
+                withContext(Dispatchers.Main) {
+                    if (resp.isSuccessful) {
+                        Toast.makeText(this@BandejaInsumosActivity,
+                            resp.body()?.mensaje ?: "Entrega registrada", Toast.LENGTH_LONG).show()
+                        fotoUri = null; fotoFile = null
+                    } else {
+                        Toast.makeText(this@BandejaInsumosActivity, "Error al registrar entrega", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@BandejaInsumosActivity, "Error de red", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
     }
 
     private fun mostrarNotificacionAlerta(cantidad: Int) {

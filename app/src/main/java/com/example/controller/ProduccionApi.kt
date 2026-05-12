@@ -1,9 +1,13 @@
 package com.example.controller
 
+import okhttp3.MultipartBody
+import okhttp3.RequestBody
 import retrofit2.Response
 import retrofit2.http.Body
+import retrofit2.http.Multipart
 import retrofit2.http.POST
 import retrofit2.http.GET
+import retrofit2.http.Part
 import retrofit2.http.Path
 import retrofit2.http.PUT
 interface ProduccionApi {
@@ -79,6 +83,21 @@ interface ProduccionApi {
 
     @GET("/api/insumos/pendientes_confirmacion/{sesion_id}")
     suspend fun obtenerPendientesConfirmacion(@Path("sesion_id") sesionId: Int): Response<List<PedidoPendienteResponse>>
+
+    @Multipart
+    @POST("/api/insumos/entrega_proactiva")
+    suspend fun registrarEntregaProactiva(
+        @Part("insumista_id") insumistaId: RequestBody,
+        @Part("tipo_producto") tipoProducto: RequestBody,
+        @Part("insumo")        insumo: RequestBody,
+        @Part("cantidad")      cantidad: RequestBody,
+        @Part("maquina")       maquina: RequestBody,
+        @Part("observaciones") observaciones: RequestBody?,
+        @Part foto: MultipartBody.Part?
+    ): Response<EntregaProactivaResponse>
+
+    @GET("/api/insumos/entregas_proactivas/{insumista_id}")
+    suspend fun obtenerEntregasProactivas(@Path("insumista_id") insumistaId: Int): Response<List<EntregaProactivaHistorial>>
 
     // ==========================================
     // NUEVO: FASE 5 - TORRE DE CONTROL (SUPERVISORES)
