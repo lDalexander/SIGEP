@@ -187,34 +187,49 @@ class MainActivity : AppCompatActivity() {
                         val sb = StringBuilder()
                         pedidos.forEach { p ->
                             val (emoji, estadoTexto) = when (p.estado.lowercase()) {
-                                "pendiente"                    -> "🕐" to "Pendiente de atención"
-                                "en_camino", "en camino"       -> "🚶" to "En camino"
-                                "entregado_insumista"          -> "⏳" to "Entregado — esperando tu confirmación"
-                                "entregado"                    -> "✅" to "Completado"
-                                else                           -> "❓" to p.estado
+                                "pendiente"           -> "🕐" to "Sin atender"
+                                "en camino"           -> "🚶" to "En camino"
+                                "entregado_insumista" -> "⏳" to "Entregado — esperando tu confirmación"
+                                "entregado"           -> "✅" to "Completado"
+                                else                  -> "❓" to p.estado
                             }
                             sb.append("━━━━━━━━━━━━━━━━━━━━\n")
                             sb.append("📦 ${p.cantidad}x ${p.detalle}\n")
-                            sb.append("⏰ Solicitado: ${p.hora_solicitud}\n")
+                            sb.append("⏰ Solicitado:  ${p.hora_solicitud}\n")
                             sb.append("$emoji $estadoTexto\n")
                             if (p.insumista != null) {
-                                sb.append("👤 Insumista: ${p.insumista}")
-                                if (p.hora_aceptacion != null) sb.append("  (aceptó: ${p.hora_aceptacion})")
+                                sb.append("👤 ${p.insumista}")
+                                if (p.hora_aceptacion != null) sb.append(" · aceptó: ${p.hora_aceptacion}")
                                 sb.append("\n")
                             }
                             if (p.hora_entrega != null) {
-                                sb.append("📬 Insumista entregó: ${p.hora_entrega}\n")
+                                sb.append("📬 Entregó: ${p.hora_entrega}\n")
                             }
                             sb.append("\n")
                         }
                         tvContenido.text = sb.toString().trimEnd()
                     }
                 } else {
-                    val codigo = respDetalle.code()
-                    val errorBody = respDetalle.errorBody()?.string() ?: "(sin cuerpo)"
-                    val bodyNulo = respDetalle.body() == null
+                    // Fallback a conteos básicos si el endpoint detallado falla
+                    val respBasico = RetrofitClient.apiService.obtenerEstadoPedidos(sesionActualId!!)
                     withContext(Dispatchers.Main) {
-                        tvContenido.text = "HTTP $codigo\nbody_null=$bodyNulo\n\n$errorBody"
+                        if (respBasico.isSuccessful && respBasico.body() != null) {
+                            val d = respBasico.body()!!
+                            val sinActividad = d.pendientes == 0 && d.en_camino == 0 &&
+                                               d.entregados == 0 && d.pendiente_confirmacion == 0
+                            tvContenido.text = if (sinActividad) {
+                                "No has realizado ninguna solicitud en este turno."
+                            } else {
+                                buildString {
+                                    if (d.pendientes > 0)             append("Pendientes:    ${d.pendientes}\n")
+                                    if (d.en_camino > 0)              append("En Camino:     ${d.en_camino}\n")
+                                    if (d.pendiente_confirmacion > 0) append("Por confirmar: ${d.pendiente_confirmacion}\n")
+                                    if (d.entregados > 0)             append("Entregados:    ${d.entregados}")
+                                }.trimEnd()
+                            }
+                        } else {
+                            tvContenido.text = "Error al obtener los datos."
+                        }
                     }
                 }
             } catch (e: Exception) {
