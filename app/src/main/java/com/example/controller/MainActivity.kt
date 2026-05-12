@@ -177,6 +177,9 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val respDetalle = RetrofitClient.apiService.obtenerDetallePedidos(sesionActualId!!)
+                android.util.Log.d("SIGEP_DETALLE",
+                    "HTTP ${respDetalle.code()} | body null: ${respDetalle.body() == null} | error: ${respDetalle.errorBody()?.string()}")
+
                 if (respDetalle.isSuccessful && respDetalle.body() != null) {
                     val pedidos = respDetalle.body()!!
                     withContext(Dispatchers.Main) {
