@@ -558,6 +558,10 @@ class BandejaInsumosActivity : AppCompatActivity() {
                     Toast.makeText(this, "Seleccione una máquina", Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
                 }
+                if (fotoUri == null) {
+                    Toast.makeText(this, "La foto de evidencia es obligatoria", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
                 val tipo  = spinnerTipo?.selectedItem?.toString() ?: "Líquido"
                 val ins   = spinnerInsumo.selectedItem?.toString() ?: ""
                 val obs   = etObs.text.toString().trim().ifEmpty { null }
