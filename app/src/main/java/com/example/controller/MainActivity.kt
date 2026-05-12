@@ -177,9 +177,6 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val respDetalle = RetrofitClient.apiService.obtenerDetallePedidos(sesionActualId!!)
-                android.util.Log.d("SIGEP_DETALLE",
-                    "HTTP ${respDetalle.code()} | body null: ${respDetalle.body() == null} | error: ${respDetalle.errorBody()?.string()}")
-
                 if (respDetalle.isSuccessful && respDetalle.body() != null) {
                     val pedidos = respDetalle.body()!!
                     withContext(Dispatchers.Main) {
@@ -213,26 +210,11 @@ class MainActivity : AppCompatActivity() {
                         tvContenido.text = sb.toString().trimEnd()
                     }
                 } else {
-                    // Endpoint detallado aún no disponible — usar resumen básico
-                    val respBasico = RetrofitClient.apiService.obtenerEstadoPedidos(sesionActualId!!)
+                    val codigo = respDetalle.code()
+                    val errorBody = respDetalle.errorBody()?.string() ?: "(sin cuerpo)"
+                    val bodyNulo = respDetalle.body() == null
                     withContext(Dispatchers.Main) {
-                        if (respBasico.isSuccessful && respBasico.body() != null) {
-                            val d = respBasico.body()!!
-                            val sinActividad = d.pendientes == 0 && d.en_camino == 0 &&
-                                               d.entregados == 0 && d.pendiente_confirmacion == 0
-                            tvContenido.text = if (sinActividad) {
-                                "No has realizado ninguna solicitud en este turno."
-                            } else {
-                                buildString {
-                                    if (d.pendientes > 0)             append("Pendientes:   ${d.pendientes}\n")
-                                    if (d.en_camino > 0)              append("En Camino:    ${d.en_camino}\n")
-                                    if (d.pendiente_confirmacion > 0) append("Por confirmar: ${d.pendiente_confirmacion}\n")
-                                    if (d.entregados > 0)             append("Entregados:   ${d.entregados}")
-                                }.trimEnd()
-                            }
-                        } else {
-                            tvContenido.text = "Error al obtener los datos.\nIntente de nuevo."
-                        }
+                        tvContenido.text = "HTTP $codigo\nbody_null=$bodyNulo\n\n$errorBody"
                     }
                 }
             } catch (e: Exception) {
