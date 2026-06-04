@@ -1,5 +1,6 @@
 package com.example.controller
 
+import android.annotation.SuppressLint
 import androidx.core.content.ContextCompat
 import android.content.BroadcastReceiver
 import android.content.Intent
@@ -25,6 +26,8 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import android.app.NotificationChannel
@@ -99,9 +102,15 @@ class BandejaInsumosActivity : AppCompatActivity() {
     // 8 horas: límite de sesión para insumistas, alineado con el turno máximo de trabajo.
     private val OCHO_HORAS_MILLIS = 8 * 60 * 60 * 1000L
 
+    // Salvavidas por si el WebSocket se desconectó: refrescamos la bandeja
+    // cada 15s así, aunque no llegue el evento "operario_confirmo_recepcion",
+    // el pedido entregado deja de aparecer al cabo de pocos segundos.
+    private var jobRefrescoPeriodico: kotlinx.coroutines.Job? = null
+
     override fun onStart() {
         super.onStart()
         verificarPermisosNotificacion()
+        verificarPermisoFullScreenIntent()
         recuperarTokenFCM()
         verificarOptimizacionBateria()
     }
@@ -131,7 +140,10 @@ class BandejaInsumosActivity : AppCompatActivity() {
         usuarioId         = prefs.getInt("usuario_id", -1)
         val nombre        = prefs.getString("usuario_nombre", "Desconocido")
         usuarioRol        = prefs.getString("usuario_rol", "").toString()
-        tipoInsumoUsuario = prefs.getString("tipo_insumo_usuario", "EMPAQUE").toString()
+        // Derivamos del rol — antes leíamos una pref que nadie escribía, por lo que
+        // el filtro de SigepFirebaseMessagingService descartaba todo FCM en background.
+        tipoInsumoUsuario = derivarTipoInsumo(usuarioRol)
+        prefs.edit().putString("tipo_insumo_usuario", tipoInsumoUsuario).apply()
         val tiempoLogin   = prefs.getLong("tiempo_login", 0L)
 
         AppState.usuarioRol = usuarioRol
@@ -179,11 +191,22 @@ class BandejaInsumosActivity : AppCompatActivity() {
         AppState.moduloActivo = AppState.MODULO_GESTION_INSUMOS
         val filtro = IntentFilter("com.sigep.NUEVO_PEDIDO_INSUMO")
         ContextCompat.registerReceiver(this, receptorPedidos, filtro, ContextCompat.RECEIVER_EXPORTED)
+
+        // Salvavidas: refresca la bandeja cada 15s mientras la activity está
+        // visible, por si el WS se cayó y no nos llegó el evento de confirmación.
+        jobRefrescoPeriodico = lifecycleScope.launch(Dispatchers.IO) {
+            while (isActive) {
+                delay(15_000)
+                consultarServidor()
+            }
+        }
     }
 
     override fun onPause() {
         super.onPause()
         try { unregisterReceiver(receptorPedidos) } catch (e: Exception) { /* ya desregistrado */ }
+        jobRefrescoPeriodico?.cancel()
+        jobRefrescoPeriodico = null
     }
 
     override fun onStop() {
@@ -215,6 +238,14 @@ class BandejaInsumosActivity : AppCompatActivity() {
                     // Alguien más tomó el pedido: apagamos la alarma para evitar
                     // que un insumista siga corriendo hacia un pedido ya atendido.
                     detenerAlarma()
+                    SigepNotificationManager.cancelarAlertaPedido(this)
+                    actualizarListasManualmente()
+                }
+                // El operario confirmó la recepción: refrescamos para que el pedido
+                // entregado deje de aparecer en "asignados" del insumista.
+                "operario_confirmo_recepcion",
+                "pedido_confirmado",
+                "pedido_entregado" -> {
                     actualizarListasManualmente()
                 }
             }
@@ -245,7 +276,7 @@ class BandejaInsumosActivity : AppCompatActivity() {
         try {
             FirebaseMessaging.getInstance().token.addOnCompleteListener { tarea ->
                 if (!tarea.isSuccessful) {
-                    Log.e("FCM_SIGEP", "Error al recuperar el token FCM", tarea.exception)
+                    Log.e("SIGEP_FCM", "Error al recuperar el token FCM", tarea.exception)
                     return@addOnCompleteListener
                 }
                 val token = tarea.result
@@ -254,7 +285,7 @@ class BandejaInsumosActivity : AppCompatActivity() {
                 guardarTokenEnServidor(token)
             }
         } catch (e: Exception) {
-            Log.e("FCM_SIGEP", "Error crítico al inicializar Firebase: ${e.message}. Verifique google-services.json")
+            ErrorReporter.report("SIGEP_FCM", "Error crítico al inicializar Firebase (verifique google-services.json)", e)
         }
     }
 
@@ -269,35 +300,89 @@ class BandejaInsumosActivity : AppCompatActivity() {
                     SolicitudTokenFcm(token = token, usuarioId = idParaEnviar)
                 )
                 when (respuesta.code()) {
-                    201  -> Log.i("FCM_SIGEP", "Token registrado en servidor (id=${respuesta.body()?.id})")
-                    200  -> Log.i("FCM_SIGEP", "Token actualizado en servidor (id=${respuesta.body()?.id})")
-                    else -> Log.e("FCM_SIGEP", "Error al registrar token: HTTP ${respuesta.code()}")
+                    201  -> Log.i("SIGEP_FCM", "Token registrado en servidor (id=${respuesta.body()?.id})")
+                    200  -> Log.i("SIGEP_FCM", "Token actualizado en servidor (id=${respuesta.body()?.id})")
+                    else -> Log.e("SIGEP_FCM", "Error al registrar token: HTTP ${respuesta.code()}")
                 }
             } catch (e: Exception) {
-                Log.e("FCM_SIGEP", "Fallo de red al registrar token: ${e.message}")
+                ErrorReporter.report("SIGEP_FCM", "Fallo al registrar token FCM en servidor", e)
             }
         }
+    }
+
+    // Deriva el tipo de insumo (GRANEL/EMPAQUE/ADMIN) desde el rol del usuario.
+    // Es el filtro que usa SigepFirebaseMessagingService para descartar mensajes
+    // que no correspondan a este insumista (granel no recibe alertas de empaque).
+    private fun derivarTipoInsumo(rol: String): String = when {
+        rol.contains("granel", ignoreCase = true)  -> "GRANEL"
+        rol.contains("empaque", ignoreCase = true) -> "EMPAQUE"
+        rol.equals("ADMIN", ignoreCase = true) ||
+        rol.equals("SUPERVISOR", ignoreCase = true) -> "ADMIN"
+        else -> "EMPAQUE"  // fallback histórico
     }
 
     private fun verificarOptimizacionBateria() {
         val prefs = getSharedPreferences("DetcuadorPrefs", MODE_PRIVATE)
         if (prefs.getBoolean("battery_dialog_shown", false)) return
 
-        val fabricante = Build.MANUFACTURER.uppercase()
-        val fabricantesProblematicos = listOf("XIAOMI", "HUAWEI", "SAMSUNG")
-
-        // Estos fabricantes matan agresivamente los servicios en background.
-        // Sin esta configuración manual el insumista no recibe las alertas de insumos.
-        if (fabricantesProblematicos.any { fabricante.contains(it) }) {
-            AlertDialog.Builder(this)
-                .setTitle("Configuración Requerida")
-                .setMessage("Para recibir alertas en tiempo real, desactiva la optimización de batería para SIGEP y permite el inicio automático (Autostart) en los ajustes de tu dispositivo $fabricante.")
-                .setPositiveButton("Entendido") { _, _ ->
-                    prefs.edit().putBoolean("battery_dialog_shown", true).apply()
-                }
-                .setCancelable(false)
-                .show()
+        val powerManager = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        if (powerManager.isIgnoringBatteryOptimizations(packageName)) {
+            // Ya está exenta — no molestamos al usuario otra vez.
+            prefs.edit().putBoolean("battery_dialog_shown", true).apply()
+            return
         }
+
+        AlertDialog.Builder(this)
+            .setTitle("Configuración requerida")
+            .setMessage("Para recibir alertas con la pantalla apagada, SIGEP debe estar exenta de la optimización de batería.")
+            .setPositiveButton("Ir a Ajustes") { _, _ ->
+                try {
+                    @SuppressLint("BatteryLife")
+                    val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                        .setData(android.net.Uri.parse("package:$packageName"))
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    // Fallback: pantalla genérica de optimización de batería.
+                    try {
+                        startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                    } catch (_: Exception) {
+                        Toast.makeText(this, "Abre Ajustes → Batería → SIGEP → Sin restricción", Toast.LENGTH_LONG).show()
+                    }
+                }
+                prefs.edit().putBoolean("battery_dialog_shown", true).apply()
+            }
+            .setNegativeButton("Después", null)
+            .show()
+    }
+
+    // Android 14+ restringe USE_FULL_SCREEN_INTENT: la alarma full-screen
+    // (encender pantalla + saltarse lockscreen) requiere permiso especial
+    // otorgado manualmente por el usuario. Sin esto, en API 34+ Android
+    // convierte la alerta en una heads-up normal y no se enciende la pantalla.
+    private fun verificarPermisoFullScreenIntent() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return
+
+        val prefs = getSharedPreferences("DetcuadorPrefs", MODE_PRIVATE)
+        if (prefs.getBoolean("fullscreen_dialog_shown", false)) return
+
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (nm.canUseFullScreenIntent()) return
+
+        AlertDialog.Builder(this)
+            .setTitle("Permiso para alarmas")
+            .setMessage("Para que el aviso de pedido encienda la pantalla y suene como alarma, otorga el permiso de 'pantalla completa' a SIGEP.")
+            .setPositiveButton("Ir a Ajustes") { _, _ ->
+                try {
+                    val intent = Intent(android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT)
+                        .setData(android.net.Uri.parse("package:$packageName"))
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Abre Ajustes → Apps → SIGEP → Pantalla completa", Toast.LENGTH_LONG).show()
+                }
+                prefs.edit().putBoolean("fullscreen_dialog_shown", true).apply()
+            }
+            .setNegativeButton("Después", null)
+            .show()
     }
 
     private suspend fun consultarServidor() {
@@ -329,6 +414,7 @@ class BandejaInsumosActivity : AppCompatActivity() {
                 }
             }
         } catch (e: Exception) {
+            ErrorReporter.report("BandejaInsumos", "Fallo al consultar pedidos del servidor", e)
             withContext(Dispatchers.Main) {
                 Toast.makeText(this@BandejaInsumosActivity, "Error al actualizar datos", Toast.LENGTH_SHORT).show()
             }
@@ -345,12 +431,19 @@ class BandejaInsumosActivity : AppCompatActivity() {
                         Toast.makeText(this@BandejaInsumosActivity, "Pedido asignado", Toast.LENGTH_SHORT).show()
                         actualizarListasManualmente()
                         detenerAlarma()
+                        // El insumista pudo aceptar desde la bandeja sin pasar por
+                        // AlertaPedidoActivity (ej. tabla abierta cuando llegó el FCM).
+                        // En ese caso la notif del canal sigue sonando — la matamos acá.
+                        SigepNotificationManager.cancelarAlertaPedido(this@BandejaInsumosActivity)
                     } else {
                         Toast.makeText(this@BandejaInsumosActivity, "Alguien más ya tomó este pedido", Toast.LENGTH_LONG).show()
                         actualizarListasManualmente()
+                        // Otro insumista la tomó: también apagamos la alarma local.
+                        SigepNotificationManager.cancelarAlertaPedido(this@BandejaInsumosActivity)
                     }
                 }
             } catch (e: Exception) {
+                ErrorReporter.report("BandejaInsumos", "Fallo al aceptar pedido", e)
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@BandejaInsumosActivity, "Error de red al aceptar pedido", Toast.LENGTH_SHORT).show()
                 }
@@ -373,6 +466,7 @@ class BandejaInsumosActivity : AppCompatActivity() {
                     actualizarListasManualmente()
                 }
             } catch (e: Exception) {
+                ErrorReporter.report("BandejaInsumos", "Fallo al confirmar entrega", e)
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@BandejaInsumosActivity, "Error de red al confirmar entrega", Toast.LENGTH_SHORT).show()
                     actualizarListasManualmente()
@@ -387,7 +481,27 @@ class BandejaInsumosActivity : AppCompatActivity() {
         detenerAlarma()
         mediaPlayer?.release()
         mediaPlayer = null
-        getSharedPreferences("DetcuadorPrefs", MODE_PRIVATE).edit().clear().apply()
+
+        val prefs = getSharedPreferences("DetcuadorPrefs", MODE_PRIVATE)
+        val idUsuario = prefs.getInt("usuario_id", -1)
+        val deviceId  = prefs.getString("tablet_device_id", null)
+
+        // Avisarle al server para que libere la sesión-única. Es best-effort:
+        // si la red está caída, el local logout procede igual y el server
+        // auto-libera tras 9h. No bloqueamos al usuario por un fallo de red.
+        if (idUsuario != -1 && !deviceId.isNullOrBlank()) {
+            lifecycleScope.launch(Dispatchers.IO) {
+                try {
+                    RetrofitClient.apiService.cerrarSesionUsuario(
+                        LogoutRequest(usuario_id = idUsuario, device_id = deviceId)
+                    )
+                } catch (e: Exception) {
+                    ErrorReporter.warn("BandejaInsumos", "Logout server falló (auto-libera en 9h): ${e.message}")
+                }
+            }
+        }
+
+        prefs.edit().clear().apply()
         Toast.makeText(this, mensaje, Toast.LENGTH_LONG).show()
         startActivity(Intent(this, MenuRolesActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
@@ -423,7 +537,7 @@ class BandejaInsumosActivity : AppCompatActivity() {
                 vibrator?.vibrate(patron, 0)
             }
         } catch (e: Exception) {
-            Log.e("SIGEP_ALARM", "Error al reproducir alarma: ${e.message}")
+            ErrorReporter.report("SIGEP_ALARM", "Error al reproducir alarma", e)
         }
     }
 
@@ -444,7 +558,9 @@ class BandejaInsumosActivity : AppCompatActivity() {
                         listaMaquinas = resp.body()!!.map { it.nombre }
                     }
                 }
-            } catch (e: Exception) { /* silencioso */ }
+            } catch (e: Exception) {
+                ErrorReporter.report("BandejaInsumos", "Fallo al cargar lista de máquinas", e)
+            }
         }
     }
 
@@ -595,6 +711,7 @@ class BandejaInsumosActivity : AppCompatActivity() {
                     }
                 }
             } catch (e: Exception) {
+                ErrorReporter.report("BandejaInsumos", "Fallo al registrar entrega proactiva", e)
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@BandejaInsumosActivity, "Error de red", Toast.LENGTH_SHORT).show()
                 }

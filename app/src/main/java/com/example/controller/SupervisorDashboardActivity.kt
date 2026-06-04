@@ -123,6 +123,7 @@ class SupervisorDashboardActivity : AppCompatActivity() {
                     }
                 }
             } catch (e: Exception) {
+                ErrorReporter.report("SupervisorDashboard", "Fallo al refrescar dashboard", e)
                 if (!esSilencioso) {
                     withContext(Dispatchers.Main) {
                         Toast.makeText(this@SupervisorDashboardActivity, "Error de conexión", Toast.LENGTH_SHORT).show()

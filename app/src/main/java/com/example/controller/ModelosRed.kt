@@ -17,7 +17,15 @@ data class IniciarTurnoRequest(
 
 data class RegistrarPalletRequest(
     var sesion_id: Int,
-    val cantidad_pacas: Int
+    val cantidad_pacas: Int,
+    val request_id: String = ""
+)
+
+data class RegistrarPalletResponse(
+    val mensaje: String,
+    @SerializedName("pallet_id") val palletId: Int? = null,
+    val duplicado: Boolean = false,
+    val razon: String? = null,
 )
 
 data class FinalizarTurnoRequest(
@@ -76,7 +84,12 @@ data class SolicitarInsumoRequest(
 )
 
 // --- MÓDULO DE LOGIN (INSUMISTAS) ---
-data class LoginRequest(val nombre: String, val pin: String)
+// device_id permite al backend bloquear el segundo login del mismo usuario
+// desde otra tablet, evitando que un insumista esté operando en dos lugares
+// al mismo tiempo y duplique entregas/aceptaciones.
+data class LoginRequest(val nombre: String, val pin: String, val device_id: String)
+
+data class LogoutRequest(val usuario_id: Int, val device_id: String)
 
 data class ListaUsuariosResponse(val id: Int, val nombre: String, val rol: String)
 
@@ -205,4 +218,100 @@ data class EntregaProactivaHistorial(
 data class RespuestaTokenFcm(
     @SerializedName("mensaje") val mensaje: String,
     @SerializedName("id")      val id: Int
+)
+
+// ==========================================
+// HEARTBEAT DE TABLET
+// ==========================================
+data class HeartbeatRequest(
+    @SerializedName("device_id")  val deviceId: String,
+    @SerializedName("nombre")     val nombre: String?,
+    @SerializedName("maquina")    val maquina: String?,
+    @SerializedName("pendientes") val pendientes: Int,
+    @SerializedName("en_linea")   val enLinea: Boolean,
+)
+
+data class HeartbeatResponse(
+    @SerializedName("mensaje")         val mensaje: String,
+    @SerializedName("sync_solicitada") val syncSolicitada: Boolean,
+)
+
+// ==========================================
+// CHECKLIST DE ESTADO DE EQUIPO (RECEPCIÓN DE MÁQUINA)
+// Formulario dinámico configurable por admin (tipo Scan-it-to-Office).
+// ==========================================
+
+// Tipos válidos de campo (deben coincidir con el enum del backend).
+object ChecklistTipoCampo {
+    const val TEXTO_CORTO        = "TEXTO_CORTO"
+    const val TEXTO_LARGO        = "TEXTO_LARGO"
+    const val CHECKBOX           = "CHECKBOX"
+    const val SELECCION_UNICA    = "SELECCION_UNICA"
+    const val SELECCION_MULTIPLE = "SELECCION_MULTIPLE"
+    const val NUMERO             = "NUMERO"
+}
+
+data class ChecklistCampo(
+    val id: Int,
+    val orden: Int,
+    val etiqueta: String,
+    val tipo: String,
+    val requerido: Boolean = true,
+    val opciones: List<String>? = null
+)
+
+data class ChecklistPlantilla(
+    val id: Int,
+    val nombre: String,
+    val descripcion: String? = null,
+    val activa: Boolean = true,
+    val version: Int = 1,
+    val campos: List<ChecklistCampo> = emptyList()
+)
+
+data class ChecklistRegistro(
+    val id: Int,
+    @SerializedName("creada_en") val creadaEn: String,
+    val operador: String
+)
+
+data class ChecklistEstadoResponse(
+    @SerializedName("requiere_checklist") val requiereChecklist: Boolean,
+    @SerializedName("codigo_turno")       val codigoTurno: String,
+    @SerializedName("fecha_turno")        val fechaTurno: String,
+    val registro: ChecklistRegistro? = null
+)
+
+data class ChecklistRespuestaValor(
+    @SerializedName("campo_id") val campoId: Int,
+    val valor: String
+)
+
+data class ChecklistResponderRequest(
+    @SerializedName("request_id")        val requestId: String,
+    @SerializedName("plantilla_id")      val plantillaId: Int,
+    @SerializedName("plantilla_version") val plantillaVersion: Int,
+    val maquina: String,
+    val operador: String,
+    val respuestas: List<ChecklistRespuestaValor>
+)
+
+data class ChecklistResponderResponse(
+    val id: Int,
+    val mensaje: String
+)
+
+// --- Constructor de formularios (endpoints de admin) ---
+data class ChecklistPlantillaCabeceraRequest(
+    val nombre: String,
+    val descripcion: String? = null,
+    val activa: Boolean = true
+)
+
+data class ChecklistCampoRequest(
+    val etiqueta: String,
+    val tipo: String,
+    val requerido: Boolean = true,
+    val opciones: List<String>? = null,
+    val orden: Int = 0
 )

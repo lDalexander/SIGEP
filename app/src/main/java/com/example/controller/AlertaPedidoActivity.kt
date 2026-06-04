@@ -68,7 +68,7 @@ class AlertaPedidoActivity : AppCompatActivity() {
                 vibrator?.vibrate(pattern, 0)
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            ErrorReporter.report("AlertaPedido", "Fallo al iniciar alarma/vibración", e)
         }
     }
 
@@ -79,6 +79,10 @@ class AlertaPedidoActivity : AppCompatActivity() {
         }
         mediaPlayer = null
         vibrator?.cancel()
+        // Cancela también la notificación del canal — su sonido (RingtoneManager
+        // de tipo ALARM) sigue corriendo mientras la notif esté visible, aunque
+        // ya hayamos detenido el MediaPlayer de alarm.mp3.
+        SigepNotificationManager.cancelarAlertaPedido(this)
     }
 
     override fun onDestroy() {

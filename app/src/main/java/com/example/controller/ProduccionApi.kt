@@ -10,13 +10,15 @@ import retrofit2.http.GET
 import retrofit2.http.Part
 import retrofit2.http.Path
 import retrofit2.http.PUT
+import retrofit2.http.DELETE
+import retrofit2.http.Query
 interface ProduccionApi {
 
     @POST("api/iniciar_turno")
     suspend fun iniciarTurno(@Body datos: IniciarTurnoRequest): Response<TurnoResponse>
 
     @POST("api/registrar_pallet")
-    suspend fun registrarPallet(@Body datos: RegistrarPalletRequest): Response<RespuestaGenerica>
+    suspend fun registrarPallet(@Body datos: RegistrarPalletRequest): Response<RegistrarPalletResponse>
 
     @POST("api/finalizar_turno")
     suspend fun finalizarTurno(@Body datos: FinalizarTurnoRequest): Response<RespuestaGenerica>
@@ -32,6 +34,9 @@ interface ProduccionApi {
 
     @POST("/api/login")
     suspend fun iniciarSesion(@Body request: LoginRequest): Response<UsuarioResponse>
+
+    @POST("/api/logout")
+    suspend fun cerrarSesionUsuario(@Body request: LogoutRequest): Response<RespuestaGenerica>
 
     @GET("api/operadores")
     suspend fun obtenerOperadores(): Response<List<OperadorResponse>>
@@ -115,4 +120,55 @@ interface ProduccionApi {
     // Necesario para que el servidor pueda enviar FCM a dispositivos específicos en lugar de broadcast.
     @POST("api/dispositivos/token")
     suspend fun registrarTokenFcm(@Body solicitud: SolicitudTokenFcm): Response<RespuestaTokenFcm>
+
+    @POST("api/tablets/heartbeat")
+    suspend fun enviarHeartbeat(@Body req: HeartbeatRequest): Response<HeartbeatResponse>
+
+    // ==========================================
+    // CHECKLIST DE ESTADO DE EQUIPO (OPERARIO)
+    // ==========================================
+    @GET("api/checklist/plantilla_activa")
+    suspend fun obtenerPlantillaChecklist(): Response<ChecklistPlantilla>
+
+    @GET("api/checklist/estado")
+    suspend fun obtenerEstadoChecklist(
+        @Query("maquina") maquina: String,
+        @Query("operador") operador: String
+    ): Response<ChecklistEstadoResponse>
+
+    @POST("api/checklist/responder")
+    suspend fun responderChecklist(@Body req: ChecklistResponderRequest): Response<ChecklistResponderResponse>
+
+    // ==========================================
+    // CHECKLIST - CONSTRUCTOR DE FORMULARIOS (ADMIN)
+    // ==========================================
+    @GET("api/admin/checklist/plantillas")
+    suspend fun adminListarPlantillas(): Response<List<ChecklistPlantilla>>
+
+    @POST("api/admin/checklist/plantillas")
+    suspend fun adminCrearPlantilla(@Body req: ChecklistPlantillaCabeceraRequest): Response<ChecklistPlantilla>
+
+    @PUT("api/admin/checklist/plantillas/{id}")
+    suspend fun adminEditarPlantilla(
+        @Path("id") plantillaId: Int,
+        @Body req: ChecklistPlantillaCabeceraRequest
+    ): Response<ChecklistPlantilla>
+
+    @DELETE("api/admin/checklist/plantillas/{id}")
+    suspend fun adminDesactivarPlantilla(@Path("id") plantillaId: Int): Response<RespuestaGenerica>
+
+    @POST("api/admin/checklist/plantillas/{id}/campos")
+    suspend fun adminAgregarCampo(
+        @Path("id") plantillaId: Int,
+        @Body req: ChecklistCampoRequest
+    ): Response<ChecklistCampo>
+
+    @PUT("api/admin/checklist/campos/{campoId}")
+    suspend fun adminEditarCampo(
+        @Path("campoId") campoId: Int,
+        @Body req: ChecklistCampoRequest
+    ): Response<ChecklistCampo>
+
+    @DELETE("api/admin/checklist/campos/{campoId}")
+    suspend fun adminEliminarCampo(@Path("campoId") campoId: Int): Response<RespuestaGenerica>
 }

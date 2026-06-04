@@ -9,6 +9,7 @@ import android.widget.EditText
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
@@ -94,12 +95,16 @@ class LoginActivity : AppCompatActivity() {
                     }
                 }
             } catch (e: Exception) {
+                ErrorReporter.report("LoginActivity", "Fallo al cargar lista de usuarios", e)
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(
-                        this@LoginActivity,
-                        "Error al descargar lista de usuarios",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    val detalle = when (e) {
+                        is java.net.ConnectException        -> "Servidor no alcanzable (${e.message})"
+                        is java.net.SocketTimeoutException  -> "Timeout — servidor tardó demasiado"
+                        is java.net.UnknownHostException    -> "No se resolvió el host: ${e.message}"
+                        is com.google.gson.JsonSyntaxException -> "Respuesta inesperada del servidor"
+                        else -> "${e.javaClass.simpleName}: ${e.message}"
+                    }
+                    Toast.makeText(this@LoginActivity, detalle, Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -126,6 +131,7 @@ class LoginActivity : AppCompatActivity() {
                             
                             // Guardar en AppState para control de alarmas
                             AppState.usuarioRol = admin.nivel_acceso
+                            ErrorReporter.setRol(admin.nivel_acceso)
 
                             getSharedPreferences("DetcuadorPrefs", MODE_PRIVATE).edit().apply {
                                 putInt("usuario_id", admin.admin_id)
@@ -149,23 +155,51 @@ class LoginActivity : AppCompatActivity() {
                     }
                 } else {
                     // --- LOGIN PARA LA TABLA DE USUARIOS (OPERADORES/INSUMISTAS) ---
-                    val request = LoginRequest(nombre = nombre, pin = pin)
+                    val deviceId = PrefsRepository(applicationContext).deviceId
+                    val request = LoginRequest(nombre = nombre, pin = pin, device_id = deviceId)
                     val response = RetrofitClient.apiService.iniciarSesion(request)
 
                     withContext(Dispatchers.Main) {
                         btnIngresar.isEnabled = true
                         btnIngresar.text = "INGRESAR"
 
+                        // 409 = ya hay otra tablet con sesión activa para este usuario.
+                        // El backend lo manda con un detalle leíble que mostramos tal cual.
+                        if (response.code() == 409) {
+                            val detalle = try {
+                                response.errorBody()?.string()?.take(400)?.replace("\n", " ")?.trim()
+                            } catch (_: Exception) { null }
+                                ?: "Ya tienes sesión activa en otra tablet. Cierra sesión allí primero o espera 9 horas."
+                            AlertDialog.Builder(this@LoginActivity)
+                                .setTitle("Sesión activa en otro dispositivo")
+                                .setMessage(detalle)
+                                .setPositiveButton("Entendido", null)
+                                .show()
+                            etPin.text.clear()
+                            return@withContext
+                        }
+
                         if (response.isSuccessful && response.body() != null) {
                             val user = response.body()!!
 
                             // Guardar en AppState para control de alarmas
                             AppState.usuarioRol = user.rol
+                            ErrorReporter.setRol(user.rol)
 
-                            getSharedPreferences("DetcuadorPrefs", MODE_PRIVATE).edit().apply {
+                            // tipo_insumo_usuario lo necesita SigepFirebaseMessagingService
+                                // para filtrar FCM en background. Si no lo guardamos acá,
+                                // el primer FCM tras un login fresco se descarta porque la pref
+                                // todavía no existe.
+                                val tipoInsumo = when {
+                                    user.rol.contains("granel", ignoreCase = true)  -> "GRANEL"
+                                    user.rol.contains("empaque", ignoreCase = true) -> "EMPAQUE"
+                                    else -> ""
+                                }
+                                getSharedPreferences("DetcuadorPrefs", MODE_PRIVATE).edit().apply {
                                 putInt("usuario_id", user.id)
                                 putString("usuario_nombre", user.nombre)
                                 putString("usuario_rol", user.rol)
+                                putString("tipo_insumo_usuario", tipoInsumo)
                                 putLong("tiempo_login", System.currentTimeMillis())
                                 apply()
                             }
@@ -187,10 +221,17 @@ class LoginActivity : AppCompatActivity() {
                     }
                 }
             } catch (e: Exception) {
+                ErrorReporter.report("LoginActivity", "Fallo al validar acceso", e)
                 withContext(Dispatchers.Main) {
                     btnIngresar.isEnabled = true
                     btnIngresar.text = "INGRESAR"
-                    Toast.makeText(this@LoginActivity, "Sin conexión al servidor", Toast.LENGTH_SHORT).show()
+                    val detalle = when (e) {
+                        is java.net.ConnectException        -> "Servidor no alcanzable (${e.message})"
+                        is java.net.SocketTimeoutException  -> "Timeout — servidor tardó demasiado"
+                        is java.net.UnknownHostException    -> "No se resolvió el host: ${e.message}"
+                        else -> "Sin conexión: ${e.javaClass.simpleName}"
+                    }
+                    Toast.makeText(this@LoginActivity, detalle, Toast.LENGTH_LONG).show()
                 }
             }
         }
