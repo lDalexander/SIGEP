@@ -966,6 +966,12 @@ class MainActivity : AppCompatActivity() {
                 if (resp.isSuccessful) {
                     tvHistorialPacas.text = ""
                     forzarReinicioPorError("Turno finalizado")
+                } else if (resp.code() == 404) {
+                    // La sesión ya no existe en el servidor (p. ej. eliminada en la BD).
+                    // No hay nada que cerrar: limpiamos el estado local y volvemos a la
+                    // pantalla de inicio para que se pueda arrancar un turno nuevo.
+                    tvHistorialPacas.text = ""
+                    forzarReinicioPorError("La sesión ya no existe en el servidor — listo para iniciar un turno nuevo.")
                 } else {
                     AlertDialog.Builder(this@MainActivity)
                         .setTitle("No se pudo finalizar el turno")
