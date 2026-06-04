@@ -1,9 +1,14 @@
 package com.example.controller
 
+import android.app.Activity
 import android.app.Application
 import android.content.Intent
 import android.os.Build
+import android.os.Bundle
 import android.util.Log
+import android.view.View
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.*
 import com.example.controller.data.ColaSyncRepository
 import com.example.controller.data.local.AppDatabase
@@ -25,6 +30,33 @@ class SigepApplication : Application(), LifecycleEventObserver {
         // (solo sonido, sin vibración ni full-screen).
         SigepNotificationManager.createAlarmNotificationChannel(applicationContext)
         CoroutineScope(Dispatchers.IO).launch { migrarColaLegacy() }
+
+        // Android 15+ (targetSdk 36) fuerza edge-to-edge: el contenido se dibuja
+        // detrás de la barra de estado y de navegación. Aquí, de forma global para
+        // TODAS las activities, rellenamos la vista raíz con el alto de esas barras
+        // para que nada quede tapado. Evita tener que tocar cada layout/activity.
+        registerActivityLifecycleCallbacks(insetsCallbacks)
+    }
+
+    private val insetsCallbacks = object : ActivityLifecycleCallbacks {
+        override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {
+            val content = activity.findViewById<View>(android.R.id.content) ?: return
+            ViewCompat.setOnApplyWindowInsetsListener(content) { v, insets ->
+                val barras = insets.getInsets(
+                    WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+                )
+                v.setPadding(barras.left, barras.top, barras.right, barras.bottom)
+                insets
+            }
+            ViewCompat.requestApplyInsets(content)
+        }
+
+        override fun onActivityStarted(activity: Activity) {}
+        override fun onActivityResumed(activity: Activity) {}
+        override fun onActivityPaused(activity: Activity) {}
+        override fun onActivityStopped(activity: Activity) {}
+        override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
+        override fun onActivityDestroyed(activity: Activity) {}
     }
 
     override fun onStateChanged(source: LifecycleOwner, event: Lifecycle.Event) {

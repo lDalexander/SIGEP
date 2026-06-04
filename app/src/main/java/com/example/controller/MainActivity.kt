@@ -1027,6 +1027,9 @@ class MainActivity : AppCompatActivity() {
         spinnerTipo.setSelection(0)
         bloquearSpinnersDesdeMaquina()
         limpiarEstadoParo()
+        // Re-habilitar el botón de cerrar turno: la rama de éxito de finalizar lo
+        // deja deshabilitado, y sin esto el siguiente turno lo mostraría bloqueado.
+        btnTerminarTurno.isEnabled = true
         seccionProduccion.visibility    = View.GONE
         seccionConfiguracion.visibility = View.VISIBLE
     }
