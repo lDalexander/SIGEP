@@ -77,6 +77,10 @@ class SigepFirebaseMessagingService : FirebaseMessagingService() {
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         // El WakeLock de 10 s garantiza que la pantalla encienda el tiempo suficiente
         // para que el insumista vea la alerta antes de que el dispositivo vuelva a dormir.
+        // FULL_WAKE_LOCK/ACQUIRE_CAUSES_WAKEUP están deprecados; su reemplazo
+        // (setShowWhenLocked/setTurnScreenOn) es a nivel de Activity, no de
+        // Service, por lo que migrarlo cambiaría el flujo de alerta. Se mantiene.
+        @Suppress("DEPRECATION")
         val wakeLock = powerManager.newWakeLock(
             PowerManager.FULL_WAKE_LOCK or
             PowerManager.ACQUIRE_CAUSES_WAKEUP or

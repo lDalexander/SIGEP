@@ -37,6 +37,9 @@ class SupervisorDashboardActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // statusBarColor está deprecado en API 35 (edge-to-edge); se mantiene
+        // para conservar el color de la barra en versiones anteriores.
+        @Suppress("DEPRECATION")
         window.statusBarColor = android.graphics.Color.parseColor("#1E293B")
         setContentView(R.layout.activity_supervisor_dashboard)
 

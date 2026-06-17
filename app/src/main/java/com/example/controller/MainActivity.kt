@@ -1008,8 +1008,10 @@ class MainActivity : AppCompatActivity() {
             colaRepo.operacionesFlow.collectLatest { lista ->
                 val count = lista.count { !it.fatal }
                 tvBadge.text = count.toString()
-                val hasNetwork = (getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager)
-                    .activeNetworkInfo?.isConnected == true
+                val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+                val hasNetwork = cm.activeNetwork
+                    ?.let { cm.getNetworkCapabilities(it) }
+                    ?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
                 val color = when {
                     !hasNetwork -> "#F44336"
                     count > 0   -> "#FF9800"

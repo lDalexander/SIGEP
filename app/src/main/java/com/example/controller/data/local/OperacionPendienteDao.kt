@@ -47,7 +47,7 @@ class OperacionPendienteDao(context: Context) {
     suspend fun marcarError(id: Long, mensaje: String, fatal: Boolean) = withContext(Dispatchers.IO) {
         db.writableDatabase.execSQL(
             "UPDATE operaciones_pendientes SET intentos = intentos + 1, ultimoError = ?, fatal = ? WHERE id = ?",
-            arrayOf(mensaje, if (fatal) 1 else 0, id)
+            arrayOf<Any>(mensaje, if (fatal) 1 else 0, id)
         )
         refreshFlow()
     }

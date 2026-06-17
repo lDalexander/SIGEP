@@ -164,7 +164,12 @@ class BandejaInsumosActivity : AppCompatActivity() {
         btnEntregarInsumo.setOnClickListener { abrirFormularioEntregaProactiva() }
         cargarMaquinas()
 
-        vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as android.os.VibratorManager).defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        }
 
         // Adaptador de entregas propias (zona superior), acción: confirmar entrega
         rvAsignados.layoutManager = LinearLayoutManager(this)
