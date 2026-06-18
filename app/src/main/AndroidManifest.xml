@@ -72,8 +72,6 @@
 
         <activity android:name=".ui.PendientesActivity" android:exported="false"/>
         <activity android:name=".ui.AjustesTabletActivity" android:exported="false"/>
-        <activity android:name=".ui.ChecklistEquipoActivity" android:exported="false"/>
-        <activity android:name=".ui.AdminChecklistActivity" android:exported="false"/>
 
         <service
             android:name=".sync.HeartbeatService"

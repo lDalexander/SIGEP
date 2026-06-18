@@ -77,21 +77,6 @@ class ColaSyncRepository(private val context: Context) {
         dispararSync()
     }
 
-    // El checklist se encola ANTES que el INICIAR_TURNO para que el FIFO del
-    // SyncWorker lo sincronice primero (el backend valida que exista checklist
-    // antes de crear la sesión). Respeta un request_id ya generado (idempotencia).
-    suspend fun enqueueChecklist(req: ChecklistResponderRequest) {
-        val requestId = req.requestId.ifBlank { UUID.randomUUID().toString() }
-        val reqConId = req.copy(requestId = requestId)
-        dao.insertar(OperacionPendiente(
-            tipo        = "CHECKLIST",
-            payloadJson = gson.toJson(reqConId),
-            requestId   = requestId,
-            creadoEn    = System.currentTimeMillis()
-        ))
-        dispararSync()
-    }
-
     suspend fun desmarcarFatal(id: Long) {
         dao.marcarError(id, "", false)
     }

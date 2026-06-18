@@ -94,23 +94,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Turno pendiente de iniciar mientras el operario llena el checklist de equipo.
-    private var turnoPendiente: IniciarTurnoRequest? = null
-
-    // Lanzador del checklist: si vuelve OK, continúa con el inicio de turno.
-    private val checklistLauncher = registerForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        val req = turnoPendiente
-        turnoPendiente = null
-        if (result.resultCode == RESULT_OK && req != null) {
-            llamarApiIniciarTurno(req)
-        } else {
-            btnIniciarTurno.isEnabled = true
-            btnIniciarTurno.text = "INICIAR TURNO"
-        }
-    }
-
     val tipos = arrayOf("-- Seleccione Tipo --", "Sólido", "Líquido")
     val fragancias = arrayOf("-- Seleccione Fragancia --", "Limón", "Floral")
 
@@ -555,9 +538,7 @@ class MainActivity : AppCompatActivity() {
                     return@launch
                 }
 
-                // Antes de iniciar turno, exigir el checklist de estado de equipo.
-                // Si la misma máquina + mismo operador ya lo hizo este turno, se salta.
-                verificarChecklistYContinuar(
+                llamarApiIniciarTurno(
                     IniciarTurnoRequest(
                         tipo         = spinnerTipo.selectedItem.toString(),
                         maquina      = maquinaSel,
@@ -654,60 +635,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Engranaje (esquina superior): editor de formularios, sólo para admin.
-        findViewById<android.widget.ImageButton>(R.id.btnConfigChecklist).setOnClickListener {
-            mostrarDialogoAdminChecklist()
-        }
-    }
-
-    // Pide PIN de admin (POST /api/admin/login). Si valida, abre el constructor de
-    // formularios. Reutiliza el layout dialog_admin_auth, igual que MenuRolesActivity.
-    private fun mostrarDialogoAdminChecklist() {
-        val vista = android.view.LayoutInflater.from(this).inflate(R.layout.dialog_admin_auth, null)
-        val etUsuario = vista.findViewById<com.google.android.material.textfield.TextInputEditText>(R.id.etAdminUser)
-        val etPass = vista.findViewById<com.google.android.material.textfield.TextInputEditText>(R.id.etAdminPassword)
-
-        val dialogo = com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
-            .setTitle("Acceso de administrador")
-            .setView(vista)
-            .setCancelable(true)
-            .setNegativeButton("Cancelar", null)
-            .setPositiveButton("Ingresar", null)
-            .create()
-        dialogo.show()
-
-        dialogo.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            val usuario = etUsuario.text.toString().trim()
-            val pass = etPass.text.toString().trim()
-            if (usuario.isEmpty() || pass.isEmpty()) {
-                Toast.makeText(this, "Complete las credenciales", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            val btn = dialogo.getButton(AlertDialog.BUTTON_POSITIVE)
-            btn.isEnabled = false
-            btn.text = "Validando…"
-            lifecycleScope.launch {
-                try {
-                    val resp = withContext(Dispatchers.IO) {
-                        RetrofitClient.apiService.loginAdministrador(AdminLoginRequest(usuario, pass))
-                    }
-                    if (resp.isSuccessful && resp.body() != null) {
-                        dialogo.dismiss()
-                        startActivity(Intent(this@MainActivity, com.example.controller.ui.AdminChecklistActivity::class.java))
-                    } else {
-                        btn.isEnabled = true
-                        btn.text = "Ingresar"
-                        etPass.error = "Credenciales incorrectas"
-                        etPass.setText("")
-                    }
-                } catch (e: Exception) {
-                    ErrorReporter.warn("MainActivity", "Fallo login admin checklist: ${e.message}")
-                    btn.isEnabled = true
-                    btn.text = "Ingresar"
-                    Toast.makeText(this@MainActivity, "Error de conexión", Toast.LENGTH_LONG).show()
-                }
-            }
-        }
     }
 
     // ==========================================
@@ -786,45 +713,6 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 ErrorReporter.report("Catalogos", "No se pudo actualizar el catálogo — usando caché local", e)
             }
-        }
-    }
-
-    // Decide si hace falta el checklist de estado de equipo para esta máquina+operario
-    // en el turno actual. Si no hace falta, inicia turno directo; si hace falta, abre
-    // el formulario y continúa al volver con RESULT_OK.
-    private fun verificarChecklistYContinuar(req: IniciarTurnoRequest) {
-        lifecycleScope.launch {
-            val requiere = checklistRequerido(req.maquina, req.operador)
-            if (!requiere) {
-                llamarApiIniciarTurno(req)
-            } else {
-                turnoPendiente = req
-                val intent = Intent(this@MainActivity, com.example.controller.ui.ChecklistEquipoActivity::class.java).apply {
-                    putExtra(com.example.controller.ui.ChecklistEquipoActivity.EXTRA_MAQUINA, req.maquina)
-                    putExtra(com.example.controller.ui.ChecklistEquipoActivity.EXTRA_OPERADOR, req.operador)
-                }
-                checklistLauncher.launch(intent)
-            }
-        }
-    }
-
-    // Online: el backend es la autoridad (calcula turno con su hora). Offline: usamos
-    // el guard local — si esta máquina+operario ya completó el checklist este turno,
-    // no se vuelve a pedir.
-    private suspend fun checklistRequerido(maquina: String, operador: String): Boolean {
-        return withContext(Dispatchers.IO) {
-            try {
-                val resp = RetrofitClient.apiService.obtenerEstadoChecklist(maquina, operador)
-                if (resp.isSuccessful && resp.body() != null) {
-                    return@withContext resp.body()!!.requiereChecklist
-                }
-            } catch (_: Exception) {
-                // Sin red: caemos al guard local.
-            }
-            val turno = com.example.controller.util.TurnoUtil.actual()
-            !com.example.controller.data.local.AppDatabase.getInstance(applicationContext)
-                .checklistDao()
-                .yaCompletado(maquina, operador, turno.fechaTurno, turno.codigo)
         }
     }
 

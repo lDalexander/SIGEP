@@ -120,16 +120,6 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
                 if (!resp.isSuccessful) throw HttpException(resp)
                 null
             }
-            "CHECKLIST" -> {
-                // El checklist no depende de sesion_id: se identifica por
-                // (maquina, operador, turno) que el backend recalcula.
-                // 409 (ya existe para ese turno) se trata como éxito vía idempotencia
-                // en doWork (se elimina de la cola).
-                val req = gson.fromJson(op.payloadJson, ChecklistResponderRequest::class.java)
-                val resp = api.responderChecklist(req)
-                if (!resp.isSuccessful) throw HttpException(resp)
-                null
-            }
             else -> {
                 Log.w("SyncWorker", "Tipo desconocido: ${op.tipo}")
                 null
