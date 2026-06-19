@@ -88,6 +88,17 @@ class MantenimientoChecklistActivity : AppCompatActivity() {
     }
 
     private fun guardar() {
+        // Todos los ítems son obligatorios: no se continúa hasta marcarlos todos.
+        val faltan = checkboxes.count { !it.isChecked }
+        if (faltan > 0) {
+            Toast.makeText(
+                this,
+                "Debe marcar todos los ítems del checklist ($faltan sin marcar).",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
         progress.visibility = View.VISIBLE
         btnGuardar.isEnabled = false
 
