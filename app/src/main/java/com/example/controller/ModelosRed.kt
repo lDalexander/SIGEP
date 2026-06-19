@@ -257,6 +257,8 @@ data class MantenimientoChecklistRequest(
     val momento: String,            // ENTRADA | SALIDA
     val fecha: String,              // yyyy-MM-dd (reloj de la tablet)
     val hora: String,               // HH:mm
+    val supervisor: String,         // supervisor de turno (texto)
+    val comentarios: String,        // comentarios libres (puede ir vacío)
     val items: List<MantenimientoItemEstado>
 )
 

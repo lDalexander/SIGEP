@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.view.View
 import android.widget.Button
 import android.widget.CheckBox
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -15,10 +16,7 @@ import com.example.controller.MantenimientoItemEstado
 import com.example.controller.MantenimientoMomento
 import com.example.controller.R
 import com.example.controller.data.ColaSyncRepository
-import com.example.controller.data.local.AppDatabase
 import com.example.controller.util.MantenimientoItems
-import com.example.controller.util.TurnoUtil
-import com.google.gson.Gson
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -48,10 +46,11 @@ class MantenimientoChecklistActivity : AppCompatActivity() {
     private lateinit var contenedor: LinearLayout
     private lateinit var btnGuardar: Button
     private lateinit var progress: ProgressBar
+    private lateinit var etSupervisor: EditText
+    private lateinit var etComentarios: EditText
     private val checkboxes = mutableListOf<CheckBox>()
 
     private val colaRepo by lazy { ColaSyncRepository(applicationContext) }
-    private val gson = Gson()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -61,9 +60,11 @@ class MantenimientoChecklistActivity : AppCompatActivity() {
         maquina  = intent.getStringExtra(EXTRA_MAQUINA) ?: ""
         operador = intent.getStringExtra(EXTRA_OPERADOR) ?: ""
 
-        contenedor = findViewById(R.id.contenedorItemsMtto)
-        btnGuardar = findViewById(R.id.btnGuardarMtto)
-        progress   = findViewById(R.id.progressMtto)
+        contenedor   = findViewById(R.id.contenedorItemsMtto)
+        btnGuardar   = findViewById(R.id.btnGuardarMtto)
+        progress     = findViewById(R.id.progressMtto)
+        etSupervisor = findViewById(R.id.etSupervisorTurno)
+        etComentarios = findViewById(R.id.etComentarios)
 
         val titulo = if (momento == MantenimientoMomento.SALIDA)
             "Checklist de SALIDA (limpieza)" else "Checklist de ENTRADA (mantenimiento)"
@@ -99,6 +100,15 @@ class MantenimientoChecklistActivity : AppCompatActivity() {
             return
         }
 
+        // El supervisor de turno es obligatorio; los comentarios son opcionales.
+        val supervisor = etSupervisor.text.toString().trim()
+        if (supervisor.isEmpty()) {
+            etSupervisor.error = "Indique el supervisor de turno"
+            etSupervisor.requestFocus()
+            return
+        }
+        val comentarios = etComentarios.text.toString().trim()
+
         progress.visibility = View.VISIBLE
         btnGuardar.isEnabled = false
 
@@ -108,25 +118,20 @@ class MantenimientoChecklistActivity : AppCompatActivity() {
         val hora  = SimpleDateFormat("HH:mm", Locale.getDefault()).format(ahora)
 
         val req = MantenimientoChecklistRequest(
-            requestId = "",   // ColaSyncRepository asigna el UUID real al encolar
-            maquina   = maquina,
-            operador  = operador,
-            momento   = momento,
-            fecha     = fecha,
-            hora      = hora,
-            items     = items
+            requestId   = "",   // ColaSyncRepository asigna el UUID real al encolar
+            maquina     = maquina,
+            operador    = operador,
+            momento     = momento,
+            fecha       = fecha,
+            hora        = hora,
+            supervisor  = supervisor,
+            comentarios = comentarios,
+            items       = items
         )
 
         lifecycleScope.launch {
             try {
                 colaRepo.enqueueMantenimiento(req)
-
-                // Guard local para no volver a pedir este momento en el mismo turno.
-                val turno = TurnoUtil.actual()
-                AppDatabase.getInstance(applicationContext).mantenimientoDao().marcarCompletado(
-                    maquina, operador, turno.fechaTurno, turno.codigo, momento, gson.toJson(items)
-                )
-
                 setResult(RESULT_OK)
                 finish()
             } catch (e: Exception) {

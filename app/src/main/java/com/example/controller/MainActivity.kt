@@ -749,56 +749,31 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Gate de ENTRADA: si esta máquina+operador ya llenó el checklist de entrada en
-    // el turno actual (guard local), inicia directo; si no, abre el checklist y
-    // continúa al volver con RESULT_OK. Offline-first: el checklist se encola, no
-    // requiere red, y luego el inicio de turno sigue su propio camino online/cola.
-    private suspend fun gateEntradaYContinuar(req: IniciarTurnoRequest) {
-        val turno = com.example.controller.util.TurnoUtil.actual()
-        val yaHecho = com.example.controller.data.local.AppDatabase.getInstance(applicationContext)
-            .mantenimientoDao()
-            .yaCompletado(
-                req.maquina, req.operador, turno.fechaTurno, turno.codigo,
-                com.example.controller.MantenimientoMomento.ENTRADA
-            )
-        if (yaHecho) {
-            llamarApiIniciarTurno(req)
-        } else {
-            turnoPendiente = req
-            val intent = Intent(this, com.example.controller.ui.MantenimientoChecklistActivity::class.java).apply {
-                putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_MOMENTO, com.example.controller.MantenimientoMomento.ENTRADA)
-                putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_MAQUINA, req.maquina)
-                putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_OPERADOR, req.operador)
-            }
-            entradaLauncher.launch(intent)
+    // Gate de ENTRADA: el checklist de mantenimiento SIEMPRE se exige antes de
+    // iniciar el turno. Offline-first: el checklist se encola (no requiere red) y al
+    // volver con RESULT_OK el inicio de turno sigue su propio camino online/cola.
+    private fun gateEntradaYContinuar(req: IniciarTurnoRequest) {
+        turnoPendiente = req
+        val intent = Intent(this, com.example.controller.ui.MantenimientoChecklistActivity::class.java).apply {
+            putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_MOMENTO, com.example.controller.MantenimientoMomento.ENTRADA)
+            putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_MAQUINA, req.maquina)
+            putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_OPERADOR, req.operador)
         }
+        entradaLauncher.launch(intent)
     }
 
-    // Gate de SALIDA: exige el checklist de limpieza antes de cerrar el turno.
-    // máquina+operador se leen de prefs (persistidos al iniciar) con fallback al spinner.
+    // Gate de SALIDA: el checklist de limpieza SIEMPRE se exige antes de cerrar el
+    // turno. máquina+operador se leen de prefs (persistidos al iniciar) con fallback al spinner.
     private fun gateSalidaYFinalizar() {
         val prefs = getSharedPreferences(NOMBRE_PREFS, MODE_PRIVATE)
         val maq = prefs.getString("turno_maquina", null) ?: spinnerMaquina.selectedItem?.toString().orEmpty()
         val op  = prefs.getString("turno_operador", null) ?: spinnerOperador.selectedItem?.toString().orEmpty()
-        lifecycleScope.launch {
-            val turno = com.example.controller.util.TurnoUtil.actual()
-            val yaHecho = com.example.controller.data.local.AppDatabase.getInstance(applicationContext)
-                .mantenimientoDao()
-                .yaCompletado(
-                    maq, op, turno.fechaTurno, turno.codigo,
-                    com.example.controller.MantenimientoMomento.SALIDA
-                )
-            if (yaHecho) {
-                llamarApiFinalizarTurno(FinalizarTurnoRequest(sesionActualId!!))
-            } else {
-                val intent = Intent(this@MainActivity, com.example.controller.ui.MantenimientoChecklistActivity::class.java).apply {
-                    putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_MOMENTO, com.example.controller.MantenimientoMomento.SALIDA)
-                    putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_MAQUINA, maq)
-                    putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_OPERADOR, op)
-                }
-                salidaLauncher.launch(intent)
-            }
+        val intent = Intent(this, com.example.controller.ui.MantenimientoChecklistActivity::class.java).apply {
+            putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_MOMENTO, com.example.controller.MantenimientoMomento.SALIDA)
+            putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_MAQUINA, maq)
+            putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_OPERADOR, op)
         }
+        salidaLauncher.launch(intent)
     }
 
     private fun llamarApiIniciarTurno(datos: IniciarTurnoRequest) {

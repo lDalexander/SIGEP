@@ -5,11 +5,8 @@ import android.content.Context
 class AppDatabase private constructor(context: Context) {
 
     private val dao = OperacionPendienteDao(context)
-    private val mantenimientoDao = MantenimientoChecklistDao(context)
 
     fun operacionDao() = dao
-
-    fun mantenimientoDao() = mantenimientoDao
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null

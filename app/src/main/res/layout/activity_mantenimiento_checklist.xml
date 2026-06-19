@@ -31,10 +31,49 @@
         android:fillViewport="true">
 
         <LinearLayout
-            android:id="@+id/contenedorItemsMtto"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical" />
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:id="@+id/contenedorItemsMtto"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="Supervisor de turno"
+                android:textStyle="bold"
+                android:textColor="#1E293B" />
+
+            <EditText
+                android:id="@+id/etSupervisorTurno"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Nombre del supervisor"
+                android:inputType="textCapWords"
+                android:maxLines="1" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="Comentarios"
+                android:textStyle="bold"
+                android:textColor="#1E293B" />
+
+            <EditText
+                android:id="@+id/etComentarios"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Observaciones (opcional)"
+                android:inputType="textMultiLine|textCapSentences"
+                android:minLines="3"
+                android:gravity="top" />
+        </LinearLayout>
     </ScrollView>
 
     <ProgressBar
