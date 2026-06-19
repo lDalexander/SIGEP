@@ -235,3 +235,32 @@ data class HeartbeatResponse(
     @SerializedName("mensaje")         val mensaje: String,
     @SerializedName("sync_solicitada") val syncSolicitada: Boolean,
 )
+
+// ==========================================
+// CHECKLIST DE MANTENIMIENTO Y LIMPIEZA (ENTRADA / SALIDA)
+// Ítems fijos definidos en el cliente (ver MantenimientoItems).
+// ==========================================
+object MantenimientoMomento {
+    const val ENTRADA = "ENTRADA"
+    const val SALIDA  = "SALIDA"
+}
+
+data class MantenimientoItemEstado(
+    val etiqueta: String,
+    val marcado: Boolean
+)
+
+data class MantenimientoChecklistRequest(
+    @SerializedName("request_id") val requestId: String,
+    val maquina: String,
+    val operador: String,
+    val momento: String,            // ENTRADA | SALIDA
+    val fecha: String,              // yyyy-MM-dd (reloj de la tablet)
+    val hora: String,               // HH:mm
+    val items: List<MantenimientoItemEstado>
+)
+
+data class MantenimientoChecklistResponse(
+    val id: Int,
+    val mensaje: String
+)

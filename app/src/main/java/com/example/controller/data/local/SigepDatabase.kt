@@ -9,15 +9,18 @@ class SigepDatabase(context: Context) :
 
     override fun onCreate(db: SQLiteDatabase) {
         crearOperacionesPendientes(db)
+        crearMantenimientoChecklist(db)
     }
 
     // IMPORTANTE: la migración es ADITIVA para operaciones_pendientes. NO se borra
     // jamás, de lo contrario perderíamos turnos/pacas encolados sin sincronizar.
-    // En la v3 se eliminan las tablas del checklist dinámico viejo (ya retirado).
+    // En la v3 se eliminan las tablas del checklist dinámico viejo (ya retirado) y
+    // se crea la del nuevo checklist de mantenimiento.
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 3) {
             db.execSQL("DROP TABLE IF EXISTS checklist_completados")
             db.execSQL("DROP TABLE IF EXISTS checklist_plantilla_cache")
+            crearMantenimientoChecklist(db)
         }
     }
 
@@ -33,6 +36,26 @@ class SigepDatabase(context: Context) :
                 intentos    INTEGER NOT NULL DEFAULT 0,
                 ultimoError TEXT,
                 fatal       INTEGER NOT NULL DEFAULT 0
+            )
+            """.trimIndent()
+        )
+    }
+
+    // Guard local del checklist de mantenimiento: 1 registro por
+    // (maquina, operador, fecha_turno, codigo_turno, momento).
+    private fun crearMantenimientoChecklist(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS mantenimiento_checklist (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                maquina     TEXT    NOT NULL,
+                operador    TEXT    NOT NULL,
+                fechaTurno  TEXT    NOT NULL,
+                codigoTurno TEXT    NOT NULL,
+                momento     TEXT    NOT NULL,
+                itemsJson   TEXT    NOT NULL,
+                creadoEn    INTEGER NOT NULL,
+                UNIQUE(maquina, operador, fechaTurno, codigoTurno, momento)
             )
             """.trimIndent()
         )

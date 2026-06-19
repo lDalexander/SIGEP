@@ -72,6 +72,7 @@
 
         <activity android:name=".ui.PendientesActivity" android:exported="false"/>
         <activity android:name=".ui.AjustesTabletActivity" android:exported="false"/>
+        <activity android:name=".ui.MantenimientoChecklistActivity" android:exported="false"/>
 
         <service
             android:name=".sync.HeartbeatService"

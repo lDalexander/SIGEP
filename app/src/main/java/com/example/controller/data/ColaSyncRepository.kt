@@ -77,6 +77,21 @@ class ColaSyncRepository(private val context: Context) {
         dispararSync()
     }
 
+    // Checklist de mantenimiento (ENTRADA/SALIDA). Operación crítica: se encola y
+    // la envía el SyncWorker en orden FIFO. Idempotente por request_id, igual que
+    // pallets/paros: respeta un request_id ya generado si viene.
+    suspend fun enqueueMantenimiento(req: MantenimientoChecklistRequest) {
+        val requestId = req.requestId.ifBlank { UUID.randomUUID().toString() }
+        val reqConId = req.copy(requestId = requestId)
+        dao.insertar(OperacionPendiente(
+            tipo        = "MTTO_CHECKLIST",
+            payloadJson = gson.toJson(reqConId),
+            requestId   = requestId,
+            creadoEn    = System.currentTimeMillis()
+        ))
+        dispararSync()
+    }
+
     suspend fun desmarcarFatal(id: Long) {
         dao.marcarError(id, "", false)
     }

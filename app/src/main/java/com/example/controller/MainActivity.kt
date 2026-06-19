@@ -94,6 +94,35 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ===== Gates del checklist de mantenimiento (ENTRADA / SALIDA) =====
+    // Turno pendiente de iniciar mientras el operario llena el checklist de ENTRADA.
+    private var turnoPendiente: IniciarTurnoRequest? = null
+
+    // ENTRADA: si el checklist vuelve OK, se procede a iniciar el turno.
+    private val entradaLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val req = turnoPendiente
+        turnoPendiente = null
+        if (result.resultCode == RESULT_OK && req != null) {
+            llamarApiIniciarTurno(req)
+        } else {
+            btnIniciarTurno.isEnabled = true
+            btnIniciarTurno.text = "INICIAR TURNO"
+        }
+    }
+
+    // SALIDA: si el checklist vuelve OK, se procede a cerrar el turno.
+    private val salidaLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK && sesionActualId != null) {
+            llamarApiFinalizarTurno(FinalizarTurnoRequest(sesionActualId!!))
+        } else {
+            btnTerminarTurno.isEnabled = true
+        }
+    }
+
     val tipos = arrayOf("-- Seleccione Tipo --", "Sólido", "Líquido")
     val fragancias = arrayOf("-- Seleccione Fragancia --", "Limón", "Floral")
 
@@ -538,7 +567,9 @@ class MainActivity : AppCompatActivity() {
                     return@launch
                 }
 
-                llamarApiIniciarTurno(
+                // Gate de ENTRADA: el checklist de mantenimiento es obligatorio
+                // antes de pasar a la pantalla de producción.
+                gateEntradaYContinuar(
                     IniciarTurnoRequest(
                         tipo         = spinnerTipo.selectedItem.toString(),
                         maquina      = maquinaSel,
@@ -573,7 +604,9 @@ class MainActivity : AppCompatActivity() {
 
         btnTerminarTurno.setOnClickListener {
             if (sesionActualId != null) {
-                llamarApiFinalizarTurno(FinalizarTurnoRequest(sesionActualId!!))
+                // Gate de SALIDA: el checklist de limpieza es obligatorio antes de cerrar.
+                btnTerminarTurno.isEnabled = false
+                gateSalidaYFinalizar()
             }
         }
 
@@ -716,6 +749,58 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Gate de ENTRADA: si esta máquina+operador ya llenó el checklist de entrada en
+    // el turno actual (guard local), inicia directo; si no, abre el checklist y
+    // continúa al volver con RESULT_OK. Offline-first: el checklist se encola, no
+    // requiere red, y luego el inicio de turno sigue su propio camino online/cola.
+    private suspend fun gateEntradaYContinuar(req: IniciarTurnoRequest) {
+        val turno = com.example.controller.util.TurnoUtil.actual()
+        val yaHecho = com.example.controller.data.local.AppDatabase.getInstance(applicationContext)
+            .mantenimientoDao()
+            .yaCompletado(
+                req.maquina, req.operador, turno.fechaTurno, turno.codigo,
+                com.example.controller.MantenimientoMomento.ENTRADA
+            )
+        if (yaHecho) {
+            llamarApiIniciarTurno(req)
+        } else {
+            turnoPendiente = req
+            val intent = Intent(this, com.example.controller.ui.MantenimientoChecklistActivity::class.java).apply {
+                putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_MOMENTO, com.example.controller.MantenimientoMomento.ENTRADA)
+                putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_MAQUINA, req.maquina)
+                putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_OPERADOR, req.operador)
+            }
+            entradaLauncher.launch(intent)
+        }
+    }
+
+    // Gate de SALIDA: exige el checklist de limpieza antes de cerrar el turno.
+    // máquina+operador se leen de prefs (persistidos al iniciar) con fallback al spinner.
+    private fun gateSalidaYFinalizar() {
+        val prefs = getSharedPreferences(NOMBRE_PREFS, MODE_PRIVATE)
+        val maq = prefs.getString("turno_maquina", null) ?: spinnerMaquina.selectedItem?.toString().orEmpty()
+        val op  = prefs.getString("turno_operador", null) ?: spinnerOperador.selectedItem?.toString().orEmpty()
+        lifecycleScope.launch {
+            val turno = com.example.controller.util.TurnoUtil.actual()
+            val yaHecho = com.example.controller.data.local.AppDatabase.getInstance(applicationContext)
+                .mantenimientoDao()
+                .yaCompletado(
+                    maq, op, turno.fechaTurno, turno.codigo,
+                    com.example.controller.MantenimientoMomento.SALIDA
+                )
+            if (yaHecho) {
+                llamarApiFinalizarTurno(FinalizarTurnoRequest(sesionActualId!!))
+            } else {
+                val intent = Intent(this@MainActivity, com.example.controller.ui.MantenimientoChecklistActivity::class.java).apply {
+                    putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_MOMENTO, com.example.controller.MantenimientoMomento.SALIDA)
+                    putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_MAQUINA, maq)
+                    putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_OPERADOR, op)
+                }
+                salidaLauncher.launch(intent)
+            }
+        }
+    }
+
     private fun llamarApiIniciarTurno(datos: IniciarTurnoRequest) {
         btnIniciarTurno.isEnabled = false
         btnIniciarTurno.text = "Enviando..."
@@ -739,6 +824,8 @@ class MainActivity : AppCompatActivity() {
                     getSharedPreferences(NOMBRE_PREFS, MODE_PRIVATE).edit().apply {
                         putInt("sesion_activa", sesionId)
                         putLong("hora_inicio_ms", System.currentTimeMillis())
+                        putString("turno_maquina", datos.maquina)
+                        putString("turno_operador", datos.operador)
                         apply()
                     }
                     seccionConfiguracion.visibility = View.GONE
@@ -767,6 +854,8 @@ class MainActivity : AppCompatActivity() {
                 getSharedPreferences(NOMBRE_PREFS, MODE_PRIVATE).edit().apply {
                     putInt("sesion_activa", -99)
                     putLong("hora_inicio_ms", System.currentTimeMillis())
+                    putString("turno_maquina", datos.maquina)
+                    putString("turno_operador", datos.operador)
                     apply()
                 }
                 seccionConfiguracion.visibility = View.GONE

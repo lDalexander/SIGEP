@@ -124,4 +124,11 @@ interface ProduccionApi {
     @POST("api/tablets/heartbeat")
     suspend fun enviarHeartbeat(@Body req: HeartbeatRequest): Response<HeartbeatResponse>
 
+    // ==========================================
+    // CHECKLIST DE MANTENIMIENTO Y LIMPIEZA (ENTRADA / SALIDA)
+    // Idempotente por request_id: un 409/duplicado se trata como éxito en el Worker.
+    // ==========================================
+    @POST("api/mantenimiento/checklist")
+    suspend fun responderMantenimiento(@Body req: MantenimientoChecklistRequest): Response<MantenimientoChecklistResponse>
+
 }

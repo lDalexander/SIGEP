@@ -120,6 +120,15 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
                 if (!resp.isSuccessful) throw HttpException(resp)
                 null
             }
+            "MTTO_CHECKLIST" -> {
+                // Checklist de mantenimiento (ENTRADA/SALIDA): no depende de sesion_id.
+                // 409 (ya existe ese momento para el turno) = éxito vía idempotencia
+                // y se elimina de la cola en doWork.
+                val req = gson.fromJson(op.payloadJson, MantenimientoChecklistRequest::class.java)
+                val resp = api.responderMantenimiento(req)
+                if (!resp.isSuccessful) throw HttpException(resp)
+                null
+            }
             else -> {
                 Log.w("SyncWorker", "Tipo desconocido: ${op.tipo}")
                 null
