@@ -25,9 +25,12 @@ class SplashActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_splash)
         supportActionBar?.hide()
-        verificarActualizacion()
+        // API de actualización deshabilitada temporalmente (aún no integrada).
+        // Para reactivarla, reemplazar la línea siguiente por: verificarActualizacion()
+        continuarAPrincipal()
     }
 
+    @Suppress("unused")
     private fun verificarActualizacion() {
         lifecycleScope.launch {
             try {
