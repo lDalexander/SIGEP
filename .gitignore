@@ -13,3 +13,9 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Kotlin compiler error logs
+/.kotlin
+
+# Release APKs
+/app/release
