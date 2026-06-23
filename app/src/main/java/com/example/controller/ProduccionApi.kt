@@ -116,8 +116,8 @@ interface ProduccionApi {
     @GET("api/config/version")
     suspend fun checkVersion(): Response<VersionResponse>
 
-    // Endpoint pendiente de implementar en el backend FastAPI.
-    // Necesario para que el servidor pueda enviar FCM a dispositivos específicos en lugar de broadcast.
+    // Registra el token FCM del dispositivo para que el servidor pueda enviar
+    // notificaciones dirigidas (no broadcast). Implementado en el backend.
     @POST("api/dispositivos/token")
     suspend fun registrarTokenFcm(@Body solicitud: SolicitudTokenFcm): Response<RespuestaTokenFcm>
 
