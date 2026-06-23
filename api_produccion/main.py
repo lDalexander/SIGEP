@@ -1,42 +1,51 @@
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Float, Boolean, func
-from sqlalchemy.orm import declarative_base, sessionmaker, Session, joinedload
-from datetime import datetime
-import pandas as pd
-from io import BytesIO
-from fastapi.responses import StreamingResponse
-import logging
+"""
+Punto de entrada principal (Entrypoint) de la API SIGEP.
+Configura FastAPI, middlewares, y registra todos los routers de la aplicación.
+"""
 import os
-from dotenv import load_dotenv
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from datetime import datetime
+import asyncio
+from contextlib import asynccontextmanager
 
-load_dotenv()
+# Importar configuración de base de datos y modelos
+from database import engine, Base, logger
+import models
+from tasks import garbage_collector_turnos
 
-# --- Logging ---
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("sigep")
+# Importar routers
+from routers import dashboard, operaciones, insumos, auth, reportes, supervisor, websocket_insumos, dispositivos, tablets, mantenimiento, admin
 
-# --- CONFIGURACIÓN DE DB ---
-SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "mysql+mysqlconnector://root:password@localhost:3306/db_produccion")
+# Crear las tablas en la base de datos al iniciar
+Base.metadata.create_all(bind=engine)
+logger.info("Tablas de la base de datos verificadas/creadas.")
 
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
-    pool_pre_ping=True,
-    pool_recycle=3600,
-    pool_size=10,
-    max_overflow=20,
-)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
 
-# --- APP ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Arrancar la tarea en segundo plano del Garbage Collector
+    task = asyncio.create_task(garbage_collector_turnos())
+    yield
+    # Al apagar la app, cancelamos la tarea amablemente
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        logger.info("♻️ Garbage Collector detenido de forma segura.")
+
+# Inicializar la aplicación FastAPI
 app = FastAPI(
     title="SIGEP — Control de Producción Detcuador",
-    version="2.0.0",
+    description="API robusta y modular para el sistema de control de producción.",
+    version="2.1.0", # Bump version due to architectural rewrite
     docs_url="/docs",
+    redoc_url="/redoc",
+    lifespan=lifespan
 )
 
+# Configurar CORS para permitir peticiones desde cualquier origen (Frontend React)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -45,316 +54,55 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- MODELOS DE BASE DE DATOS (SQLAlchemy) ---
+# Registrar los Routers (Módulos de la API)
+app.include_router(dashboard.router)
+app.include_router(operaciones.router)
+app.include_router(insumos.router)
+app.include_router(auth.router)
+app.include_router(reportes.router)
+app.include_router(supervisor.router)
+app.include_router(websocket_insumos.router, prefix="/api")
+app.include_router(dispositivos.router)
+app.include_router(tablets.router)
+app.include_router(mantenimiento.router)
+app.include_router(admin.router)
 
-class OperadorDB(Base):
-    __tablename__ = "operadores"
-    id = Column(Integer, primary_key=True, index=True)
-    nombre = Column(String(150), unique=True)
-    activo = Column(Boolean, default=True)
+# Ruta absoluta al directorio static
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+os.makedirs(STATIC_DIR, exist_ok=True)
 
+# Montar la carpeta estática para servir el APK (OTA)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-class MaquinaDB(Base):
-    __tablename__ = "maquinas"
-    id = Column(Integer, primary_key=True, index=True)
-    nombre = Column(String(100), unique=True)
-    activa = Column(Boolean, default=True)
+@app.get("/api/config/version", tags=["Sistema"])
+def get_version():
+    """Endpoint para el sistema OTA (Over-The-Air) de la app Android.
 
+    Actualiza estos valores en cada release del APK. `obligatorio` es un campo
+    extra que la app ignora si no lo usa.
 
-class SesionTrabajoDB(Base):
-    __tablename__ = "sesiones_trabajo"
-    id = Column(Integer, primary_key=True, index=True)
-    tipo = Column(String(50))
-    maquina = Column(String(100))
-    operador = Column(String(150))
-    marca = Column(String(100))
-    presentacion = Column(String(100))
-    fragancia = Column(String(100))
-    inicio_turno = Column(DateTime, default=lambda: datetime.now())
-    fin_turno = Column(DateTime, nullable=True)
-    duracion_minutos = Column(Float, nullable=True)
-
-
-class PalletDB(Base):
-    __tablename__ = "registro_pallets"
-    id = Column(Integer, primary_key=True, index=True)
-    session_id = Column(Integer, index=True)
-    cantidad_pacas = Column(Integer)
-    fecha_hora = Column(DateTime, default=lambda: datetime.now())
-
-
-# Crear tablas
-Base.metadata.create_all(bind=engine)
-
-# --- MODELOS DE ENTRADA (Pydantic) ---
-
-class IniciarTurno(BaseModel):
-    tipo: str
-    maquina: str
-    operador: str
-    marca: str
-    presentacion: str
-    fragancia: str
-
-
-class RegistrarPalletRequest(BaseModel):
-    sesion_id: int
-    cantidad_pacas: int
-
-
-class FinalizarTurno(BaseModel):
-    sesion_id: int
-
-
-# --- Dependencia para la base de datos ---
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-# ===========================================
-#  DASHBOARD ENDPOINTS
-# ===========================================
-
-@app.get("/api/dashboard/kpis")
-def obtener_kpis(db: Session = Depends(get_db)):
-    """KPIs del día: pallets, turnos activos, eficiencia."""
-    try:
-        hoy = datetime.now().date()
-
-        total_pallets = db.query(
-            func.coalesce(func.sum(PalletDB.cantidad_pacas), 0)
-        ).filter(
-            func.date(PalletDB.fecha_hora) == hoy
-        ).scalar()
-
-        turnos_activos = db.query(
-            func.count(SesionTrabajoDB.id)
-        ).filter(
-            SesionTrabajoDB.fin_turno.is_(None)
-        ).scalar()
-
-        return {
-            "pallets_hoy": int(total_pallets),
-            "turnos_activos": int(turnos_activos),
-            "eficiencia": "94.8%",  # Placeholder — OEE real próximamente
-        }
-    except Exception as e:
-        logger.error(f"Error en /dashboard/kpis: {e}")
-        raise HTTPException(status_code=500, detail="Error al obtener KPIs")
-
-
-@app.get("/api/dashboard/logs")
-def obtener_logs_recientes(db: Session = Depends(get_db)):
-    """Últimos 15 registros de actividad para la terminal en vivo."""
-    try:
-        # JOIN en vez de N+1 queries
-        ultimos_pallets = (
-            db.query(PalletDB, SesionTrabajoDB)
-            .join(SesionTrabajoDB, SesionTrabajoDB.id == PalletDB.session_id)
-            .order_by(PalletDB.fecha_hora.desc())
-            .limit(15)
-            .all()
-        )
-
-        logs = []
-        for pallet, sesion in ultimos_pallets:
-            logs.append({
-                "hora": pallet.fecha_hora.strftime("%H:%M:%S"),
-                "mensaje": (
-                    f"PALLET REGISTRADO: {pallet.cantidad_pacas} pacas "
-                    f"— {sesion.maquina} ({sesion.operador})"
-                ),
-                "tipo": "pallet",
-            })
-
-        return logs
-    except Exception as e:
-        logger.error(f"Error en /dashboard/logs: {e}")
-        raise HTTPException(status_code=500, detail="Error al obtener logs")
-
-
-@app.get("/api/dashboard/produccion_hora")
-def obtener_produccion_hora(db: Session = Depends(get_db)):
-    """Pallets registrados por hora del día actual (para el gráfico)."""
-    try:
-        hoy = datetime.now().date()
-
-        resultados = (
-            db.query(
-                func.extract("hour", PalletDB.fecha_hora).label("hora"),
-                func.coalesce(func.sum(PalletDB.cantidad_pacas), 0).label("pallets"),
-            )
-            .filter(func.date(PalletDB.fecha_hora) == hoy)
-            .group_by(func.extract("hour", PalletDB.fecha_hora))
-            .order_by(func.extract("hour", PalletDB.fecha_hora))
-            .all()
-        )
-
-        data = []
-        for row in resultados:
-            h = int(row.hora)
-            data.append({
-                "hora": f"{h:02d}:00",
-                "pallets": int(row.pallets),
-            })
-
-        return data
-    except Exception as e:
-        logger.error(f"Error en /dashboard/produccion_hora: {e}")
-        raise HTTPException(status_code=500, detail="Error al obtener producción por hora")
-
-
-@app.get("/api/reportes/excel")
-def descargar_excel(db: Session = Depends(get_db)):
-    """Descarga un reporte Excel con las sesiones y pallets del día."""
-    try:
-        hoy = datetime.now().date()
-
-        sesiones = db.query(SesionTrabajoDB).filter(
-            func.date(SesionTrabajoDB.inicio_turno) == hoy
-        ).all()
-
-        if not sesiones:
-            raise HTTPException(status_code=404, detail="No hay datos para hoy")
-
-        rows = []
-        for s in sesiones:
-            pallets_sesion = db.query(
-                func.coalesce(func.sum(PalletDB.cantidad_pacas), 0)
-            ).filter(PalletDB.session_id == s.id).scalar()
-
-            rows.append({
-                "ID Sesión": s.id,
-                "Tipo": s.tipo,
-                "Máquina": s.maquina,
-                "Operador": s.operador,
-                "Marca": s.marca,
-                "Presentación": s.presentacion,
-                "Fragancia": s.fragancia,
-                "Inicio": s.inicio_turno.strftime("%H:%M:%S") if s.inicio_turno else "",
-                "Fin": s.fin_turno.strftime("%H:%M:%S") if s.fin_turno else "En curso",
-                "Duración (min)": round(s.duracion_minutos, 1) if s.duracion_minutos else "",
-                "Pallets": int(pallets_sesion),
-            })
-
-        df = pd.DataFrame(rows)
-        buffer = BytesIO()
-        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-            df.to_excel(writer, index=False, sheet_name="Producción")
-        buffer.seek(0)
-
-        filename = f"reporte_produccion_{hoy.isoformat()}.xlsx"
-        return StreamingResponse(
-            buffer,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error en /reportes/excel: {e}")
-        raise HTTPException(status_code=500, detail="Error al generar reporte")
-
-
-# ===========================================
-#  ENDPOINTS OPERACIONALES
-# ===========================================
-
-@app.post("/api/iniciar_turno")
-def iniciar(datos: IniciarTurno, db: Session = Depends(get_db)):
-    """Inicia un nuevo turno de trabajo."""
-    nueva_sesion = SesionTrabajoDB(
-        tipo=datos.tipo,
-        maquina=datos.maquina,
-        operador=datos.operador,
-        marca=datos.marca,
-        presentacion=datos.presentacion,
-        fragancia=datos.fragancia,
-        inicio_turno=datetime.now(),
-    )
-    db.add(nueva_sesion)
-    db.commit()
-    db.refresh(nueva_sesion)
-    logger.info(f"Turno iniciado: sesión {nueva_sesion.id} — {datos.operador} en {datos.maquina}")
-    return {"sesion_id": nueva_sesion.id, "mensaje": "Turno iniciado"}
-
-
-@app.post("/api/registrar_pallet")
-def registrar_pallet(datos: RegistrarPalletRequest, db: Session = Depends(get_db)):
-    """Registra un pallet bajo una sesión activa."""
-    sesion = db.query(SesionTrabajoDB).filter(
-        SesionTrabajoDB.id == datos.sesion_id
-    ).first()
-
-    if not sesion:
-        raise HTTPException(status_code=404, detail="Sesión no encontrada")
-
-    if sesion.fin_turno is not None:
-        raise HTTPException(status_code=400, detail="No se puede registrar en un turno finalizado")
-
-    nuevo_pallet = PalletDB(
-        session_id=datos.sesion_id,
-        cantidad_pacas=datos.cantidad_pacas,
-        fecha_hora=datetime.now(),
-    )
-    db.add(nuevo_pallet)
-    db.commit()
-    logger.info(f"Pallet registrado: {datos.cantidad_pacas} pacas — sesión {datos.sesion_id}")
-    return {"mensaje": "Pallet registrado correctamente"}
-
-
-@app.post("/api/finalizar_turno")
-def finalizar(datos: FinalizarTurno, db: Session = Depends(get_db)):
-    """Finaliza un turno y calcula la duración."""
-    sesion = db.query(SesionTrabajoDB).filter(
-        SesionTrabajoDB.id == datos.sesion_id
-    ).first()
-
-    if not sesion:
-        raise HTTPException(status_code=404, detail="Sesión no encontrada")
-
-    if sesion.fin_turno is not None:
-        raise HTTPException(status_code=400, detail="Este turno ya fue finalizado")
-
-    sesion.fin_turno = datetime.now()
-    diferencia = sesion.fin_turno - sesion.inicio_turno
-    sesion.duracion_minutos = diferencia.total_seconds() / 60
-
-    db.commit()
-    logger.info(f"Turno finalizado: sesión {sesion.id} — {round(sesion.duracion_minutos, 1)} min")
+    >>> OTA DESHABILITADO TEMPORALMENTE <<<
+    Se anuncia un version_code bajo y obligatorio=False para que ninguna tablet
+    interprete que hay actualización disponible mientras se prepara el rollout
+    remoto. Para REACTIVAR la actualización, restaurar los valores reales:
+        "version_code": 3,
+        "version_name": "0.16.5",
+        "obligatorio": True,
+    """
     return {
-        "mensaje": "Turno finalizado",
-        "duracion_minutos": round(sesion.duracion_minutos, 2),
+        "version_code": 1,
+        "version_name": "0.16.5",
+        "url_descarga": "/static/sigep_latest.apk",
+        "obligatorio": False,
     }
 
+# @app.get("/api/health", tags=["Sistema"])
+# def health():
+#   """Endpoint para verificar el estado de salud de la API."""
+#    return {
+#        "status": "ok", 
+#        "timestamp": datetime.now().isoformat(),
+#        "version": app.version
+#    }
 
-# ===========================================
-#  ENDPOINTS PARA DATOS DINÁMICOS
-# ===========================================
-
-@app.get("/api/operadores")
-def obtener_operadores(db: Session = Depends(get_db)):
-    """Lista todos los operadores activos."""
-    operadores = db.query(OperadorDB).filter(OperadorDB.activo.is_(True)).all()
-    return [{"id": op.id, "nombre": op.nombre} for op in operadores]
-
-
-@app.get("/api/maquinas")
-def obtener_maquinas(db: Session = Depends(get_db)):
-    """Lista todas las máquinas activas."""
-    maquinas = db.query(MaquinaDB).filter(MaquinaDB.activa.is_(True)).all()
-    return [{"id": maq.id, "nombre": maq.nombre} for maq in maquinas]
-
-
-# ===========================================
-#  HEALTHCHECK
-# ===========================================
-
-@app.get("/api/health")
-def health():
-    """Verifica que el servidor esté activo."""
-    return {"status": "ok", "timestamp": datetime.now().isoformat()}
+logger.info("🚀 API SIGEP iniciada correctamente con arquitectura modular.")
