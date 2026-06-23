@@ -219,10 +219,10 @@ class MainActivity : AppCompatActivity() {
         if (sesionGuardada != -1) {
             val horasTranscurridas = (System.currentTimeMillis() - timestampInicio) / (1000 * 60 * 60)
 
-            if (horasTranscurridas >= 9) {
-                // Límite de 9h: evita que un turno del día anterior quede activo indefinidamente
+            if (horasTranscurridas >= 12) {
+                // Límite de 12h: evita que un turno del día anterior quede activo indefinidamente
                 // si el operario olvidó cerrarlo al final de su jornada.
-                forzarReinicioPorError("Turno anterior caducado (límite de 9h). Inicie uno nuevo.")
+                forzarReinicioPorError("Turno anterior caducado (límite de 12h). Inicie uno nuevo.")
             } else if (sesionGuardada == -99) {
                 // Sesión local "en sincronización". Si NO hay INICIAR_TURNO esperando
                 // en cola, es huérfana (el server ya tiene id real pero MainActivity
