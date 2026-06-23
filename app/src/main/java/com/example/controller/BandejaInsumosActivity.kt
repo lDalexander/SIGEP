@@ -99,8 +99,8 @@ class BandejaInsumosActivity : AppCompatActivity() {
         }
     }
 
-    // 8 horas: límite de sesión para insumistas, alineado con el turno máximo de trabajo.
-    private val OCHO_HORAS_MILLIS = 8 * 60 * 60 * 1000L
+    // 12 horas: límite de sesión para insumistas, alineado con el turno máximo de trabajo.
+    private val LIMITE_SESION_MILLIS = 12 * 60 * 60 * 1000L
 
     // Salvavidas por si el WebSocket se desconectó: refrescamos la bandeja
     // cada 15s así, aunque no llegue el evento "operario_confirmo_recepcion",
@@ -148,8 +148,8 @@ class BandejaInsumosActivity : AppCompatActivity() {
 
         AppState.usuarioRol = usuarioRol
 
-        if (System.currentTimeMillis() - tiempoLogin > OCHO_HORAS_MILLIS) {
-            cerrarSesion("Tu sesión ha expirado por seguridad (8 horas).")
+        if (System.currentTimeMillis() - tiempoLogin > LIMITE_SESION_MILLIS) {
+            cerrarSesion("Tu sesión ha expirado por seguridad (12 horas).")
             return
         }
 
