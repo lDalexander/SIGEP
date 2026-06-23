@@ -185,7 +185,7 @@ class MainActivity : AppCompatActivity() {
 
         rvPendientesConfirmacion.layoutManager = LinearLayoutManager(this)
         adapterPendientesConfirmacion = PedidoAdapter(emptyList(), esAsignado = false, esConfirmacion = true) { pedido ->
-            confirmarRecepcion(pedido.id)
+            pedirCantidadYConfirmar(pedido)
         }
         rvPendientesConfirmacion.adapter = adapterPendientesConfirmacion
         rvPendientesConfirmacion.isNestedScrollingEnabled = false
@@ -392,11 +392,39 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun confirmarRecepcion(pedidoId: Int) {
+    // Pregunta cuánto recibió realmente el operario (precargado con lo que el insumista
+    // dijo que entregó, o lo solicitado) para poder comparar entregado vs recibido.
+    private fun pedirCantidadYConfirmar(pedido: PedidoPendienteResponse) {
+        val sugerido = pedido.cantidad_entregada ?: pedido.cantidad
+        val input = android.widget.EditText(this).apply {
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            setText(sugerido.toString())
+            setSelection(text.length)
+        }
+        val entregadaTxt = pedido.cantidad_entregada?.let { "Insumista entregó: $it\n" } ?: ""
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Cantidad recibida")
+            .setMessage("Solicitado: ${pedido.cantidad} x ${pedido.detalle}\n$entregadaTxt\n¿Cuánto recibes realmente?")
+            .setView(input)
+            .setCancelable(false)
+            .setPositiveButton("Confirmar") { _, _ ->
+                val cant = input.text.toString().toIntOrNull()
+                if (cant == null || cant < 0) {
+                    Toast.makeText(this, "Ingrese una cantidad válida", Toast.LENGTH_SHORT).show()
+                    cargarPendientesConfirmacion(sesionActualId!!)
+                } else {
+                    confirmarRecepcion(pedido.id, cant)
+                }
+            }
+            .setNegativeButton("Cancelar") { _, _ -> cargarPendientesConfirmacion(sesionActualId!!) }
+            .show()
+    }
+
+    private fun confirmarRecepcion(pedidoId: Int, cantidadRecibida: Int) {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val resp = RetrofitClient.apiService.confirmarRecepcion(
-                    ConfirmarRecepcionRequest(pedidoId, sesionActualId!!)
+                    ConfirmarRecepcionRequest(pedidoId, sesionActualId!!, cantidadRecibida)
                 )
                 withContext(Dispatchers.Main) {
                     if (resp.isSuccessful) {
