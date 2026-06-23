@@ -182,6 +182,9 @@ class MainActivity : AppCompatActivity() {
         btnVerEstadoPedidos = findViewById(R.id.btnVerEstadoPedidos)
         tvBadge             = findViewById(R.id.tvBadgePendientes)
         vincularVistas()
+        // Versión mostrada en la UI tomada del build (nunca queda desfasada).
+        findViewById<TextView>(R.id.textViewDevelopedBy)?.text =
+            "Desarrollado por John Alexander Garcia | DETCUADOR S.A. | Versión ${BuildConfig.VERSION_NAME}"
 
         rvPendientesConfirmacion.layoutManager = LinearLayoutManager(this)
         adapterPendientesConfirmacion = PedidoAdapter(emptyList(), esAsignado = false, esConfirmacion = true) { pedido ->

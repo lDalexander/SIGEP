@@ -25,6 +25,8 @@ class SplashActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_splash)
         supportActionBar?.hide()
+        findViewById<android.widget.TextView>(R.id.textViewDevelopedBy)?.text =
+            "Desarrollado por John Alexander Garcia | DETCUADOR S.A. | Versión ${BuildConfig.VERSION_NAME}"
         // API de actualización deshabilitada temporalmente (aún no integrada).
         // Para reactivarla, reemplazar la línea siguiente por: verificarActualizacion()
         continuarAPrincipal()

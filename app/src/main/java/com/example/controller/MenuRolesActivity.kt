@@ -27,6 +27,8 @@ class MenuRolesActivity : AppCompatActivity() {
         btnInsumista = findViewById(R.id.btnRolInsumista)
         val btnRolSupervisor = findViewById<Button>(R.id.btnRolSupervisor)
         btnAdminAccess = findViewById(R.id.btnAdminAccess)
+        findViewById<android.widget.TextView>(R.id.textViewVersion)?.text =
+            "DETCUADOR S.A. | John Garcia | Versión ${BuildConfig.VERSION_NAME}"
 
         btnRolSupervisor.setOnClickListener {
             startActivity(Intent(this, LoginActivity::class.java).apply {
