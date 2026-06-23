@@ -82,32 +82,52 @@ class MantenimientoChecklistActivity : AppCompatActivity() {
                 text = etiqueta
                 textSize = 16f
                 setPadding(8, 24, 8, 24)
+                // Al cambiar cualquier ítem, refrescamos el aviso de comentarios.
+                setOnCheckedChangeListener { _, _ -> actualizarHintComentarios() }
             }
             checkboxes.add(cb)
             contenedor.addView(cb)
         }
+        actualizarHintComentarios()
+    }
+
+    /**
+     * Marcar los ítems es opcional, pero los comentarios son obligatorios cuando
+     * queda al menos uno sin marcar. Reflejamos esa regla en el hint en vivo para
+     * que el operario sepa qué se espera antes de pulsar Guardar.
+     */
+    private fun actualizarHintComentarios() {
+        val sinMarcar = checkboxes.count { !it.isChecked }
+        etComentarios.hint = if (sinMarcar > 0)
+            "Obligatorio: explique por qué $sinMarcar ítem(s) sin marcar"
+        else
+            "Comentarios (opcional)"
+        if (sinMarcar > 0) etComentarios.error = null
     }
 
     private fun guardar() {
-        // Todos los ítems son obligatorios: no se continúa hasta marcarlos todos.
-        val faltan = checkboxes.count { !it.isChecked }
-        if (faltan > 0) {
-            Toast.makeText(
-                this,
-                "Debe marcar todos los ítems del checklist ($faltan sin marcar).",
-                Toast.LENGTH_LONG
-            ).show()
-            return
-        }
-
-        // El supervisor de turno es obligatorio; los comentarios son opcionales.
+        // El supervisor de turno es obligatorio.
         val supervisor = etSupervisor.text.toString().trim()
         if (supervisor.isEmpty()) {
             etSupervisor.error = "Indique el supervisor de turno"
             etSupervisor.requestFocus()
             return
         }
+
+        // Marcar los ítems NO es obligatorio. Pero si queda alguno sin marcar,
+        // el operario debe explicar en los comentarios por qué no lo marcó.
+        val sinMarcar = checkboxes.count { !it.isChecked }
         val comentarios = etComentarios.text.toString().trim()
+        if (sinMarcar > 0 && comentarios.isEmpty()) {
+            etComentarios.error = "Explique por qué $sinMarcar ítem(s) quedaron sin marcar"
+            etComentarios.requestFocus()
+            Toast.makeText(
+                this,
+                "Hay $sinMarcar ítem(s) sin marcar: explique en comentarios por qué.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
 
         progress.visibility = View.VISIBLE
         btnGuardar.isEnabled = false
