@@ -17,7 +17,15 @@ data class IniciarTurnoRequest(
 
 data class RegistrarPalletRequest(
     var sesion_id: Int,
-    val cantidad_pacas: Int
+    val cantidad_pacas: Int,
+    val request_id: String = ""
+)
+
+data class RegistrarPalletResponse(
+    val mensaje: String,
+    @SerializedName("pallet_id") val palletId: Int? = null,
+    val duplicado: Boolean = false,
+    val razon: String? = null,
 )
 
 data class FinalizarTurnoRequest(
@@ -76,7 +84,12 @@ data class SolicitarInsumoRequest(
 )
 
 // --- MÓDULO DE LOGIN (INSUMISTAS) ---
-data class LoginRequest(val nombre: String, val pin: String)
+// device_id permite al backend bloquear el segundo login del mismo usuario
+// desde otra tablet, evitando que un insumista esté operando en dos lugares
+// al mismo tiempo y duplique entregas/aceptaciones.
+data class LoginRequest(val nombre: String, val pin: String, val device_id: String)
+
+data class LogoutRequest(val usuario_id: Int, val device_id: String)
 
 data class ListaUsuariosResponse(val id: Int, val nombre: String, val rol: String)
 
@@ -205,4 +218,51 @@ data class EntregaProactivaHistorial(
 data class RespuestaTokenFcm(
     @SerializedName("mensaje") val mensaje: String,
     @SerializedName("id")      val id: Int
+)
+
+// ==========================================
+// HEARTBEAT DE TABLET
+// ==========================================
+data class HeartbeatRequest(
+    @SerializedName("device_id")  val deviceId: String,
+    @SerializedName("nombre")     val nombre: String?,
+    @SerializedName("maquina")    val maquina: String?,
+    @SerializedName("pendientes") val pendientes: Int,
+    @SerializedName("en_linea")   val enLinea: Boolean,
+)
+
+data class HeartbeatResponse(
+    @SerializedName("mensaje")         val mensaje: String,
+    @SerializedName("sync_solicitada") val syncSolicitada: Boolean,
+)
+
+// ==========================================
+// CHECKLIST DE MANTENIMIENTO Y LIMPIEZA (ENTRADA / SALIDA)
+// Ítems fijos definidos en el cliente (ver MantenimientoItems).
+// ==========================================
+object MantenimientoMomento {
+    const val ENTRADA = "ENTRADA"
+    const val SALIDA  = "SALIDA"
+}
+
+data class MantenimientoItemEstado(
+    val etiqueta: String,
+    val marcado: Boolean
+)
+
+data class MantenimientoChecklistRequest(
+    @SerializedName("request_id") val requestId: String,
+    val maquina: String,
+    val operador: String,
+    val momento: String,            // ENTRADA | SALIDA
+    val fecha: String,              // yyyy-MM-dd (reloj de la tablet)
+    val hora: String,               // HH:mm
+    val supervisor: String,         // supervisor de turno (texto)
+    val comentarios: String,        // comentarios libres (puede ir vacío)
+    val items: List<MantenimientoItemEstado>
+)
+
+data class MantenimientoChecklistResponse(
+    val id: Int,
+    val mensaje: String
 )

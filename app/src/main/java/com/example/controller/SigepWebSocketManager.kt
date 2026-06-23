@@ -43,7 +43,7 @@ class SigepWebSocketManager(
                     handler.post { onUpdate(evento, id, desc) }
                 }
             } catch (e: Exception) {
-                Log.e("SIGEP_WS", "❌ Error JSON: ${e.message}")
+                ErrorReporter.report("SIGEP_WS", "Error al parsear mensaje WS", e)
             }
         }
 

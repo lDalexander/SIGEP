@@ -1,13 +1,9 @@
 package com.example.controller
 
-import android.annotation.SuppressLint
-import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.PowerManager
 import android.util.Log
-import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import kotlinx.coroutines.CoroutineScope
@@ -18,7 +14,7 @@ class SigepFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
-        Log.d("FCM_SIGEP", "Nuevo token recibido: $token")
+        Log.d("SIGEP_FCM", "Nuevo token recibido: $token")
         getSharedPreferences("DetcuadorPrefs", Context.MODE_PRIVATE)
             .edit().putString("fcm_token", token).apply()
         guardarTokenEnServidor(token)
@@ -37,12 +33,12 @@ class SigepFirebaseMessagingService : FirebaseMessagingService() {
                     SolicitudTokenFcm(token = token, usuarioId = usuarioId)
                 )
                 when (respuesta.code()) {
-                    201  -> Log.i("FCM_SIGEP", "Token registrado en servidor (id=${respuesta.body()?.id})")
-                    200  -> Log.i("FCM_SIGEP", "Token actualizado en servidor (id=${respuesta.body()?.id})")
-                    else -> Log.e("FCM_SIGEP", "Error al registrar token: HTTP ${respuesta.code()}")
+                    201  -> Log.i("SIGEP_FCM", "Token registrado en servidor (id=${respuesta.body()?.id})")
+                    200  -> Log.i("SIGEP_FCM", "Token actualizado en servidor (id=${respuesta.body()?.id})")
+                    else -> Log.e("SIGEP_FCM", "Error al registrar token: HTTP ${respuesta.code()}")
                 }
             } catch (e: Exception) {
-                Log.e("FCM_SIGEP", "Fallo de red al registrar token: ${e.message}")
+                ErrorReporter.report("SIGEP_FCM", "Fallo de red al registrar token", e)
             }
         }
     }
@@ -76,11 +72,15 @@ class SigepFirebaseMessagingService : FirebaseMessagingService() {
         val cuerpo = data["cuerpo"] ?: "Se requiere atención inmediata."
         val solicitudId = data["solicitudId"]
 
-        Log.d("FCM_SIGEP", "Procesando solicitud de insumo ID: $solicitudId, Tipo: $tipoInsumoMsg")
+        Log.d("SIGEP_FCM", "Procesando solicitud de insumo ID: $solicitudId, Tipo: $tipoInsumoMsg")
 
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         // El WakeLock de 10 s garantiza que la pantalla encienda el tiempo suficiente
         // para que el insumista vea la alerta antes de que el dispositivo vuelva a dormir.
+        // FULL_WAKE_LOCK/ACQUIRE_CAUSES_WAKEUP están deprecados; su reemplazo
+        // (setShowWhenLocked/setTurnScreenOn) es a nivel de Activity, no de
+        // Service, por lo que migrarlo cambiaría el flujo de alerta. Se mantiene.
+        @Suppress("DEPRECATION")
         val wakeLock = powerManager.newWakeLock(
             PowerManager.FULL_WAKE_LOCK or
             PowerManager.ACQUIRE_CAUSES_WAKEUP or
@@ -90,8 +90,7 @@ class SigepFirebaseMessagingService : FirebaseMessagingService() {
         wakeLock.acquire(10_000L)
 
         try {
-            SigepNotificationManager.createAlarmNotificationChannel(this)
-            dispararNotificacionAlarma(titulo, cuerpo)
+            SigepNotificationManager.dispararAlertaPedido(this, titulo, cuerpo)
 
             val intentBroadcast = Intent("com.sigep.NUEVO_PEDIDO_INSUMO").apply {
                 putExtra("solicitudId", solicitudId)
@@ -104,29 +103,5 @@ class SigepFirebaseMessagingService : FirebaseMessagingService() {
             // para no drenar la batería del dispositivo industrial.
             if (wakeLock.isHeld) wakeLock.release()
         }
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun dispararNotificacionAlarma(titulo: String, cuerpo: String) {
-        val intent = Intent(this, AlertaPedidoActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            this, 0, intent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-
-        val notificacion = NotificationCompat.Builder(this, SigepNotificationManager.CHANNEL_ID_ALARM)
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
-            .setContentTitle(titulo)
-            .setContentText(cuerpo)
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setCategory(NotificationCompat.CATEGORY_ALARM)
-            .setFullScreenIntent(pendingIntent, true)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setAutoCancel(true)
-            .build()
-
-        NotificationManagerCompat.from(this).notify(System.currentTimeMillis().toInt(), notificacion)
     }
 }

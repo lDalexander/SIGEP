@@ -10,13 +10,15 @@ import retrofit2.http.GET
 import retrofit2.http.Part
 import retrofit2.http.Path
 import retrofit2.http.PUT
+import retrofit2.http.DELETE
+import retrofit2.http.Query
 interface ProduccionApi {
 
     @POST("api/iniciar_turno")
     suspend fun iniciarTurno(@Body datos: IniciarTurnoRequest): Response<TurnoResponse>
 
     @POST("api/registrar_pallet")
-    suspend fun registrarPallet(@Body datos: RegistrarPalletRequest): Response<RespuestaGenerica>
+    suspend fun registrarPallet(@Body datos: RegistrarPalletRequest): Response<RegistrarPalletResponse>
 
     @POST("api/finalizar_turno")
     suspend fun finalizarTurno(@Body datos: FinalizarTurnoRequest): Response<RespuestaGenerica>
@@ -32,6 +34,9 @@ interface ProduccionApi {
 
     @POST("/api/login")
     suspend fun iniciarSesion(@Body request: LoginRequest): Response<UsuarioResponse>
+
+    @POST("/api/logout")
+    suspend fun cerrarSesionUsuario(@Body request: LogoutRequest): Response<RespuestaGenerica>
 
     @GET("api/operadores")
     suspend fun obtenerOperadores(): Response<List<OperadorResponse>>
@@ -111,8 +116,19 @@ interface ProduccionApi {
     @GET("api/config/version")
     suspend fun checkVersion(): Response<VersionResponse>
 
-    // Endpoint pendiente de implementar en el backend FastAPI.
-    // Necesario para que el servidor pueda enviar FCM a dispositivos específicos en lugar de broadcast.
+    // Registra el token FCM del dispositivo para que el servidor pueda enviar
+    // notificaciones dirigidas (no broadcast). Implementado en el backend.
     @POST("api/dispositivos/token")
     suspend fun registrarTokenFcm(@Body solicitud: SolicitudTokenFcm): Response<RespuestaTokenFcm>
+
+    @POST("api/tablets/heartbeat")
+    suspend fun enviarHeartbeat(@Body req: HeartbeatRequest): Response<HeartbeatResponse>
+
+    // ==========================================
+    // CHECKLIST DE MANTENIMIENTO Y LIMPIEZA (ENTRADA / SALIDA)
+    // Idempotente por request_id: un 409/duplicado se trata como éxito en el Worker.
+    // ==========================================
+    @POST("api/mantenimiento/checklist")
+    suspend fun responderMantenimiento(@Body req: MantenimientoChecklistRequest): Response<MantenimientoChecklistResponse>
+
 }

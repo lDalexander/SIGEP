@@ -1,0 +1,206 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#F0F0F0">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="AJUSTES DE TABLET"
+            android:textSize="22sp"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:textColor="#1E293B"
+            android:layout_marginBottom="32dp"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Device ID (solo lectura)"
+            android:textStyle="bold"
+            android:textColor="#555555"
+            android:layout_marginBottom="4dp"/>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="24dp">
+
+            <TextView
+                android:id="@+id/tvDeviceId"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:background="#FFFFFF"
+                android:padding="12dp"
+                android:textSize="12sp"
+                android:textColor="#333333"
+                android:fontFamily="monospace"/>
+
+            <Button
+                android:id="@+id/btnCopiarId"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Copiar"
+                android:layout_marginStart="8dp"
+                android:backgroundTint="#3F51B5"/>
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Nombre de la tablet"
+            android:textStyle="bold"
+            android:textColor="#555555"
+            android:layout_marginBottom="4dp"/>
+
+        <EditText
+            android:id="@+id/etNombre"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:background="#FFFFFF"
+            android:padding="12dp"
+            android:hint="Ej: Tablet Máquina 1"
+            android:textColor="#000000"
+            android:textColorHint="#AAAAAA"
+            android:layout_marginBottom="24dp"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Máquina asignada"
+            android:textStyle="bold"
+            android:textColor="#555555"
+            android:layout_marginBottom="4dp"/>
+
+        <EditText
+            android:id="@+id/etMaquina"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:background="#FFFFFF"
+            android:padding="12dp"
+            android:hint="Ej: MAQ-01"
+            android:textColor="#000000"
+            android:textColorHint="#AAAAAA"
+            android:layout_marginBottom="32dp"/>
+
+        <Button
+            android:id="@+id/btnGuardar"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:text="GUARDAR"
+            android:backgroundTint="#4CAF50"/>
+
+        <!-- Diagnóstico FCM: ayuda a comparar lo que la tablet sabe contra lo
+             que el server registró en la tabla dispositivos_fcm. -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Diagnóstico FCM"
+            android:textStyle="bold"
+            android:textColor="#555555"
+            android:layout_marginTop="24dp"
+            android:layout_marginBottom="4dp"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Tipo insumo (filtro de FCM):"
+            android:textSize="12sp"
+            android:textColor="#888888"
+            android:layout_marginTop="8dp"/>
+
+        <TextView
+            android:id="@+id/tvTipoInsumo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#FFFFFF"
+            android:padding="12dp"
+            android:textColor="#333333"
+            android:textSize="14sp"
+            android:layout_marginBottom="8dp"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Token FCM (compara con dispositivos_fcm en BD):"
+            android:textSize="12sp"
+            android:textColor="#888888"/>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="4dp">
+
+            <TextView
+                android:id="@+id/tvFcmToken"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:background="#FFFFFF"
+                android:padding="12dp"
+                android:fontFamily="monospace"
+                android:textSize="10sp"
+                android:textColor="#333333"/>
+
+            <Button
+                android:id="@+id/btnCopiarToken"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Copiar"
+                android:layout_marginStart="8dp"
+                android:backgroundTint="#3F51B5"/>
+        </LinearLayout>
+
+        <!-- Botones de prueba de Crashlytics: solo visibles en builds DEBUG. -->
+        <LinearLayout
+            android:id="@+id/seccionDebugCrashlytics"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginTop="40dp"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="DEBUG: pruebas de Crashlytics"
+                android:textStyle="bold"
+                android:textColor="#B91C1C"
+                android:layout_marginBottom="8dp"/>
+
+            <Button
+                android:id="@+id/btnTestNonFatal"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:text="Enviar reporte no-fatal"
+                android:backgroundTint="#F59E0B"
+                android:layout_marginBottom="8dp"/>
+
+            <Button
+                android:id="@+id/btnTestCrash"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:text="Forzar crash (cierra la app)"
+                android:backgroundTint="#DC2626"
+                android:layout_marginBottom="8dp"/>
+
+            <Button
+                android:id="@+id/btnTestAlarma"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:text="Probar alarma de pedido"
+                android:backgroundTint="#0EA5E9"/>
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>

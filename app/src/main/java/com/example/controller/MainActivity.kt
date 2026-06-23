@@ -31,15 +31,23 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.work.*
+import com.example.controller.data.ColaSyncRepository
+import com.example.controller.sync.ConnectivityObserver
+import com.example.controller.sync.TabletsWebSocketManager
+import com.example.controller.ui.AjustesTabletActivity
+import com.example.controller.ui.PendientesActivity
+import kotlinx.coroutines.flow.collectLatest
 
 class MainActivity : AppCompatActivity() {
 
     private var sesionActualId: Int? = null
-    // El token de idempotencia evita que el servidor registre el mismo turno dos veces
-    // si el usuario presiona el botón mientras la primera petición está en vuelo.
-    private var tokenIdempotencia: String = ""
     private lateinit var btnSolicitarInsumo: Button
     private lateinit var btnParo: Button
+    private lateinit var colaRepo: ColaSyncRepository
+    private lateinit var connectivityObserver: ConnectivityObserver
+    private lateinit var tabletsWsManager: TabletsWebSocketManager
+    private lateinit var tvBadge: android.widget.TextView
 
     private var paroActivo = false
     private lateinit var seccionConfiguracion: LinearLayout
@@ -64,6 +72,57 @@ class MainActivity : AppCompatActivity() {
 
     private val NOMBRE_PREFS = "DetcuadorPrefs"
 
+    // Listener para que el worker pueda "empujarnos" el id real de la sesión cuando
+    // el server lo confirma. Si no escuchamos esto, MainActivity sigue creyendo que
+    // la sesión es -99 y al finalizar el server devuelve 404 "Sesion no encontrada".
+    private val prefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
+        if (key != "sesion_activa") return@OnSharedPreferenceChangeListener
+        val nuevo = prefs.getInt("sesion_activa", -1)
+        runOnUiThread {
+            when {
+                // Worker limpió la sesión (finalizar falló 404, o nosotros mismos
+                // disparamos forzarReinicioPorError): volver a la pantalla de inicio.
+                nuevo == -1 && sesionActualId != null -> {
+                    forzarReinicioPorError("Sesión cerrada — inicie un turno nuevo.")
+                }
+                // Worker confirmó el id real: reemplazamos el -99 local.
+                nuevo > 0 && (sesionActualId == null || sesionActualId == -99) -> {
+                    sesionActualId = nuevo
+                    iniciarRadarStatusPedidos(nuevo)
+                }
+            }
+        }
+    }
+
+    // ===== Gates del checklist de mantenimiento (ENTRADA / SALIDA) =====
+    // Turno pendiente de iniciar mientras el operario llena el checklist de ENTRADA.
+    private var turnoPendiente: IniciarTurnoRequest? = null
+
+    // ENTRADA: si el checklist vuelve OK, se procede a iniciar el turno.
+    private val entradaLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val req = turnoPendiente
+        turnoPendiente = null
+        if (result.resultCode == RESULT_OK && req != null) {
+            llamarApiIniciarTurno(req)
+        } else {
+            btnIniciarTurno.isEnabled = true
+            btnIniciarTurno.text = "INICIAR TURNO"
+        }
+    }
+
+    // SALIDA: si el checklist vuelve OK, se procede a cerrar el turno.
+    private val salidaLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK && sesionActualId != null) {
+            llamarApiFinalizarTurno(FinalizarTurnoRequest(sesionActualId!!))
+        } else {
+            btnTerminarTurno.isEnabled = true
+        }
+    }
+
     val tipos = arrayOf("-- Seleccione Tipo --", "Sólido", "Líquido")
     val fragancias = arrayOf("-- Seleccione Fragancia --", "Limón", "Floral")
 
@@ -76,6 +135,19 @@ class MainActivity : AppCompatActivity() {
 
     // Fallback local hasta que el backend devuelva la jerarquía en api/maquinas.
     // Eliminar estos mapas cuando el servidor implemente el campo `marcas` en MaquinaResponse.
+    private val listaMaquinasLocal = listOf(
+        "-- Seleccione Máquina --",
+        "Máquina 7", "Máquina 7B", "Máquina 8", "Máquina 9", "Máquina 16"
+    )
+
+    private val listaOperadoresLocal = listOf(
+        "-- Seleccione Operador --",
+        "ALEX VALENZUELA", "JONATHAN VICUÑA", "ROSENDO VALENZUELA",
+        "CRISTHIAN CEDEÑO", "ROLANDO MORAN", "SAMUEL MEJIA",
+        "JESUS LAZO", "ANTHONY MERCADO", "ERWIN ARAGON",
+        "JOSIAS VILLAMAR", "PEDRO SARABIA", "KEVIN SORIANO"
+    )
+
     private val marcasPorMaquinaLocal = mapOf(
         "Máquina 7"  to arrayOf("-- Seleccione Marca --", "TORBELLINO", "ULTREX", "COMISARIATO"),
         "Máquina 7B" to arrayOf("-- Seleccione Marca --", "ULTREX", "PQP", "COMISARIATO", "HIT"),
@@ -108,6 +180,7 @@ class MainActivity : AppCompatActivity() {
 
         tvHistorialPacas    = findViewById(R.id.tvHistorialPacas)
         btnVerEstadoPedidos = findViewById(R.id.btnVerEstadoPedidos)
+        tvBadge             = findViewById(R.id.tvBadgePendientes)
         vincularVistas()
 
         rvPendientesConfirmacion.layoutManager = LinearLayoutManager(this)
@@ -117,10 +190,12 @@ class MainActivity : AppCompatActivity() {
         rvPendientesConfirmacion.adapter = adapterPendientesConfirmacion
         rvPendientesConfirmacion.isNestedScrollingEnabled = false
 
-        // Token de idempotencia generado en cada sesión para evitar turnos duplicados
-        // si el operario presiona el botón mientras la petición está en vuelo.
-        tokenIdempotencia = java.util.UUID.randomUUID().toString()
+        colaRepo = ColaSyncRepository(applicationContext)
+        val tabletPrefs = PrefsRepository(applicationContext)
+        connectivityObserver = ConnectivityObserver(applicationContext)
+        tabletsWsManager = TabletsWebSocketManager(tabletPrefs.deviceId, WorkManager.getInstance(applicationContext))
 
+        observarBadge()
         cargarCatalogosDesdeCache()
         configurarFiltrosEnCascada()
         configurarBotones()
@@ -136,6 +211,8 @@ class MainActivity : AppCompatActivity() {
         descargarCatalogosDesdeServidor()
 
         val prefs = getSharedPreferences(NOMBRE_PREFS, MODE_PRIVATE)
+        prefs.registerOnSharedPreferenceChangeListener(prefsListener)
+
         val sesionGuardada  = prefs.getInt("sesion_activa", -1)
         val timestampInicio = prefs.getLong("hora_inicio_ms", 0L)
 
@@ -146,6 +223,22 @@ class MainActivity : AppCompatActivity() {
                 // Límite de 9h: evita que un turno del día anterior quede activo indefinidamente
                 // si el operario olvidó cerrarlo al final de su jornada.
                 forzarReinicioPorError("Turno anterior caducado (límite de 9h). Inicie uno nuevo.")
+            } else if (sesionGuardada == -99) {
+                // Sesión local "en sincronización". Si NO hay INICIAR_TURNO esperando
+                // en cola, es huérfana (el server ya tiene id real pero MainActivity
+                // nunca se enteró por la versión vieja, o el usuario descartó).
+                // Limpiamos para sacarlo del limbo.
+                lifecycleScope.launch {
+                    if (colaRepo.existeIniciarTurnoEnCola()) {
+                        sesionActualId = -99
+                        AppState.usuarioRol = prefs.getString("usuario_rol", "OPERADOR")
+                        seccionConfiguracion.visibility = View.GONE
+                        seccionProduccion.visibility    = View.VISIBLE
+                        Toast.makeText(this@MainActivity, "Turno en sincronización…", Toast.LENGTH_SHORT).show()
+                    } else {
+                        forzarReinicioPorError("Sesión local huérfana — inicie un turno nuevo.")
+                    }
+                }
             } else {
                 sesionActualId = sesionGuardada
                 AppState.usuarioRol = prefs.getString("usuario_rol", "OPERADOR")
@@ -156,6 +249,12 @@ class MainActivity : AppCompatActivity() {
                 iniciarRadarStatusPedidos(sesionGuardada)
             }
         }
+    }
+
+    override fun onDestroy() {
+        getSharedPreferences(NOMBRE_PREFS, MODE_PRIVATE)
+            .unregisterOnSharedPreferenceChangeListener(prefsListener)
+        super.onDestroy()
     }
 
     private fun mostrarVentanaEstadoPedidos() {
@@ -233,6 +332,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             } catch (e: Exception) {
+                ErrorReporter.report("MainActivity", "Fallo al consultar detalle de pedidos", e)
                 withContext(Dispatchers.Main) {
                     tvContenido.text = "Error de conexión. Revisa tu red."
                 }
@@ -264,7 +364,9 @@ class MainActivity : AppCompatActivity() {
                     }
                     cargarPendientesConfirmacion(sesionId)
                 } catch (e: Exception) {
-                    // Falla silenciosa: el radar es informativo, no debe interrumpir al operario
+                    // El radar es informativo: si la red se cayó, no molestamos al operario,
+                    // pero si es un bug real (parse error, NPE) ErrorReporter lo reporta.
+                    ErrorReporter.report("RadarPedidos", "Fallo en polling del radar", e)
                 }
                 delay(5000)
             }
@@ -284,7 +386,9 @@ class MainActivity : AppCompatActivity() {
                         adapterPendientesConfirmacion.actualizarLista(lista)
                     }
                 }
-            } catch (e: Exception) { /* silencioso */ }
+            } catch (e: Exception) {
+                ErrorReporter.report("PendientesConfirmacion", "Fallo al cargar lista", e)
+            }
         }
     }
 
@@ -303,6 +407,7 @@ class MainActivity : AppCompatActivity() {
                     cargarPendientesConfirmacion(sesionActualId!!)
                 }
             } catch (e: Exception) {
+                ErrorReporter.report("MainActivity", "Fallo al confirmar recepción", e)
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@MainActivity, "Error de red", Toast.LENGTH_SHORT).show()
                     cargarPendientesConfirmacion(sesionActualId!!)
@@ -339,7 +444,8 @@ class MainActivity : AppCompatActivity() {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 if (position > 0) {
                     if (tipos[position] == "Sólido") {
-                        spinnerMaquina.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, listaMaquinasServidor)
+                        val maquinas = if (listaMaquinasServidor.size > 1) listaMaquinasServidor else listaMaquinasLocal
+                        spinnerMaquina.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, maquinas)
                         spinnerMaquina.isEnabled = true
                     } else {
                         spinnerMaquina.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, arrayOf("-- En desarrollo --"))
@@ -358,7 +464,8 @@ class MainActivity : AppCompatActivity() {
                 if (position > 0) {
                     val maquinaSeleccionada = spinnerMaquina.selectedItem.toString()
 
-                    spinnerOperador.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, listaOperadoresServidor)
+                    val operadores = if (listaOperadoresServidor.size > 1) listaOperadoresServidor else listaOperadoresLocal
+                    spinnerOperador.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, operadores)
                     spinnerOperador.isEnabled = true
                     spinnerFragancia.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, fragancias)
                     spinnerFragancia.isEnabled = true
@@ -444,17 +551,36 @@ class MainActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
 
-            llamarApiIniciarTurno(
-                IniciarTurnoRequest(
-                    tipo        = spinnerTipo.selectedItem.toString(),
-                    maquina     = spinnerMaquina.selectedItem.toString(),
-                    operador    = spinnerOperador.selectedItem.toString(),
-                    marca       = spinnerMarca.selectedItem.toString(),
-                    presentacion = spinnerPresentacion.selectedItem.toString(),
-                    fragancia   = spinnerFragancia.selectedItem.toString(),
-                    request_id  = tokenIdempotencia
+            val maquinaSel  = spinnerMaquina.selectedItem.toString()
+            val operadorSel = spinnerOperador.selectedItem.toString()
+
+            lifecycleScope.launch {
+                val conflicto = verificarConflictoTurnoActivo(operadorSel, maquinaSel)
+                if (conflicto != null) {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("No se puede iniciar el turno")
+                        .setMessage(conflicto)
+                        .setPositiveButton("Entendido", null)
+                        .show()
+                    btnIniciarTurno.isEnabled = true
+                    btnIniciarTurno.text = "INICIAR TURNO"
+                    return@launch
+                }
+
+                // Gate de ENTRADA: el checklist de mantenimiento es obligatorio
+                // antes de pasar a la pantalla de producción.
+                gateEntradaYContinuar(
+                    IniciarTurnoRequest(
+                        tipo         = spinnerTipo.selectedItem.toString(),
+                        maquina      = maquinaSel,
+                        operador     = operadorSel,
+                        marca        = spinnerMarca.selectedItem.toString(),
+                        presentacion = spinnerPresentacion.selectedItem.toString(),
+                        fragancia    = spinnerFragancia.selectedItem.toString(),
+                        request_id   = ""   // ColaSyncRepository asigna el UUID real al insertar
+                    )
                 )
-            )
+            }
         }
 
         btnEnviarPallet.setOnClickListener {
@@ -463,18 +589,7 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Ingrese una cantidad válida", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-
-            if (sesionActualId == -99) {
-                // Modo offline: guardamos en cola local y disparamos la sincronización
-                // para que en cuanto vuelva la red se cree el turno real y se envíe la paca.
-                val datosTemporal = RegistrarPalletRequest(sesionActualId!!, cantidad)
-                guardarPacaPendiente(datosTemporal)
-                val horaActual = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
-                tvHistorialPacas.text = "🟡 ${cantidad} pacas - $horaActual (Creando turno...)\n" + tvHistorialPacas.text
-                etCantidadPacas.text.clear()
-                Toast.makeText(this, "Reconectando y creando turno...", Toast.LENGTH_SHORT).show()
-                iniciarSincronizacion()
-            } else if (sesionActualId != null) {
+            if (sesionActualId != null) {
                 llamarApiRegistrarPallet(RegistrarPalletRequest(sesionActualId!!, cantidad))
             }
         }
@@ -489,16 +604,9 @@ class MainActivity : AppCompatActivity() {
 
         btnTerminarTurno.setOnClickListener {
             if (sesionActualId != null) {
-                val pendientes = obtenerPendientes()
-                if (pendientes.isNotEmpty()) {
-                    // Sincronizamos antes de cerrar para no perder pacas registradas sin conexión.
-                    Toast.makeText(this, "Sincronizando pacas pendientes antes de cerrar...", Toast.LENGTH_LONG).show()
-                    iniciarSincronizacion {
-                        llamarApiFinalizarTurno(FinalizarTurnoRequest(sesionActualId!!))
-                    }
-                } else {
-                    llamarApiFinalizarTurno(FinalizarTurnoRequest(sesionActualId!!))
-                }
+                // Gate de SALIDA: el checklist de limpieza es obligatorio antes de cerrar.
+                btnTerminarTurno.isEnabled = false
+                gateSalidaYFinalizar()
             }
         }
 
@@ -559,11 +667,50 @@ class MainActivity : AppCompatActivity() {
                 llamarApiFinalizarParo()
             }
         }
+
     }
 
     // ==========================================
     // LLAMADAS A LA API
     // ==========================================
+
+    // Pre-flight contra el estado en tiempo real de la planta para que el operador
+    // no quede atascado con un INICIAR_TURNO en cola que el backend va a rechazar
+    // ("operador ya tiene turno" / "máquina ya tiene sesión activa"). Si la red
+    // falla devolvemos null para no bloquear cuando estamos offline.
+    private suspend fun verificarConflictoTurnoActivo(operador: String, maquina: String): String? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val resp = RetrofitClient.apiService.obtenerEstadoPlanta()
+                if (!resp.isSuccessful) return@withContext null
+                val planta = resp.body() ?: return@withContext null
+
+                val maquinaOcupada = planta.find {
+                    it.maquina.equals(maquina, ignoreCase = true) &&
+                    !it.estado.equals("OFFLINE", ignoreCase = true)
+                }
+                if (maquinaOcupada != null) {
+                    return@withContext "La máquina \"$maquina\" ya tiene un turno activo" +
+                        (if (maquinaOcupada.operador.isNotBlank()) " (operador: ${maquinaOcupada.operador})." else ".")
+                }
+
+                val operadorOcupado = planta.find {
+                    it.operador.equals(operador, ignoreCase = true) &&
+                    !it.estado.equals("OFFLINE", ignoreCase = true)
+                }
+                if (operadorOcupado != null) {
+                    return@withContext "El operador \"$operador\" ya tiene un turno activo en la máquina ${operadorOcupado.maquina}."
+                }
+
+                null
+            } catch (e: Exception) {
+                // Pre-flight es best-effort: si falla por red, dejamos pasar.
+                // Reportamos sólo si es un bug real (parse, NPE), no si la tablet está offline.
+                ErrorReporter.report("PreflightTurno", "Fallo en verificación de conflicto", e)
+                null
+            }
+        }
+    }
 
     private fun descargarCatalogosDesdeServidor() {
         lifecycleScope.launch(Dispatchers.IO) {
@@ -589,110 +736,244 @@ class MainActivity : AppCompatActivity() {
                         listaMaquinasServidor   = maquinas
                         if (jerarquia.isNotEmpty()) jerarquiaMaquinas = jerarquia
                         guardarCatalogosEnCache(operadores, maquinas, jerarquia)
+                        val pos = spinnerTipo.selectedItemPosition
+                        if (pos > 0 && tipos[pos] == "Sólido") {
+                            spinnerMaquina.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, maquinas)
+                            spinnerMaquina.isEnabled = true
+                        }
                     }
                 }
             } catch (e: Exception) {
-                Log.d("SIGEP", "No se pudo actualizar el catálogo — usando caché local")
+                ErrorReporter.report("Catalogos", "No se pudo actualizar el catálogo — usando caché local", e)
             }
         }
     }
 
+    // Gate de ENTRADA: el checklist de mantenimiento SIEMPRE se exige antes de
+    // iniciar el turno. Offline-first: el checklist se encola (no requiere red) y al
+    // volver con RESULT_OK el inicio de turno sigue su propio camino online/cola.
+    private fun gateEntradaYContinuar(req: IniciarTurnoRequest) {
+        turnoPendiente = req
+        val intent = Intent(this, com.example.controller.ui.MantenimientoChecklistActivity::class.java).apply {
+            putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_MOMENTO, com.example.controller.MantenimientoMomento.ENTRADA)
+            putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_MAQUINA, req.maquina)
+            putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_OPERADOR, req.operador)
+        }
+        entradaLauncher.launch(intent)
+    }
+
+    // Gate de SALIDA: el checklist de limpieza SIEMPRE se exige antes de cerrar el
+    // turno. máquina+operador se leen de prefs (persistidos al iniciar) con fallback al spinner.
+    private fun gateSalidaYFinalizar() {
+        val prefs = getSharedPreferences(NOMBRE_PREFS, MODE_PRIVATE)
+        val maq = prefs.getString("turno_maquina", null) ?: spinnerMaquina.selectedItem?.toString().orEmpty()
+        val op  = prefs.getString("turno_operador", null) ?: spinnerOperador.selectedItem?.toString().orEmpty()
+        val intent = Intent(this, com.example.controller.ui.MantenimientoChecklistActivity::class.java).apply {
+            putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_MOMENTO, com.example.controller.MantenimientoMomento.SALIDA)
+            putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_MAQUINA, maq)
+            putExtra(com.example.controller.ui.MantenimientoChecklistActivity.EXTRA_OPERADOR, op)
+        }
+        salidaLauncher.launch(intent)
+    }
+
     private fun llamarApiIniciarTurno(datos: IniciarTurnoRequest) {
-        lifecycleScope.launch(Dispatchers.IO) {
+        btnIniciarTurno.isEnabled = false
+        btnIniciarTurno.text = "Enviando..."
+
+        // Estrategia: intentar directo primero. Si el server responde (con éxito o
+        // con rechazo del negocio), damos feedback honesto al usuario. Solo si la
+        // red falla (timeout/IOException) caemos al modo cola.
+        // Generamos un request_id estable que se reutiliza si toca encolar, para
+        // que el server pueda deduplicar si el intento directo sí llegó pero la
+        // respuesta se perdió.
+        lifecycleScope.launch {
+            val datosConId = datos.copy(request_id = java.util.UUID.randomUUID().toString())
+
             try {
-                val respuesta = RetrofitClient.apiService.iniciarTurno(datos)
-                withContext(Dispatchers.Main) {
-                    if (respuesta.isSuccessful && respuesta.body() != null) {
-                        val idRecibido = respuesta.body()!!.sesion_id
-                        getSharedPreferences(NOMBRE_PREFS, MODE_PRIVATE).edit().apply {
-                            putInt("sesion_activa", idRecibido)
-                            putLong("hora_inicio_ms", System.currentTimeMillis())
-                            apply()
-                        }
-                        sesionActualId = idRecibido
-                        Toast.makeText(this@MainActivity, "Turno Iniciado con Éxito", Toast.LENGTH_SHORT).show()
-                        seccionConfiguracion.visibility = View.GONE
-                        seccionProduccion.visibility    = View.VISIBLE
-                        iniciarRadarStatusPedidos(idRecibido)
-                    } else {
-                        btnIniciarTurno.isEnabled = true
-                        btnIniciarTurno.text = "INICIAR TURNO"
-                        // Renovamos el token para que el reintento no sea bloqueado por idempotencia.
-                        tokenIdempotencia = java.util.UUID.randomUUID().toString()
-                        val codigo = respuesta.code()
-                        val cuerpoError = respuesta.errorBody()?.string()
-                        val mensaje = when (codigo) {
-                            400  -> cuerpoError ?: "Datos inválidos o turno duplicado."
-                            500  -> "Error 500: el servidor respondió con error interno."
-                            else -> "Error $codigo al iniciar en servidor"
-                        }
-                        Log.e("SIGEP_API", "Error al iniciar turno ($codigo): $cuerpoError")
-                        Toast.makeText(this@MainActivity, mensaje, Toast.LENGTH_LONG).show()
-                    }
+                val resp = withContext(Dispatchers.IO) {
+                    RetrofitClient.apiService.iniciarTurno(datosConId)
                 }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    btnIniciarTurno.isEnabled = true
-                    btnIniciarTurno.text = "INICIAR TURNO"
-                    tokenIdempotencia = java.util.UUID.randomUUID().toString()
-                    guardarTurnoOffline(datos)
-                    sesionActualId = -99
+                if (resp.isSuccessful && resp.body() != null) {
+                    val sesionId = resp.body()!!.sesion_id
+                    sesionActualId = sesionId
+                    getSharedPreferences(NOMBRE_PREFS, MODE_PRIVATE).edit().apply {
+                        putInt("sesion_activa", sesionId)
+                        putLong("hora_inicio_ms", System.currentTimeMillis())
+                        putString("turno_maquina", datos.maquina)
+                        putString("turno_operador", datos.operador)
+                        apply()
+                    }
                     seccionConfiguracion.visibility = View.GONE
                     seccionProduccion.visibility    = View.VISIBLE
-                    Toast.makeText(this@MainActivity, "Modo Offline: turno iniciado localmente", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, "Turno iniciado", Toast.LENGTH_SHORT).show()
+                    iniciarRadarStatusPedidos(sesionId)
+                } else {
+                    // El server respondió pero rechazó. Encolar acá solo va a fallar
+                    // otra vez con el mismo 4xx, así que mostramos el motivo real y
+                    // dejamos que el usuario corrija (ej. seleccionar otra máquina).
+                    val detalle = try {
+                        resp.errorBody()?.string()?.take(300)?.replace("\n", " ")?.trim()
+                    } catch (_: Exception) { null } ?: "Error HTTP ${resp.code()}"
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("No se pudo iniciar el turno")
+                        .setMessage(detalle)
+                        .setPositiveButton("Entendido", null)
+                        .show()
                 }
+            } catch (e: Exception) {
+                // Sin red o timeout: cae al modo cola. Reusamos el mismo request_id
+                // para que el server pueda deduplicar si el intento directo sí entró.
+                ErrorReporter.warn("MainActivity", "Sin red al iniciar turno, encolando: ${e.message}")
+                colaRepo.enqueueIniciarTurno(datosConId)
+                sesionActualId = -99
+                getSharedPreferences(NOMBRE_PREFS, MODE_PRIVATE).edit().apply {
+                    putInt("sesion_activa", -99)
+                    putLong("hora_inicio_ms", System.currentTimeMillis())
+                    putString("turno_maquina", datos.maquina)
+                    putString("turno_operador", datos.operador)
+                    apply()
+                }
+                seccionConfiguracion.visibility = View.GONE
+                seccionProduccion.visibility    = View.VISIBLE
+                Toast.makeText(
+                    this@MainActivity,
+                    "Sin red — turno guardado, se enviará al reconectar",
+                    Toast.LENGTH_LONG
+                ).show()
+            } finally {
+                btnIniciarTurno.isEnabled = true
+                btnIniciarTurno.text = "INICIAR TURNO"
             }
         }
+    }
+
+    // Helper para que los 4 botones (pacas, finalizar, paros) tengan el mismo
+    // mensaje cuando el server rechaza, sin duplicar el código de leer errorBody.
+    private fun extraerDetalleErrorHttp(resp: retrofit2.Response<*>): String {
+        return try {
+            resp.errorBody()?.string()?.take(300)?.replace("\n", " ")?.trim()
+        } catch (_: Exception) { null } ?: "Error HTTP ${resp.code()}"
     }
 
     private fun llamarApiRegistrarPallet(datos: RegistrarPalletRequest) {
         btnEnviarPallet.isEnabled = false
-        lifecycleScope.launch(Dispatchers.IO) {
+        val cantidad = datos.cantidad_pacas
+        val hora = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+
+        lifecycleScope.launch {
+            // Sesión aún sin id real (turno encolado offline): no tiene sentido
+            // intentar directo, el server no conoce -99. Encolamos y SyncWorker
+            // la enviará con el id real cuando iniciar_turno se sincronice.
+            if (sesionActualId == -99) {
+                colaRepo.enqueueRegistrarPallet(datos)
+                tvHistorialPacas.text = "🟡 $cantidad pacas - $hora (pendiente)\n" + tvHistorialPacas.text
+                etCantidadPacas.text.clear()
+                btnEnviarPallet.isEnabled = true
+                return@launch
+            }
+
             try {
-                val respuesta = RetrofitClient.apiService.registrarPallet(datos)
-                withContext(Dispatchers.Main) {
-                    if (respuesta.isSuccessful) {
-                        Toast.makeText(this@MainActivity, "Registro exitoso", Toast.LENGTH_SHORT).show()
-                        etCantidadPacas.text.clear()
-                        val hora = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
-                        tvHistorialPacas.text = "🟢 ${datos.cantidad_pacas} pacas - $hora\n" + tvHistorialPacas.text
-                        iniciarSincronizacion()
-                    } else {
-                        forzarReinicioPorError("Sesión inválida en el servidor.")
-                    }
-                    btnEnviarPallet.isEnabled = true
+                val resp = withContext(Dispatchers.IO) {
+                    RetrofitClient.apiService.registrarPallet(datos)
+                }
+                if (resp.isSuccessful) {
+                    tvHistorialPacas.text = "🟢 $cantidad pacas - $hora\n" + tvHistorialPacas.text
+                    etCantidadPacas.text.clear()
+                } else {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("No se pudo registrar la paca")
+                        .setMessage(extraerDetalleErrorHttp(resp))
+                        .setPositiveButton("Entendido", null)
+                        .show()
                 }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    guardarPacaPendiente(datos)
-                    val hora = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
-                    tvHistorialPacas.text = "🟡 ${datos.cantidad_pacas} pacas - $hora (PENDIENTE)\n" + tvHistorialPacas.text
-                    Toast.makeText(this@MainActivity, "Sin red. Paca guardada en cola local.", Toast.LENGTH_LONG).show()
-                    etCantidadPacas.text.clear()
-                    btnEnviarPallet.isEnabled = true
-                }
+                ErrorReporter.warn("MainActivity", "Sin red al registrar paca, encolando: ${e.message}")
+                colaRepo.enqueueRegistrarPallet(datos)
+                tvHistorialPacas.text = "🟡 $cantidad pacas - $hora (pendiente)\n" + tvHistorialPacas.text
+                etCantidadPacas.text.clear()
+            } finally {
+                btnEnviarPallet.isEnabled = true
             }
         }
     }
 
     private fun llamarApiFinalizarTurno(datos: FinalizarTurnoRequest) {
         btnTerminarTurno.isEnabled = false
-        lifecycleScope.launch(Dispatchers.IO) {
+
+        lifecycleScope.launch {
+            // Sesión sin id real: solo podemos encolar. El bloqueo de cascada en
+            // SyncWorker lo manejará si iniciar_turno quedó fatal.
+            if (sesionActualId == -99) {
+                colaRepo.enqueueFinalizarTurno(datos)
+                tvHistorialPacas.text = ""
+                forzarReinicioPorError("Turno enviado a cola — se cerrará al conectar")
+                btnTerminarTurno.isEnabled = true
+                return@launch
+            }
+
             try {
-                val respuesta = RetrofitClient.apiService.finalizarTurno(datos)
-                withContext(Dispatchers.Main) {
-                    if (respuesta.isSuccessful) {
-                        tvHistorialPacas.text = ""
-                        forzarReinicioPorError("Turno Cerrado Correctamente")
-                    } else {
-                        forzarReinicioPorError("No se encontró este turno.")
-                    }
+                val resp = withContext(Dispatchers.IO) {
+                    RetrofitClient.apiService.finalizarTurno(datos)
+                }
+                if (resp.isSuccessful) {
+                    tvHistorialPacas.text = ""
+                    forzarReinicioPorError("Turno finalizado")
+                } else if (resp.code() == 404) {
+                    // La sesión ya no existe en el servidor (p. ej. eliminada en la BD).
+                    // No hay nada que cerrar: limpiamos el estado local y volvemos a la
+                    // pantalla de inicio para que se pueda arrancar un turno nuevo.
+                    tvHistorialPacas.text = ""
+                    forzarReinicioPorError("La sesión ya no existe en el servidor — listo para iniciar un turno nuevo.")
+                } else {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("No se pudo finalizar el turno")
+                        .setMessage(extraerDetalleErrorHttp(resp))
+                        .setPositiveButton("Entendido", null)
+                        .show()
                     btnTerminarTurno.isEnabled = true
                 }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "Error de conexión.", Toast.LENGTH_LONG).show()
-                    btnTerminarTurno.isEnabled = true
+                ErrorReporter.warn("MainActivity", "Sin red al finalizar turno, encolando: ${e.message}")
+                colaRepo.enqueueFinalizarTurno(datos)
+                tvHistorialPacas.text = ""
+                forzarReinicioPorError("Sin red — turno guardado, se cerrará al reconectar")
+                btnTerminarTurno.isEnabled = true
+            }
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        connectivityObserver.register()
+        tabletsWsManager.connect()
+        colaRepo.dispararSync()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        connectivityObserver.unregister()
+        tabletsWsManager.disconnect()
+    }
+
+    private fun observarBadge() {
+        lifecycleScope.launch {
+            colaRepo.operacionesFlow.collectLatest { lista ->
+                val count = lista.count { !it.fatal }
+                tvBadge.text = count.toString()
+                val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+                val hasNetwork = cm.activeNetwork
+                    ?.let { cm.getNetworkCapabilities(it) }
+                    ?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+                val color = when {
+                    !hasNetwork -> "#F44336"
+                    count > 0   -> "#FF9800"
+                    else        -> "#4CAF50"
+                }
+                tvBadge.background.mutate().also {
+                    (it as? android.graphics.drawable.GradientDrawable)?.setColor(android.graphics.Color.parseColor(color))
+                }
+                tvBadge.setOnClickListener {
+                    startActivity(Intent(this@MainActivity, PendientesActivity::class.java))
                 }
             }
         }
@@ -706,96 +987,13 @@ class MainActivity : AppCompatActivity() {
         spinnerTipo.setSelection(0)
         bloquearSpinnersDesdeMaquina()
         limpiarEstadoParo()
+        // Re-habilitar el botón de cerrar turno: la rama de éxito de finalizar lo
+        // deja deshabilitado, y sin esto el siguiente turno lo mostraría bloqueado.
+        btnTerminarTurno.isEnabled = true
         seccionProduccion.visibility    = View.GONE
         seccionConfiguracion.visibility = View.VISIBLE
     }
 
-    // ==========================================
-    // COLA OFFLINE
-    // ==========================================
-
-    private fun guardarPacaPendiente(datos: RegistrarPalletRequest) {
-        val prefs = getSharedPreferences("SIGEP_OFFLINE", MODE_PRIVATE)
-        val lista = obtenerPendientes()
-        lista.add(datos)
-        prefs.edit().putString("cola_pendientes", Gson().toJson(lista)).apply()
-    }
-
-    private fun obtenerPendientes(): MutableList<RegistrarPalletRequest> {
-        val prefs = getSharedPreferences("SIGEP_OFFLINE", MODE_PRIVATE)
-        val json  = prefs.getString("cola_pendientes", "[]")
-        val tipo  = object : TypeToken<MutableList<RegistrarPalletRequest>>() {}.type
-        return Gson().fromJson(json, tipo) ?: mutableListOf()
-    }
-
-    private fun guardarListaActualizada(lista: List<RegistrarPalletRequest>) {
-        getSharedPreferences("SIGEP_OFFLINE", MODE_PRIVATE)
-            .edit().putString("cola_pendientes", Gson().toJson(lista)).apply()
-    }
-
-    private fun guardarTurnoOffline(solicitud: IniciarTurnoRequest) {
-        getSharedPreferences("SIGEP_OFFLINE", MODE_PRIVATE)
-            .edit().putString("turno_pendiente_crear", Gson().toJson(solicitud)).apply()
-    }
-
-    private fun obtenerTurnoPendiente(): IniciarTurnoRequest? {
-        val json = getSharedPreferences("SIGEP_OFFLINE", MODE_PRIVATE)
-            .getString("turno_pendiente_crear", null) ?: return null
-        return Gson().fromJson(json, IniciarTurnoRequest::class.java)
-    }
-
-    private fun actualizarIdEnPalletsPendientes(nuevoId: Int) {
-        val lista = obtenerPendientes()
-        lista.forEach { it.sesion_id = nuevoId }
-        guardarListaActualizada(lista)
-    }
-
-    // Sincronización en dos fases: primero crea el turno si no existe en servidor,
-    // luego envía los pallets uno a uno hasta vaciar la cola.
-    private fun iniciarSincronizacion(alFinalizar: () -> Unit = {}) {
-        val turnoPendiente = obtenerTurnoPendiente()
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                if (turnoPendiente != null) {
-                    val resTurno = RetrofitClient.apiService.iniciarTurno(turnoPendiente)
-                    if (resTurno.isSuccessful) {
-                        val nuevoId = resTurno.body()?.sesion_id ?: -1
-                        sesionActualId = nuevoId
-                        getSharedPreferences("SIGEP_OFFLINE", MODE_PRIVATE)
-                            .edit().remove("turno_pendiente_crear").apply()
-                        actualizarIdEnPalletsPendientes(nuevoId)
-                        withContext(Dispatchers.Main) { iniciarSincronizacion(alFinalizar) }
-                        return@launch
-                    }
-                }
-
-                val pendientes = obtenerPendientes()
-                if (pendientes.isEmpty()) {
-                    withContext(Dispatchers.Main) { alFinalizar() }
-                    return@launch
-                }
-
-                val pacaActual = pendientes.first()
-                val respuesta  = RetrofitClient.apiService.registrarPallet(pacaActual)
-                if (respuesta.isSuccessful) {
-                    pendientes.removeAt(0)
-                    guardarListaActualizada(pendientes)
-                    withContext(Dispatchers.Main) {
-                        actualizarHistorialVisual(pacaActual.cantidad_pacas)
-                        iniciarSincronizacion(alFinalizar)
-                    }
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) { alFinalizar() }
-            }
-        }
-    }
-
-    private fun actualizarHistorialVisual(cantidad: Int) {
-        val regex = Regex("🟡 $cantidad pacas(.*?)(?:\\(PENDIENTE\\)|\\(Creando turno...\\))")
-        tvHistorialPacas.text = tvHistorialPacas.text.toString()
-            .replaceFirst(regex, "🟢 $cantidad pacas\$1(Sincronizado)")
-    }
 
     // ==========================================
     // CACHÉ LOCAL DE CATÁLOGOS
@@ -842,56 +1040,90 @@ class MainActivity : AppCompatActivity() {
 
     private fun llamarApiIniciarParo(motivo: String) {
         btnParo.isEnabled = false
-        lifecycleScope.launch(Dispatchers.IO) {
+        val req = IniciarParoRequest(sesion_id = sesionActualId!!, motivo = motivo)
+
+        // Helper local para aplicar el cambio visual del paro activo, una vez que
+        // sabemos que el server lo aceptó (o que lo encolamos para reintentar).
+        fun aplicarParoActivo(mensaje: String) {
+            paroActivo = true
+            btnParo.text = "REANUDAR OPERACIÓN"
+            btnParo.setBackgroundColor(Color.parseColor("#4CAF50"))
+            btnEnviarPallet.isEnabled = false
+            btnEnviarPallet.setBackgroundColor(Color.GRAY)
+            Toast.makeText(this@MainActivity, mensaje, Toast.LENGTH_SHORT).show()
+        }
+
+        lifecycleScope.launch {
+            if (sesionActualId == -99) {
+                colaRepo.enqueueIniciarParo(req)
+                aplicarParoActivo("Paro en cola")
+                btnParo.isEnabled = true
+                return@launch
+            }
+
             try {
-                val solicitud = IniciarParoRequest(sesion_id = sesionActualId!!, motivo = motivo)
-                val respuesta = RetrofitClient.apiService.iniciarParo(solicitud)
-                withContext(Dispatchers.Main) {
-                    if (respuesta.isSuccessful) {
-                        paroActivo = true
-                        btnParo.text = "REANUDAR OPERACIÓN"
-                        btnParo.setBackgroundColor(Color.parseColor("#4CAF50"))
-                        btnEnviarPallet.isEnabled = false
-                        btnEnviarPallet.setBackgroundColor(Color.GRAY)
-                        Toast.makeText(this@MainActivity, "Paro Registrado", Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(this@MainActivity, "Error del servidor al registrar paro", Toast.LENGTH_SHORT).show()
-                    }
-                    btnParo.isEnabled = true
+                val resp = withContext(Dispatchers.IO) {
+                    RetrofitClient.apiService.iniciarParo(req)
+                }
+                if (resp.isSuccessful) {
+                    aplicarParoActivo("Paro registrado")
+                } else {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("No se pudo registrar el paro")
+                        .setMessage(extraerDetalleErrorHttp(resp))
+                        .setPositiveButton("Entendido", null)
+                        .show()
                 }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "Error de conexión. Intente de nuevo.", Toast.LENGTH_SHORT).show()
-                    btnParo.isEnabled = true
-                }
+                ErrorReporter.warn("MainActivity", "Sin red al iniciar paro, encolando: ${e.message}")
+                colaRepo.enqueueIniciarParo(req)
+                aplicarParoActivo("Sin red — paro guardado, se enviará al reconectar")
+            } finally {
+                btnParo.isEnabled = true
             }
         }
     }
 
     private fun llamarApiFinalizarParo() {
         btnParo.isEnabled = false
-        lifecycleScope.launch(Dispatchers.IO) {
+        val req = FinalizarParoRequest(sesion_id = sesionActualId!!)
+
+        fun aplicarReanudacion(mensaje: String) {
+            paroActivo = false
+            btnParo.text = "REGISTRAR PARO"
+            btnParo.setBackgroundColor(Color.parseColor("#FA8400"))
+            btnEnviarPallet.isEnabled = true
+            btnEnviarPallet.setBackgroundColor(Color.parseColor("#2196F3"))
+            Toast.makeText(this@MainActivity, mensaje, Toast.LENGTH_SHORT).show()
+        }
+
+        lifecycleScope.launch {
+            if (sesionActualId == -99) {
+                colaRepo.enqueueFinalizarParo(req)
+                aplicarReanudacion("Reanudación en cola")
+                btnParo.isEnabled = true
+                return@launch
+            }
+
             try {
-                val solicitud = FinalizarParoRequest(sesion_id = sesionActualId!!)
-                val respuesta = RetrofitClient.apiService.finalizarParo(solicitud)
-                withContext(Dispatchers.Main) {
-                    if (respuesta.isSuccessful) {
-                        paroActivo = false
-                        btnParo.text = "REGISTRAR PARO"
-                        btnParo.setBackgroundColor(Color.parseColor("#FA8400"))
-                        btnEnviarPallet.isEnabled = true
-                        btnEnviarPallet.setBackgroundColor(Color.parseColor("#2196F3"))
-                        Toast.makeText(this@MainActivity, "Operación Reanudada", Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(this@MainActivity, "Error del servidor al reanudar", Toast.LENGTH_SHORT).show()
-                    }
-                    btnParo.isEnabled = true
+                val resp = withContext(Dispatchers.IO) {
+                    RetrofitClient.apiService.finalizarParo(req)
+                }
+                if (resp.isSuccessful) {
+                    aplicarReanudacion("Producción reanudada")
+                } else {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("No se pudo finalizar el paro")
+                        .setMessage(extraerDetalleErrorHttp(resp))
+                        .setPositiveButton("Entendido", null)
+                        .show()
                 }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "Error de conexión. Intente de nuevo.", Toast.LENGTH_SHORT).show()
-                    btnParo.isEnabled = true
-                }
+                ErrorReporter.warn("MainActivity", "Sin red al finalizar paro, encolando: ${e.message}")
+                colaRepo.enqueueFinalizarParo(req)
+                aplicarReanudacion("Sin red — reanudación guardada, se enviará al reconectar")
+            } finally {
+                btnParo.isEnabled = true
             }
         }
     }
@@ -916,11 +1148,6 @@ class MainActivity : AppCompatActivity() {
                 val respuesta = RetrofitClient.apiService.obtenerHistorialSesion(idSesion)
                 withContext(Dispatchers.Main) {
                     var texto = ""
-                    val pendientesDeEstaSesion = obtenerPendientes().filter { it.sesion_id == idSesion }
-                    for (p in pendientesDeEstaSesion) {
-                        val hora = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
-                        texto += "🟡 ${p.cantidad_pacas} pacas - $hora (PENDIENTE)\n"
-                    }
                     if (respuesta.isSuccessful && respuesta.body() != null) {
                         for (p in respuesta.body()!!) {
                             texto += "🟢 ${p.cantidad_pacas} pacas - ${p.hora}\n"
@@ -929,13 +1156,9 @@ class MainActivity : AppCompatActivity() {
                     tvHistorialPacas.text = if (texto.isEmpty()) "No hay registros aún." else texto
                 }
             } catch (e: Exception) {
+                ErrorReporter.report("MainActivity", "Fallo al cargar historial de sesión", e)
                 withContext(Dispatchers.Main) {
-                    val pendientes = obtenerPendientes().filter { it.sesion_id == idSesion }
-                    tvHistorialPacas.text = if (pendientes.isNotEmpty()) {
-                        "Sin red:\n" + pendientes.joinToString("") { "🟡 ${it.cantidad_pacas} pacas (PENDIENTE)\n" }
-                    } else {
-                        "Sin red para cargar historial anterior."
-                    }
+                    tvHistorialPacas.text = "Sin red para cargar historial anterior."
                 }
             }
         }
@@ -1018,6 +1241,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             } catch (e: Exception) {
+                ErrorReporter.report("MainActivity", "Fallo al enviar pedido de insumo", e)
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@MainActivity, "Error de red. Intente de nuevo.", Toast.LENGTH_SHORT).show()
                 }

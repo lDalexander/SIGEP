@@ -13,15 +13,38 @@
         android:padding="24dp"
         android:gravity="center_vertical">
 
-        <TextView
+        <RelativeLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="CONTROL DE PRODUCCIÓN"
-            android:textSize="26sp"
-            android:textStyle="bold"
-            android:gravity="center"
-            android:textColor="#333333"
-            android:layout_marginBottom="30dp"/>
+            android:layout_marginBottom="30dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="CONTROL DE PRODUCCIÓN"
+                android:textSize="26sp"
+                android:textStyle="bold"
+                android:gravity="center"
+                android:textColor="#333333"/>
+
+            <TextView
+                android:id="@+id/tvBadgePendientes"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_alignParentEnd="true"
+                android:layout_centerVertical="true"
+                android:background="@drawable/badge_bg"
+                android:text="0"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp"
+                android:minWidth="32dp"
+                android:gravity="center"/>
+        </RelativeLayout>
 
         <LinearLayout
             android:id="@+id/seccionConfiguracion"

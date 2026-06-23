@@ -116,6 +116,7 @@ class MenuRolesActivity : AppCompatActivity() {
                         }
                     }
                 } catch (e: Exception) {
+                    ErrorReporter.report("MenuRoles", "Fallo en login de supervisor", e)
                     withContext(Dispatchers.Main) {
                         btnIngresar.isEnabled = true
                         btnIngresar.text = "Ingresar"

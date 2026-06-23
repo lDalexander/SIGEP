@@ -37,6 +37,9 @@ class SupervisorDashboardActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // statusBarColor está deprecado en API 35 (edge-to-edge); se mantiene
+        // para conservar el color de la barra en versiones anteriores.
+        @Suppress("DEPRECATION")
         window.statusBarColor = android.graphics.Color.parseColor("#1E293B")
         setContentView(R.layout.activity_supervisor_dashboard)
 
@@ -123,6 +126,7 @@ class SupervisorDashboardActivity : AppCompatActivity() {
                     }
                 }
             } catch (e: Exception) {
+                ErrorReporter.report("SupervisorDashboard", "Fallo al refrescar dashboard", e)
                 if (!esSilencioso) {
                     withContext(Dispatchers.Main) {
                         Toast.makeText(this@SupervisorDashboardActivity, "Error de conexión", Toast.LENGTH_SHORT).show()

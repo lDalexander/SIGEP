@@ -53,7 +53,12 @@ class AlertaPedidoActivity : AppCompatActivity() {
             Log.e("SIGEP_ALARM", ">>> MediaPlayer iniciado")
 
             // 2. VIBRACIÓN DE ALERTA (1s On, 0.5s Off)
-            vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as android.os.VibratorManager).defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            }
             Log.e("SIGEP_ALARM", ">>> Vibrator iniciado")
             val pattern = longArrayOf(0, 1000, 500) // Patrón: Pausa, Vibrar, Pausa
             
@@ -62,13 +67,16 @@ class AlertaPedidoActivity : AppCompatActivity() {
                     .setUsage(AudioAttributes.USAGE_ALARM)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                     .build()
+                // El reemplazo no-deprecado (VibratorManager + VibrationAttributes)
+                // exige una rama adicional por API; la sobrecarga sigue operativa.
+                @Suppress("DEPRECATION")
                 vibrator?.vibrate(VibrationEffect.createWaveform(pattern, 0), attributes)
             } else {
                 @Suppress("DEPRECATION")
                 vibrator?.vibrate(pattern, 0)
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            ErrorReporter.report("AlertaPedido", "Fallo al iniciar alarma/vibración", e)
         }
     }
 
@@ -79,6 +87,10 @@ class AlertaPedidoActivity : AppCompatActivity() {
         }
         mediaPlayer = null
         vibrator?.cancel()
+        // Cancela también la notificación del canal — su sonido (RingtoneManager
+        // de tipo ALARM) sigue corriendo mientras la notif esté visible, aunque
+        // ya hayamos detenido el MediaPlayer de alarm.mp3.
+        SigepNotificationManager.cancelarAlertaPedido(this)
     }
 
     override fun onDestroy() {

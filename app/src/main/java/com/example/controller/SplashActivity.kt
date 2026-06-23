@@ -25,9 +25,12 @@ class SplashActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_splash)
         supportActionBar?.hide()
-        verificarActualizacion()
+        // API de actualización deshabilitada temporalmente (aún no integrada).
+        // Para reactivarla, reemplazar la línea siguiente por: verificarActualizacion()
+        continuarAPrincipal()
     }
 
+    @Suppress("unused")
     private fun verificarActualizacion() {
         lifecycleScope.launch {
             try {
@@ -52,6 +55,7 @@ class SplashActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 // Sin red al arrancar: continuamos sin forzar actualización
                 // para que la app sea usable en condiciones de red degradada.
+                ErrorReporter.report("SplashActivity", "Fallo al consultar versión", e)
                 continuarAPrincipal()
             }
         }
@@ -66,6 +70,7 @@ class SplashActivity : AppCompatActivity() {
                 packageManager.getPackageInfo(packageName, 0).versionCode
             }
         } catch (e: Exception) {
+            ErrorReporter.report("SplashActivity", "No se pudo leer versionCode del package", e)
             0
         }
     }

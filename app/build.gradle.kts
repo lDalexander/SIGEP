@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     id("com.google.gms.google-services")
+    id("com.google.firebase.crashlytics")
 }
 
 android {
@@ -15,8 +16,8 @@ android {
         applicationId = "com.example.controller"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -29,6 +30,9 @@ android {
                 "proguard-rules.pro"
             )
         }
+    }
+    buildFeatures {
+        buildConfig = true
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
@@ -58,8 +62,16 @@ dependencies {
 
     // 🔥 WebSocket (OkHttp)
     implementation("com.squareup.okhttp3:okhttp:4.11.0")
+    implementation("com.squareup.okhttp3:logging-interceptor:4.11.0")
 
-    // 🔥 Firebase FCM
+    // 🔥 Firebase FCM + Crashlytics
     implementation(platform("com.google.firebase:firebase-bom:32.7.0"))
     implementation("com.google.firebase:firebase-messaging-ktx")
+    implementation("com.google.firebase:firebase-crashlytics-ktx")
+
+    // WorkManager (sync worker)
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
+
+    // ProcessLifecycleOwner (heartbeat start/stop)
+    implementation("androidx.lifecycle:lifecycle-process:2.6.2")
 }
