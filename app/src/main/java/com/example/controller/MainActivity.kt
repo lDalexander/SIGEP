@@ -213,6 +213,11 @@ class MainActivity : AppCompatActivity() {
         val prefs = getSharedPreferences(NOMBRE_PREFS, MODE_PRIVATE)
         prefs.registerOnSharedPreferenceChangeListener(prefsListener)
 
+        // El operario NUNCA debe recibir la alarma de pedidos de insumo. Si esta
+        // tablet se usó antes como insumista, el pref de tipo y el token FCM podían
+        // quedar asociados a Granel/Empaque. Lo corregimos al entrar al panel.
+        asegurarIdentidadOperarioFcm()
+
         val sesionGuardada  = prefs.getInt("sesion_activa", -1)
         val timestampInicio = prefs.getLong("hora_inicio_ms", 0L)
 
@@ -1004,6 +1009,33 @@ class MainActivity : AppCompatActivity() {
                     startActivity(Intent(this@MainActivity, PendientesActivity::class.java))
                 }
             }
+        }
+    }
+
+    // Marca esta tablet como operario para el sistema de alertas de insumos:
+    //  1) limpia "tipo_insumo_usuario" → SigepFirebaseMessagingService descarta los
+    //     FCM SOLICITUD_INSUMO (el filtro exige que coincida con el tipo del usuario).
+    //  2) reasigna el token FCM al usuario operario → el backend deja de incluir esta
+    //     tablet al notificar a los insumistas (filtra por rol Granel/Empaque del token).
+    private fun asegurarIdentidadOperarioFcm() {
+        val prefs = getSharedPreferences(NOMBRE_PREFS, MODE_PRIVATE)
+        prefs.edit().putString("tipo_insumo_usuario", "").apply()
+        val usuarioId = prefs.getInt("usuario_id", -1)
+        try {
+            com.google.firebase.messaging.FirebaseMessaging.getInstance().token
+                .addOnSuccessListener { token ->
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        try {
+                            RetrofitClient.apiService.registrarTokenFcm(
+                                SolicitudTokenFcm(token = token, usuarioId = if (usuarioId == -1) null else usuarioId)
+                            )
+                        } catch (e: Exception) {
+                            ErrorReporter.warn("MainActivity", "No se pudo reasignar token FCM al operario: ${e.message}")
+                        }
+                    }
+                }
+        } catch (e: Exception) {
+            ErrorReporter.report("MainActivity", "Fallo al obtener token FCM (operario)", e)
         }
     }
 
