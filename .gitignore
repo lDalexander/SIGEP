@@ -23,3 +23,8 @@ local.properties
 
 # Documentacion interna (no versionada)
 /docs
+
+# Firma de release: NUNCA versionar el keystore ni las claves
+/keystore.properties
+*.jks
+*.keystore
