@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Controller"
+rootProject.name = "SIGEP"
 include(":app")
