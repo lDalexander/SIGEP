@@ -109,12 +109,15 @@ data class PedidoPendienteResponse(
     val detalle: String,
     val cantidad: Int,
     val hora: String,
-    val estado: String = "PENDIENTE"
+    val estado: String = "PENDIENTE",
+    val cantidad_entregada: Int? = null,
+    val cantidad_recibida: Int? = null
 )
 
 data class PedidoAccionRequest(
     val pedido_id: Int,
-    val insumista_id: Int
+    val insumista_id: Int,
+    val cantidad_entregada: Int? = null   // solo se usa al entregar
 )
 
 data class EstadoPedidosResponse(
@@ -137,7 +140,8 @@ data class DetallePedidoOperador(
 
 data class ConfirmarRecepcionRequest(
     val pedido_id: Int,
-    val sesion_id: Int
+    val sesion_id: Int,
+    val cantidad_recibida: Int? = null
 )
 
 data class AdminLoginRequest(

@@ -174,7 +174,7 @@ class BandejaInsumosActivity : AppCompatActivity() {
         // Adaptador de entregas propias (zona superior), acción: confirmar entrega
         rvAsignados.layoutManager = LinearLayoutManager(this)
         adapterAsignados = PedidoAdapter(emptyList(), esAsignado = true) { pedido ->
-            entregarPedido(pedido.id)
+            pedirCantidadYEntregar(pedido)
         }
         rvAsignados.adapter = adapterAsignados
         rvAsignados.isNestedScrollingEnabled = false
@@ -456,10 +456,36 @@ class BandejaInsumosActivity : AppCompatActivity() {
         }
     }
 
-    private fun entregarPedido(pedidoId: Int) {
+    // Pregunta cuánto se entrega realmente (precargado con lo solicitado) y luego entrega.
+    // Permite registrar entregas parciales para luego comparar con lo que recibe el operario.
+    private fun pedirCantidadYEntregar(pedido: PedidoPendienteResponse) {
+        val input = EditText(this).apply {
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            setText(pedido.cantidad.toString())
+            setSelection(text.length)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Cantidad entregada")
+            .setMessage("Solicitado: ${pedido.cantidad} x ${pedido.detalle}\n\n¿Cuánto entregas realmente?")
+            .setView(input)
+            .setCancelable(false)
+            .setPositiveButton("Entregar") { _, _ ->
+                val cant = input.text.toString().toIntOrNull()
+                if (cant == null || cant < 0) {
+                    Toast.makeText(this, "Ingrese una cantidad válida", Toast.LENGTH_SHORT).show()
+                    actualizarListasManualmente()
+                } else {
+                    entregarPedido(pedido.id, cant)
+                }
+            }
+            .setNegativeButton("Cancelar") { _, _ -> actualizarListasManualmente() }
+            .show()
+    }
+
+    private fun entregarPedido(pedidoId: Int, cantidadEntregada: Int) {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val solicitud = PedidoAccionRequest(pedidoId, usuarioId)
+                val solicitud = PedidoAccionRequest(pedidoId, usuarioId, cantidadEntregada)
                 val respuesta = RetrofitClient.apiService.entregarPedido(solicitud)
                 withContext(Dispatchers.Main) {
                     if (respuesta.isSuccessful) {
