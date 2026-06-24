@@ -7,7 +7,13 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import androidx.work.*
 
-class ConnectivityObserver(context: Context) {
+class ConnectivityObserver(
+    context: Context,
+    // Se invoca cuando vuelve la conexión, además de vaciar la cola. Lo usa
+    // MainActivity para re-descargar catálogos/jerarquía (el "scanneo": revalidar
+    // contra MySQL que la jerarquía cacheada siga vigente). Corre en hilo de binder.
+    private val onReconnect: (() -> Unit)? = null
+) {
 
     private val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private val wm = WorkManager.getInstance(context)
@@ -18,6 +24,7 @@ class ConnectivityObserver(context: Context) {
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .build()
             wm.enqueueUniqueWork("flush_cola", ExistingWorkPolicy.KEEP, work)
+            onReconnect?.invoke()
         }
     }
 
