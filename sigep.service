@@ -1,0 +1,22 @@
+[Unit]
+Description=SIGEP — Sistema de Gestión de Producción
+Documentation=https://github.com/lDalexander/SIGEP
+After=network.target mysql.service
+Wants=mysql.service
+
+[Service]
+Type=exec
+User=john
+Group=john
+WorkingDirectory=/home/john/Proyectos/App_Llenadora/api_produccion
+Environment="PATH=/home/john/Proyectos/App_Llenadora/api_produccion/venv/bin:/usr/local/bin:/usr/bin"
+EnvironmentFile=-/home/john/Proyectos/App_Llenadora/api_produccion/.env
+ExecStart=/home/john/Proyectos/App_Llenadora/api_produccion/venv/bin/gunicorn main:app -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sigep
+
+[Install]
+WantedBy=multi-user.target
