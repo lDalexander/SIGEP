@@ -44,6 +44,12 @@ def _es_saco(presentacion):
     return "15KG" in norm or "25KG" in norm
 
 
+def _hms(segundos):
+    """Segundos -> 'HH:MM:SS' (mismo formato que una hora). None/negativo -> '00:00:00'."""
+    s = int(max(0, round(segundos or 0)))
+    return f"{s // 3600:02d}:{(s % 3600) // 60:02d}:{s % 60:02d}"
+
+
 def _excel(df_principal, hoja, filename, hojas_extra=None):
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
@@ -74,6 +80,7 @@ def descargar_excel(desde: str = Query(None), hasta: str = Query(None), db: Sess
 
         ahora = datetime.now()
         rows = []
+        paros_rows = []  # hoja extra: un renglón por cada paro, detallado
         for s in sesiones:
             total = int(db.query(func.coalesce(func.sum(PalletDB.cantidad_pacas), 0))
                         .filter(PalletDB.session_id == s.id).scalar() or 0)
@@ -81,13 +88,28 @@ def descargar_excel(desde: str = Query(None), hasta: str = Query(None), db: Sess
             pacas = 0 if saco else total
             sacos = total if saco else 0
 
-            paros = db.query(ParoMaquinaDB).filter(ParoMaquinaDB.session_id == s.id).all()
+            paros = (db.query(ParoMaquinaDB)
+                     .filter(ParoMaquinaDB.session_id == s.id)
+                     .order_by(ParoMaquinaDB.inicio_paro.asc()).all())
             seg_paros = 0.0
             for p in paros:
                 if p.duracion_segundos:
-                    seg_paros += p.duracion_segundos
+                    dur_p = p.duracion_segundos
                 elif p.fin_paro is None and p.inicio_paro:
-                    seg_paros += (ahora - p.inicio_paro).total_seconds()
+                    dur_p = (ahora - p.inicio_paro).total_seconds()
+                else:
+                    dur_p = 0.0
+                seg_paros += dur_p
+                paros_rows.append({
+                    "ID Sesión": s.id,
+                    "Máquina": s.maquina,
+                    "Operador": s.operador,
+                    "Fecha": p.inicio_paro.strftime("%Y-%m-%d") if p.inicio_paro else "",
+                    "Motivo": p.motivo or "",
+                    "Inicio": p.inicio_paro.strftime("%H:%M:%S") if p.inicio_paro else "",
+                    "Fin": p.fin_paro.strftime("%H:%M:%S") if p.fin_paro else "En curso",
+                    "Duración (HH:MM:SS)": _hms(dur_p),
+                })
             min_paros = seg_paros / 60.0
 
             if s.fin_turno and s.duracion_minutos:
@@ -114,14 +136,19 @@ def descargar_excel(desde: str = Query(None), hasta: str = Query(None), db: Sess
                 "Sacos": sacos,
                 "N° Paros": len(paros),
                 "Tiempo Paros (min)": round(min_paros, 1),
+                "Duración (HH:MM:SS)": _hms(dur_min * 60.0),
                 "Duración (min)": round(dur_min, 1),
                 "Tiempo Trabajado (min)": round(trabajado_min, 1),
                 "Productividad (pacas/h)": prod_h,
             })
 
         nombre = f"reporte_produccion_{d.isoformat()}_a_{h.isoformat()}.xlsx"
-        logger.info(f"Reporte producción {d}..{h}: {len(rows)} sesiones")
-        return _excel(pd.DataFrame(rows), "Producción", nombre)
+        # Hoja extra con el detalle de cada paro (hora inicio/fin, motivo, duración).
+        df_paros = pd.DataFrame(paros_rows, columns=[
+            "ID Sesión", "Máquina", "Operador", "Fecha", "Motivo", "Inicio", "Fin", "Duración (HH:MM:SS)",
+        ])
+        logger.info(f"Reporte producción {d}..{h}: {len(rows)} sesiones, {len(paros_rows)} paros")
+        return _excel(pd.DataFrame(rows), "Producción", nombre, hojas_extra=[("Paros", df_paros)])
     except HTTPException:
         raise
     except Exception as e:

@@ -2,7 +2,7 @@
 Este módulo define los modelos de datos (tablas) utilizando SQLAlchemy.
 Cada clase representa una tabla en la base de datos MySQL.
 """
-from sqlalchemy import Column, Integer, BigInteger, String, DateTime, Float, Boolean, Date, Text, ForeignKey, func
+from sqlalchemy import Column, Integer, BigInteger, String, DateTime, Float, Boolean, Date, Text, ForeignKey, UniqueConstraint, func
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
@@ -26,6 +26,44 @@ class UsuarioDB(Base):
 class MaquinaDB(Base):
     """Tabla que define las máquinas disponibles en la planta."""
     __tablename__ = "maquinas"
+    id = Column(Integer, primary_key=True, index=True)
+    nombre = Column(String(100), unique=True)
+    activa = Column(Boolean, default=True)
+
+class MaquinaProductoDB(Base):
+    """Jerarquía máquina → marca → presentación.
+
+    Define QUÉ puede producir cada máquina: una fila por cada combinación válida
+    (máquina, marca, presentación). La fragancia (Floral/Limón) es universal y NO
+    forma parte de la jerarquía. Es la fuente de verdad que consume la app Android
+    al iniciar turno (filtra los selectores) y la valida el backend.
+
+    Se usa texto para marca/presentación (coherente con `recetas_productos` y la
+    respuesta de /api/maquinas que ya consume la app). UNIQUE evita duplicados.
+    """
+    __tablename__ = "maquina_productos"
+    __table_args__ = (
+        UniqueConstraint("maquina_id", "marca", "presentacion", name="uq_maquina_marca_presentacion"),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    maquina_id = Column(Integer, ForeignKey("maquinas.id"), index=True, nullable=False)
+    marca = Column(String(100), nullable=False)
+    presentacion = Column(String(100), nullable=False)
+    activo = Column(Boolean, default=True)
+
+class MarcaDB(Base):
+    """Catálogo maestro de marcas (ULTREX, HIT, COMISARIATO, TORBELLINO, PQP...).
+
+    Tabla creada manualmente en MySQL; el modelo la mapea para poder gestionarla
+    desde la zona admin. Las marcas se asignan a máquinas vía `maquina_productos`."""
+    __tablename__ = "marcas"
+    id = Column(Integer, primary_key=True, index=True)
+    nombre = Column(String(100), unique=True)
+    activa = Column(Boolean, default=True)
+
+class PresentacionDB(Base):
+    """Catálogo maestro de presentaciones / gramajes (100 GR, 1 KG, 25 KG...)."""
+    __tablename__ = "presentaciones"
     id = Column(Integer, primary_key=True, index=True)
     nombre = Column(String(100), unique=True)
     activa = Column(Boolean, default=True)

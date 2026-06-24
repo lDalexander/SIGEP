@@ -23,6 +23,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from database import get_db, logger
+from sqlalchemy import text
 from models import (
     OperadorDB,
     AdministradorDB,
@@ -30,6 +31,10 @@ from models import (
     PalletDB,
     MantenimientoChecklistDB,
     MantenimientoChecklistItemDB,
+    MaquinaDB,
+    MaquinaProductoDB,
+    MarcaDB,
+    PresentacionDB,
 )
 
 router = APIRouter(prefix="/api/admin", tags=["Administración"])
@@ -293,3 +298,187 @@ def actualizar_checklist(checklist_id: int, datos: ChecklistUpdate, db: Session 
     ok = sum(1 for it in c.items if it.marcado)
     return {"id": c.id, "supervisor": c.supervisor, "comentarios": c.comentarios,
             "items_ok": ok, "total_items": len(c.items)}
+
+
+# ----------------------------------------------------------------------------
+# Jerarquía Máquina → Marca → Presentación (maquina_productos)
+# ----------------------------------------------------------------------------
+# Fuente de verdad de QUÉ puede producir cada máquina. La app Android la consume
+# (filtra selectores al iniciar turno) y la cachea offline; al reconectar la
+# re-descarga. Editar aquí se refleja en las tablets sin reinstalar la app.
+
+class MaquinaProductoIn(BaseModel):
+    maquina_id: int
+    marca: str
+    presentacion: str
+
+
+class MaquinaProductoUpdate(BaseModel):
+    marca: str | None = None
+    presentacion: str | None = None
+    activo: bool | None = None
+
+
+@router.get("/catalogos")
+def catalogos_jerarquia(db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    """Catálogos para poblar los selectores del editor: máquinas activas + las
+    listas maestras de marcas y presentaciones (tablas sin modelo SQLAlchemy)."""
+    maquinas = db.query(MaquinaDB).filter(MaquinaDB.activa.is_(True)).order_by(MaquinaDB.id).all()
+    marcas = [r[0] for r in db.execute(text(
+        "SELECT nombre FROM marcas WHERE activa = 1 ORDER BY nombre"
+    )).fetchall()]
+    presentaciones = [r[0] for r in db.execute(text(
+        "SELECT nombre FROM presentaciones WHERE activa = 1 ORDER BY id"
+    )).fetchall()]
+    return {
+        "maquinas": [{"id": m.id, "nombre": m.nombre} for m in maquinas],
+        "marcas": marcas,
+        "presentaciones": presentaciones,
+    }
+
+
+@router.get("/maquina_productos")
+def listar_maquina_productos(db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    """Matriz completa agrupada por máquina (incluye filas inactivas)."""
+    maquinas = db.query(MaquinaDB).order_by(MaquinaDB.id).all()
+    filas = db.query(MaquinaProductoDB).order_by(MaquinaProductoDB.marca, MaquinaProductoDB.presentacion).all()
+    por_maquina: dict[int, list] = {}
+    for f in filas:
+        por_maquina.setdefault(f.maquina_id, []).append(
+            {"id": f.id, "marca": f.marca, "presentacion": f.presentacion, "activo": bool(f.activo)}
+        )
+    return [
+        {"maquina_id": m.id, "maquina": m.nombre, "activa": bool(m.activa),
+         "productos": por_maquina.get(m.id, [])}
+        for m in maquinas
+    ]
+
+
+@router.post("/maquina_productos")
+def crear_maquina_producto(datos: MaquinaProductoIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    maquina = db.query(MaquinaDB).filter(MaquinaDB.id == datos.maquina_id).first()
+    if not maquina:
+        raise HTTPException(status_code=404, detail="Máquina no encontrada")
+    marca = (datos.marca or "").strip()
+    presentacion = (datos.presentacion or "").strip()
+    if not marca or not presentacion:
+        raise HTTPException(status_code=400, detail="Marca y presentación son obligatorias")
+    existente = db.query(MaquinaProductoDB).filter(
+        MaquinaProductoDB.maquina_id == datos.maquina_id,
+        MaquinaProductoDB.marca == marca,
+        MaquinaProductoDB.presentacion == presentacion,
+    ).first()
+    if existente:
+        if existente.activo:
+            raise HTTPException(status_code=409, detail="Esa combinación ya existe y está activa")
+        existente.activo = True
+        db.commit()
+        logger.info(f"Jerarquía reactivada: maq {datos.maquina_id} {marca} {presentacion} (admin {ctx.get('username')})")
+        return {"id": existente.id, "maquina_id": existente.maquina_id, "marca": marca,
+                "presentacion": presentacion, "activo": True, "reactivado": True}
+    fila = MaquinaProductoDB(maquina_id=datos.maquina_id, marca=marca, presentacion=presentacion, activo=True)
+    db.add(fila)
+    db.commit()
+    db.refresh(fila)
+    logger.info(f"Jerarquía creada: maq {datos.maquina_id} {marca} {presentacion} (admin {ctx.get('username')})")
+    return {"id": fila.id, "maquina_id": fila.maquina_id, "marca": marca, "presentacion": presentacion, "activo": True}
+
+
+@router.put("/maquina_productos/{fila_id}")
+def actualizar_maquina_producto(fila_id: int, datos: MaquinaProductoUpdate, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    fila = db.query(MaquinaProductoDB).filter(MaquinaProductoDB.id == fila_id).first()
+    if not fila:
+        raise HTTPException(status_code=404, detail="Combinación no encontrada")
+    if datos.marca is not None:
+        fila.marca = datos.marca.strip()
+    if datos.presentacion is not None:
+        fila.presentacion = datos.presentacion.strip()
+    if datos.activo is not None:
+        fila.activo = datos.activo
+    db.commit()
+    logger.info(f"Jerarquía editada: id {fila.id} (admin {ctx.get('username')})")
+    return {"id": fila.id, "maquina_id": fila.maquina_id, "marca": fila.marca,
+            "presentacion": fila.presentacion, "activo": bool(fila.activo)}
+
+
+@router.delete("/maquina_productos/{fila_id}")
+def eliminar_maquina_producto(fila_id: int, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    fila = db.query(MaquinaProductoDB).filter(MaquinaProductoDB.id == fila_id).first()
+    if not fila:
+        raise HTTPException(status_code=404, detail="Combinación no encontrada")
+    db.delete(fila)
+    db.commit()
+    logger.info(f"Jerarquía eliminada: id {fila_id} (admin {ctx.get('username')})")
+    return {"eliminado": fila_id}
+
+
+# ----------------------------------------------------------------------------
+# Catálogos maestros: Máquinas, Marcas, Presentaciones
+# ----------------------------------------------------------------------------
+# Altas para poder crear nuevas máquinas/marcas/presentaciones desde el editor de
+# jerarquía y luego asignarlas. Idempotente: si ya existe (incluso inactiva) se
+# reactiva en vez de duplicar (las columnas nombre son UNIQUE).
+
+class NombreIn(BaseModel):
+    nombre: str
+
+
+class MaquinaUpdate(BaseModel):
+    nombre: str | None = None
+    activa: bool | None = None
+
+
+def _crear_o_reactivar(db, modelo, campo_activo, nombre, etiqueta, ctx):
+    nombre = (nombre or "").strip()
+    if not nombre:
+        raise HTTPException(status_code=400, detail="El nombre es obligatorio")
+    existente = db.query(modelo).filter(modelo.nombre == nombre).first()
+    if existente:
+        if getattr(existente, campo_activo):
+            raise HTTPException(status_code=409, detail=f"{etiqueta} \"{nombre}\" ya existe")
+        setattr(existente, campo_activo, True)
+        db.commit()
+        logger.info(f"{etiqueta} reactivada: {nombre} (admin {ctx.get('username')})")
+        return {"id": existente.id, "nombre": existente.nombre, "activo": True, "reactivado": True}
+    fila = modelo(nombre=nombre)
+    setattr(fila, campo_activo, True)
+    db.add(fila)
+    db.commit()
+    db.refresh(fila)
+    logger.info(f"{etiqueta} creada: {nombre} (admin {ctx.get('username')})")
+    return {"id": fila.id, "nombre": fila.nombre, "activo": True}
+
+
+@router.post("/maquinas")
+def crear_maquina(datos: NombreIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    return _crear_o_reactivar(db, MaquinaDB, "activa", datos.nombre, "Máquina", ctx)
+
+
+@router.put("/maquinas/{maquina_id}")
+def actualizar_maquina(maquina_id: int, datos: MaquinaUpdate, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    maq = db.query(MaquinaDB).filter(MaquinaDB.id == maquina_id).first()
+    if not maq:
+        raise HTTPException(status_code=404, detail="Máquina no encontrada")
+    if datos.nombre is not None:
+        nuevo = datos.nombre.strip()
+        if not nuevo:
+            raise HTTPException(status_code=400, detail="El nombre no puede quedar vacío")
+        choque = db.query(MaquinaDB).filter(MaquinaDB.nombre == nuevo, MaquinaDB.id != maquina_id).first()
+        if choque:
+            raise HTTPException(status_code=409, detail="Ya existe otra máquina con ese nombre")
+        maq.nombre = nuevo
+    if datos.activa is not None:
+        maq.activa = datos.activa
+    db.commit()
+    logger.info(f"Máquina {maq.id} actualizada (admin {ctx.get('username')})")
+    return {"id": maq.id, "nombre": maq.nombre, "activa": bool(maq.activa)}
+
+
+@router.post("/marcas")
+def crear_marca(datos: NombreIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    return _crear_o_reactivar(db, MarcaDB, "activa", datos.nombre, "Marca", ctx)
+
+
+@router.post("/presentaciones")
+def crear_presentacion(datos: NombreIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    return _crear_o_reactivar(db, PresentacionDB, "activa", datos.nombre, "Presentación", ctx)

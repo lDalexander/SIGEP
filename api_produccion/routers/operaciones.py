@@ -7,10 +7,23 @@ from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 
 from database import get_db, logger
-from models import OperadorDB, MaquinaDB, SesionTrabajoDB, PalletDB, ParoMaquinaDB, PedidoBodegaDB, UsuarioDB, InsumoDB, RecetaProductoDB
+from models import OperadorDB, MaquinaDB, SesionTrabajoDB, PalletDB, ParoMaquinaDB, PedidoBodegaDB, UsuarioDB, InsumoDB, RecetaProductoDB, MaquinaProductoDB
 from schemas import IniciarTurno, RegistrarPalletRequest, FinalizarTurno, IniciarParo, FinalizarParo
 
 router = APIRouter(prefix="/api", tags=["Operaciones"])
+
+
+def _orden_presentacion(p: str):
+    """Ordena presentaciones por peso real (100 GR < 500 GR < 1 KG < 2 KG ...),
+    no alfabéticamente ('100 GR' < '1 KG' sería incorrecto en texto)."""
+    try:
+        partes = p.strip().upper().split()
+        valor = float(partes[0].replace(",", "."))
+        unidad = partes[1] if len(partes) > 1 else "GR"
+        gramos = valor * 1000 if unidad.startswith("K") else valor
+        return (gramos, p)
+    except Exception:
+        return (float("inf"), p)
 
 # Anti-ráfaga: defensa server-side contra vaciados masivos de cola desde la tablet.
 # Aplica incluso cuando el cliente no envía request_id (compatibilidad con apps viejas).
@@ -26,32 +39,40 @@ def obtener_operadores(db: Session = Depends(get_db)):
 
 @router.get("/maquinas")
 def obtener_maquinas(db: Session = Depends(get_db)):
-    """Lista las máquinas activas e incluye el catálogo de productos (marcas ->
-    presentaciones) derivado del BOM (recetas_productos).
+    """Lista las máquinas activas con su jerarquía de productos POR máquina.
 
-    El catálogo es global (no hay receta por máquina), así que se adjunta el mismo
-    a cada máquina. La app lo usa para poblar el selector de producto al iniciar
-    turno; solo se ofrecen combinaciones que SÍ tienen receta configurada.
+    Cada máquina trae solo las marcas/presentaciones que ESA máquina puede producir,
+    leídas de `maquina_productos` (la fuente de verdad de la jerarquía). La app las
+    usa para poblar en cascada los selectores al iniciar turno. Si una máquina no
+    tiene jerarquía configurada, devuelve `marcas: []` (la app cae a su fallback
+    local; NUNCA se devuelve un catálogo global, que era la causa del bug histórico).
     """
     maquinas = db.query(MaquinaDB).filter(MaquinaDB.activa.is_(True)).all()
 
-    # marca -> set de presentaciones, según las combinaciones que existen en el BOM.
-    marca_a_presentaciones: dict[str, list] = {}
-    recetas = db.query(RecetaProductoDB.marca, RecetaProductoDB.presentacion).distinct().all()
-    for marca, presentacion in recetas:
-        if not marca:
+    # maquina_id -> { marca -> [presentaciones] }, solo combinaciones activas.
+    por_maquina: dict[int, dict[str, list]] = {}
+    filas = (
+        db.query(MaquinaProductoDB)
+        .filter(MaquinaProductoDB.activo.is_(True))
+        .all()
+    )
+    for f in filas:
+        if not f.marca:
             continue
-        pres = marca_a_presentaciones.setdefault(marca, [])
-        if presentacion and presentacion not in pres:
-            pres.append(presentacion)
+        marcas = por_maquina.setdefault(f.maquina_id, {})
+        pres = marcas.setdefault(f.marca, [])
+        if f.presentacion and f.presentacion not in pres:
+            pres.append(f.presentacion)
 
-    catalogo_marcas = [
-        {"nombre": marca, "presentaciones": sorted(presentaciones)}
-        for marca, presentaciones in sorted(marca_a_presentaciones.items())
-    ]
+    def _catalogo(maquina_id: int) -> list:
+        marcas = por_maquina.get(maquina_id, {})
+        return [
+            {"nombre": marca, "presentaciones": sorted(presentaciones, key=_orden_presentacion)}
+            for marca, presentaciones in sorted(marcas.items())
+        ]
 
     return [
-        {"id": maq.id, "nombre": maq.nombre, "marcas": catalogo_marcas}
+        {"id": maq.id, "nombre": maq.nombre, "marcas": _catalogo(maq.id)}
         for maq in maquinas
     ]
 
@@ -163,6 +184,30 @@ def iniciar(datos: IniciarTurno, db: Session = Depends(get_db)):
     
     if turno_maquina_activo:
         raise HTTPException(status_code=400, detail="Esta máquina ya tiene un turno activo.")
+
+    # 3. Validación de jerarquía: la combinación (máquina, marca, presentación) debe
+    # existir y estar activa en maquina_productos. Defensa contra catálogos viejos en
+    # caché de la tablet o combinaciones imposibles para esa línea. Solo se valida si
+    # la máquina TIENE jerarquía configurada; si no tiene ninguna fila, no se bloquea
+    # (compatibilidad: una máquina sin configurar no debe impedir trabajar).
+    maquina = db.query(MaquinaDB).filter(MaquinaDB.nombre == datos.maquina).first()
+    if maquina:
+        tiene_jerarquia = db.query(MaquinaProductoDB).filter(
+            MaquinaProductoDB.maquina_id == maquina.id,
+            MaquinaProductoDB.activo.is_(True),
+        ).first()
+        if tiene_jerarquia:
+            combo_valido = db.query(MaquinaProductoDB).filter(
+                MaquinaProductoDB.maquina_id == maquina.id,
+                MaquinaProductoDB.marca == datos.marca,
+                MaquinaProductoDB.presentacion == datos.presentacion,
+                MaquinaProductoDB.activo.is_(True),
+            ).first()
+            if not combo_valido:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{datos.maquina} no produce {datos.marca} {datos.presentacion}.",
+                )
 
     # NOTA: iniciar_turno NO depende del checklist de mantenimiento.
     # El checklist es offline-first (se encola en la tablet y sincroniza por su

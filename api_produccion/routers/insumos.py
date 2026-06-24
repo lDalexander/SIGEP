@@ -14,6 +14,7 @@ import schemas
 import models
 from ws_manager import manager
 from services.fcm_service import notificar_insumistas_por_fcm
+from services.email_service import notificar_pedido_insumo
 
 ENTREGAS_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -64,6 +65,13 @@ def crear_pedido_dinamico(
             f"Nuevo pedido — {maquina_txt}",
             f"{datos.cantidad} x {datos.detalle_pedido} (operador: {operador_txt})",
             nuevo_pedido.id,
+        )
+
+        # 📧 4. Correo a administración/bodega (asíncrono y tolerante a fallos).
+        background_tasks.add_task(
+            notificar_pedido_insumo,
+            maquina_txt, operador_txt, datos.detalle_pedido, datos.cantidad,
+            categoria_asignada, nuevo_pedido.id,
         )
 
         logger.info(f"📦 PEDIDO ENRUTADO A [{categoria_asignada}]: {datos.cantidad} x {datos.detalle_pedido}")
