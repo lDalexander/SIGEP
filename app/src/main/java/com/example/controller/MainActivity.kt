@@ -129,9 +129,14 @@ class MainActivity : AppCompatActivity() {
     private var listaOperadoresServidor: List<String> = emptyList()
     private var listaMaquinasServidor: List<String> = emptyList()
 
-    // Jerarquía dinámica descargada con la lista de máquinas.
-    // Cuando el backend incluya `marcas` en api/maquinas, este mapa reemplaza los locales.
+    // Jerarquía dinámica descargada con la lista de máquinas (marcas/presentaciones
+    // POR máquina desde api/maquinas). Reemplaza a los mapas locales cuando llega.
     private var jerarquiaMaquinas: Map<String, List<MarcaResponse>> = emptyMap()
+
+    // Versión del esquema de caché de la jerarquía. Subir este número invalida
+    // cachés viejas. v2 descarta el catálogo GLOBAL erróneo que guardaban versiones
+    // previas (mismo para todas las máquinas) y cae al fallback local hasta re-descargar.
+    private val cacheVersionJerarquia = 2
 
     // Fallback local hasta que el backend devuelva la jerarquía en api/maquinas.
     // Eliminar estos mapas cuando el servidor implemente el campo `marcas` en MaquinaResponse.
@@ -195,7 +200,11 @@ class MainActivity : AppCompatActivity() {
 
         colaRepo = ColaSyncRepository(applicationContext)
         val tabletPrefs = PrefsRepository(applicationContext)
-        connectivityObserver = ConnectivityObserver(applicationContext)
+        connectivityObserver = ConnectivityObserver(applicationContext) {
+            // Al recuperar conexión re-descargamos catálogos + jerarquía para que
+            // la tablet quede sincronizada con MySQL sin esperar a reiniciar la app.
+            descargarCatalogosDesdeServidor()
+        }
         tabletsWsManager = TabletsWebSocketManager(tabletPrefs.deviceId, WorkManager.getInstance(applicationContext))
 
         observarBadge()
@@ -1069,6 +1078,7 @@ class MainActivity : AppCompatActivity() {
     ) {
         val gson = Gson()
         getSharedPreferences("SIGEP_CATALOGOS", MODE_PRIVATE).edit().apply {
+            putInt("cache_version", cacheVersionJerarquia)
             putString("cache_operadores", gson.toJson(operadores))
             putString("cache_maquinas", gson.toJson(maquinas))
             if (jerarquia.isNotEmpty()) {
@@ -1090,8 +1100,12 @@ class MainActivity : AppCompatActivity() {
             listaMaquinasServidor   = gson.fromJson(jsonMaq, tipoLista)
         }
 
+        // La jerarquía cacheada solo es válida si la escribió esta versión del esquema.
+        // Cachés viejas (catálogo global erróneo) se ignoran → se usa el fallback local
+        // correcto hasta que se re-descargue del servidor.
+        val versionCache  = prefs.getInt("cache_version", 1)
         val jsonJerarquia = prefs.getString("cache_jerarquia_maquinas", null)
-        if (jsonJerarquia != null) {
+        if (versionCache >= cacheVersionJerarquia && jsonJerarquia != null) {
             val tipoJerarquia = object : TypeToken<Map<String, List<MarcaResponse>>>() {}.type
             jerarquiaMaquinas = gson.fromJson(jsonJerarquia, tipoJerarquia) ?: emptyMap()
         }
