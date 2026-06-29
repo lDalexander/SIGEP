@@ -31,8 +31,10 @@ class HeartbeatService : Service() {
                     val resp = RetrofitClient.apiService.enviarHeartbeat(
                         HeartbeatRequest(
                             deviceId   = prefs.deviceId,
-                            nombre     = prefs.tabletNombre,
-                            maquina    = prefs.tabletMaquina,
+                            // Reporta la máquina/operador del turno activo (v1.3.1) para que
+                            // el admin pueda dirigirle alertas; si no hay turno, usa Ajustes.
+                            nombre     = prefs.nombreReporte,
+                            maquina    = prefs.maquinaReporte,
                             pendientes = pendientes,
                             enLinea    = true
                         )
