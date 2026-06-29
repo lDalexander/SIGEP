@@ -172,6 +172,26 @@
                 android:textColor="#FFFFFF"
                 android:textStyle="bold"
                 android:backgroundTint="#FA8400"
+                android:layout_marginBottom="12dp" />
+
+            <Button
+                android:id="@+id/btnComentarioTurno"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:text="COMENTARIOS DEL TURNO"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:backgroundTint="#2563EB"
+                android:layout_marginBottom="10dp" />
+
+            <Button
+                android:id="@+id/btnReporteApp"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:text="REPORTAR UN PROBLEMA CON LA APP"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:backgroundTint="#64748B"
                 android:layout_marginBottom="32dp" />
         </LinearLayout>
 

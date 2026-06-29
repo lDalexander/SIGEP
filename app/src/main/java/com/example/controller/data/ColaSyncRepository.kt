@@ -92,6 +92,29 @@ class ColaSyncRepository(private val context: Context) {
         dispararSync()
     }
 
+    // CAMBIO 5: comentarios del turno y reportes de la app, vía la misma cola.
+    suspend fun enqueueComentarioTurno(req: ComentarioTurnoRequest) {
+        val requestId = req.request_id.ifBlank { UUID.randomUUID().toString() }
+        dao.insertar(OperacionPendiente(
+            tipo        = "COMENTARIO_TURNO",
+            payloadJson = gson.toJson(req.copy(request_id = requestId)),
+            requestId   = requestId,
+            creadoEn    = System.currentTimeMillis()
+        ))
+        dispararSync()
+    }
+
+    suspend fun enqueueReporteApp(req: ReporteAppRequest) {
+        val requestId = req.request_id.ifBlank { UUID.randomUUID().toString() }
+        dao.insertar(OperacionPendiente(
+            tipo        = "REPORTE_APP",
+            payloadJson = gson.toJson(req.copy(request_id = requestId)),
+            requestId   = requestId,
+            creadoEn    = System.currentTimeMillis()
+        ))
+        dispararSync()
+    }
+
     suspend fun desmarcarFatal(id: Long) {
         dao.marcarError(id, "", false)
     }

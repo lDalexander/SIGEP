@@ -129,6 +129,21 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
                 if (!resp.isSuccessful) throw HttpException(resp)
                 null
             }
+            "COMENTARIO_TURNO" -> {
+                // Comentario libre del turno (CAMBIO 5). Idempotente por request_id;
+                // el backend responde 200 también ante duplicado.
+                val req = gson.fromJson(op.payloadJson, ComentarioTurnoRequest::class.java)
+                val resp = api.enviarComentarioTurno(req)
+                if (!resp.isSuccessful) throw HttpException(resp)
+                null
+            }
+            "REPORTE_APP" -> {
+                // Reporte de problema con la app (CAMBIO 5).
+                val req = gson.fromJson(op.payloadJson, ReporteAppRequest::class.java)
+                val resp = api.enviarReporteApp(req)
+                if (!resp.isSuccessful) throw HttpException(resp)
+                null
+            }
             else -> {
                 Log.w("SyncWorker", "Tipo desconocido: ${op.tipo}")
                 null

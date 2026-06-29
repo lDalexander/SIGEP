@@ -23,6 +23,7 @@ local.properties
 
 # Documentacion interna (no versionada)
 /docs
+CLAUDE.md
 
 # Firma de release: NUNCA versionar el keystore ni las claves
 /keystore.properties

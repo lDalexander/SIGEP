@@ -44,6 +44,8 @@ class MainActivity : AppCompatActivity() {
     private var sesionActualId: Int? = null
     private lateinit var btnSolicitarInsumo: Button
     private lateinit var btnParo: Button
+    private lateinit var btnComentarioTurno: Button
+    private lateinit var btnReporteApp: Button
     private lateinit var colaRepo: ColaSyncRepository
     private lateinit var connectivityObserver: ConnectivityObserver
     private lateinit var tabletsWsManager: TabletsWebSocketManager
@@ -129,6 +131,11 @@ class MainActivity : AppCompatActivity() {
     private var listaOperadoresServidor: List<String> = emptyList()
     private var listaMaquinasServidor: List<String> = emptyList()
 
+    // Tipo de línea por máquina ("SOLIDO"/"LIQUIDO"), descargado con api/maquinas y
+    // cacheado. Al elegir Sólido/Líquido el spinner de máquina se filtra por esto
+    // (ver CAMBIO 2). Si una máquina no aparece aquí, se asume SOLIDO.
+    private var tipoPorMaquina: Map<String, String> = emptyMap()
+
     // Jerarquía dinámica descargada con la lista de máquinas (marcas/presentaciones
     // POR máquina desde api/maquinas). Reemplaza a los mapas locales cuando llega.
     private var jerarquiaMaquinas: Map<String, List<MarcaResponse>> = emptyMap()
@@ -205,7 +212,13 @@ class MainActivity : AppCompatActivity() {
             // la tablet quede sincronizada con MySQL sin esperar a reiniciar la app.
             descargarCatalogosDesdeServidor()
         }
-        tabletsWsManager = TabletsWebSocketManager(tabletPrefs.deviceId, WorkManager.getInstance(applicationContext))
+        tabletsWsManager = TabletsWebSocketManager(
+            tabletPrefs.deviceId,
+            WorkManager.getInstance(applicationContext)
+        ) { id, texto ->
+            // Mensaje del admin web (CAMBIO 4): popup sobre la pantalla de producción.
+            MensajesAdmin.mostrar(this, id, texto)
+        }
 
         observarBadge()
         cargarCatalogosDesdeCache()
@@ -476,6 +489,8 @@ class MainActivity : AppCompatActivity() {
         btnEnviarPallet      = findViewById(R.id.btnEnviarPallet)
         btnTerminarTurno     = findViewById(R.id.btnTerminarTurno)
         btnParo              = findViewById(R.id.btnParo)
+        btnComentarioTurno   = findViewById(R.id.btnComentarioTurno)
+        btnReporteApp        = findViewById(R.id.btnReporteApp)
         tvStatusPedidos               = findViewById(R.id.tvStatusPedidos)
         rvPendientesConfirmacion      = findViewById(R.id.rvPendientesConfirmacion)
         tvPendientesConfirmacionLabel = findViewById(R.id.tvPendientesConfirmacionLabel)
@@ -488,12 +503,13 @@ class MainActivity : AppCompatActivity() {
         spinnerTipo.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 if (position > 0) {
-                    if (tipos[position] == "Sólido") {
-                        val maquinas = if (listaMaquinasServidor.size > 1) listaMaquinasServidor else listaMaquinasLocal
+                    // Filtra las máquinas por el tipo de línea elegido (Sólido/Líquido).
+                    val maquinas = maquinasParaTipo(tipos[position])
+                    if (maquinas.size > 1) {
                         spinnerMaquina.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, maquinas)
                         spinnerMaquina.isEnabled = true
                     } else {
-                        spinnerMaquina.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, arrayOf("-- En desarrollo --"))
+                        spinnerMaquina.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, arrayOf("-- Sin máquinas de este tipo --"))
                         spinnerMaquina.isEnabled = false
                     }
                     bloquearSpinnersDesdeOperador()
@@ -713,6 +729,83 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // CAMBIO 5 — Comentarios del turno (requiere turno activo).
+        btnComentarioTurno.setOnClickListener {
+            if (sesionActualId == null) {
+                Toast.makeText(this, "Inicia un turno para dejar comentarios.", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            mostrarDialogoTexto(
+                "Comentarios del turno",
+                "Ej: Se trabaja a velocidad lenta por lámina en mal estado"
+            ) { texto ->
+                val prefs = getSharedPreferences(NOMBRE_PREFS, MODE_PRIVATE)
+                lifecycleScope.launch {
+                    colaRepo.enqueueComentarioTurno(
+                        ComentarioTurnoRequest(
+                            session_id = sesionActualId,
+                            maquina    = prefs.getString("turno_maquina", null) ?: spinnerMaquina.selectedItem?.toString(),
+                            operador   = prefs.getString("turno_operador", null) ?: spinnerOperador.selectedItem?.toString(),
+                            texto      = texto
+                        )
+                    )
+                    Toast.makeText(this@MainActivity, "Comentario guardado", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+
+        // CAMBIO 5 — Reportar un problema con la app (disponible siempre, con o sin turno).
+        btnReporteApp.setOnClickListener {
+            mostrarDialogoTexto(
+                "Reportar un problema con la app",
+                "Describe la falla (qué hacías y qué pasó)…"
+            ) { texto ->
+                val prefs = getSharedPreferences(NOMBRE_PREFS, MODE_PRIVATE)
+                lifecycleScope.launch {
+                    colaRepo.enqueueReporteApp(
+                        ReporteAppRequest(
+                            session_id = sesionActualId,
+                            maquina    = prefs.getString("turno_maquina", null),
+                            operador   = prefs.getString("turno_operador", null),
+                            texto      = texto
+                        )
+                    )
+                    Toast.makeText(this@MainActivity, "Reporte enviado. ¡Gracias!", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+
+    }
+
+    // Diálogo simple con un campo de texto multilínea (CAMBIO 5). Llama a [onEnviar]
+    // con el texto ya validado (no vacío) al confirmar.
+    private fun mostrarDialogoTexto(titulo: String, hint: String, onEnviar: (String) -> Unit) {
+        val contenedor = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(50, 40, 50, 20)
+        }
+        val input = EditText(this).apply {
+            this.hint = hint
+            minLines = 3
+            maxLines = 6
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+        }
+        contenedor.addView(input)
+        AlertDialog.Builder(this)
+            .setTitle(titulo)
+            .setView(contenedor)
+            .setPositiveButton("Enviar") { _, _ ->
+                val texto = input.text.toString().trim()
+                if (texto.isEmpty()) {
+                    Toast.makeText(this, "Escribe un texto antes de enviar", Toast.LENGTH_SHORT).show()
+                } else {
+                    onEnviar(texto.take(1000))
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
     }
 
     // ==========================================
@@ -757,6 +850,20 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Filtra la lista de máquinas por el tipo de línea elegido (Sólido/Líquido).
+    // El tipo de la sesión ("Sólido"/"Líquido") se mapea al canónico de máquina
+    // ("SOLIDO"/"LIQUIDO"). Conserva el placeholder inicial. Máquina sin tipo => SOLIDO.
+    private fun maquinasParaTipo(tipoSesion: String): List<String> {
+        val base = if (listaMaquinasServidor.size > 1) listaMaquinasServidor else listaMaquinasLocal
+        if (base.isEmpty()) return base
+        val canon = if (tipoSesion.startsWith("L", ignoreCase = true)) "LIQUIDO" else "SOLIDO"
+        val placeholder = base.first()
+        val filtradas = base.drop(1).filter { nombre ->
+            (tipoPorMaquina[nombre] ?: "SOLIDO").equals(canon, ignoreCase = true)
+        }
+        return listOf(placeholder) + filtradas
+    }
+
     private fun descargarCatalogosDesdeServidor() {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
@@ -769,22 +876,33 @@ class MainActivity : AppCompatActivity() {
 
                     // Extraemos la jerarquía si el backend ya la incluye en la respuesta.
                     // Si el campo `marcas` es null, el fallback local sigue activo.
+                    // De paso recogemos el tipo de línea por máquina (default SOLIDO).
                     val jerarquia = mutableMapOf<String, List<MarcaResponse>>()
+                    val tiposMap = mutableMapOf<String, String>()
                     respMaqs.body()?.forEach { maquina ->
                         if (!maquina.marcas.isNullOrEmpty()) {
                             jerarquia[maquina.nombre] = maquina.marcas
                         }
+                        tiposMap[maquina.nombre] = (maquina.tipo ?: "SOLIDO").uppercase()
                     }
 
                     withContext(Dispatchers.Main) {
                         listaOperadoresServidor = operadores
                         listaMaquinasServidor   = maquinas
+                        tipoPorMaquina          = tiposMap
                         if (jerarquia.isNotEmpty()) jerarquiaMaquinas = jerarquia
-                        guardarCatalogosEnCache(operadores, maquinas, jerarquia)
+                        guardarCatalogosEnCache(operadores, maquinas, jerarquia, tiposMap)
+                        // Si ya hay un tipo elegido, refrescamos el spinner de máquina con el filtro vigente.
                         val pos = spinnerTipo.selectedItemPosition
-                        if (pos > 0 && tipos[pos] == "Sólido") {
-                            spinnerMaquina.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, maquinas)
-                            spinnerMaquina.isEnabled = true
+                        if (pos > 0) {
+                            val maquinasFiltradas = maquinasParaTipo(tipos[pos])
+                            if (maquinasFiltradas.size > 1) {
+                                spinnerMaquina.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, maquinasFiltradas)
+                                spinnerMaquina.isEnabled = true
+                            } else {
+                                spinnerMaquina.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, arrayOf("-- Sin máquinas de este tipo --"))
+                                spinnerMaquina.isEnabled = false
+                            }
                         }
                     }
                 }
@@ -1074,7 +1192,8 @@ class MainActivity : AppCompatActivity() {
     private fun guardarCatalogosEnCache(
         operadores: List<String>,
         maquinas: List<String>,
-        jerarquia: Map<String, List<MarcaResponse>>
+        jerarquia: Map<String, List<MarcaResponse>>,
+        tipos: Map<String, String>
     ) {
         val gson = Gson()
         getSharedPreferences("SIGEP_CATALOGOS", MODE_PRIVATE).edit().apply {
@@ -1084,6 +1203,7 @@ class MainActivity : AppCompatActivity() {
             if (jerarquia.isNotEmpty()) {
                 putString("cache_jerarquia_maquinas", gson.toJson(jerarquia))
             }
+            putString("cache_tipos_maquina", gson.toJson(tipos))
             apply()
         }
     }
@@ -1098,6 +1218,13 @@ class MainActivity : AppCompatActivity() {
         if (jsonOp != null && jsonMaq != null) {
             listaOperadoresServidor = gson.fromJson(jsonOp, tipoLista)
             listaMaquinasServidor   = gson.fromJson(jsonMaq, tipoLista)
+        }
+
+        // Tipo de línea por máquina (para filtrar el spinner al elegir Sólido/Líquido).
+        val jsonTipos = prefs.getString("cache_tipos_maquina", null)
+        if (jsonTipos != null) {
+            val tipoMapa = object : TypeToken<Map<String, String>>() {}.type
+            tipoPorMaquina = gson.fromJson(jsonTipos, tipoMapa) ?: emptyMap()
         }
 
         // La jerarquía cacheada solo es válida si la escribió esta versión del esquema.

@@ -23,6 +23,13 @@ interface ProduccionApi {
     @POST("api/finalizar_turno")
     suspend fun finalizarTurno(@Body datos: FinalizarTurnoRequest): Response<RespuestaGenerica>
 
+    // CAMBIO 5: comentarios del turno y reportes de problemas con la app.
+    @POST("api/comentarios_turno")
+    suspend fun enviarComentarioTurno(@Body datos: ComentarioTurnoRequest): Response<RespuestaGenerica>
+
+    @POST("api/reportes_app")
+    suspend fun enviarReporteApp(@Body datos: ReporteAppRequest): Response<RespuestaGenerica>
+
     @POST("/api/paro/iniciar")
     suspend fun iniciarParo(@Body request: IniciarParoRequest): Response<Void>
 
@@ -123,6 +130,13 @@ interface ProduccionApi {
 
     @POST("api/tablets/heartbeat")
     suspend fun enviarHeartbeat(@Body req: HeartbeatRequest): Response<HeartbeatResponse>
+
+    // ACK de un mensaje admin: la tablet confirma que lo mostró (CAMBIO 4).
+    @POST("api/tablets/mensajes/{id}/leido")
+    suspend fun marcarMensajeLeido(
+        @Path("id") id: Int,
+        @Query("device_id") deviceId: String,
+    ): Response<RespuestaGenerica>
 
     // ==========================================
     // CHECKLIST DE MANTENIMIENTO Y LIMPIEZA (ENTRADA / SALIDA)

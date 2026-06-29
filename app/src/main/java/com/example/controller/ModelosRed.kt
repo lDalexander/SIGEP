@@ -32,6 +32,24 @@ data class FinalizarTurnoRequest(
     val sesion_id: Int
 )
 
+// --- CAMBIO 5: comentarios del turno y reportes de problemas con la app ---
+// Offline-first: se encolan y el SyncWorker los envía. Idempotentes por request_id.
+data class ComentarioTurnoRequest(
+    val session_id: Int?,
+    val maquina: String?,
+    val operador: String?,
+    val texto: String,
+    val request_id: String = ""
+)
+
+data class ReporteAppRequest(
+    val session_id: Int?,
+    val maquina: String?,
+    val operador: String?,
+    val texto: String,
+    val request_id: String = ""
+)
+
 // --- RESPUESTAS (Lo que Python le devuelve a la tablet) ---
 data class TurnoResponse(
     val sesion_id: Int,
@@ -53,6 +71,9 @@ data class MarcaResponse(
 data class MaquinaResponse(
     val id: Int,
     val nombre: String,
+    // Tipo de línea: "SOLIDO" | "LIQUIDO". Nullable por compatibilidad con caché viejo
+    // o backend que aún no lo envíe → se asume SOLIDO al filtrar (ver CAMBIO 2).
+    val tipo: String? = null,
     val marcas: List<MarcaResponse>? = null
 )
 
@@ -238,6 +259,16 @@ data class HeartbeatRequest(
 data class HeartbeatResponse(
     @SerializedName("mensaje")         val mensaje: String,
     @SerializedName("sync_solicitada") val syncSolicitada: Boolean,
+    // Mensajes admin no leídos para la máquina de esta tablet (CAMBIO 4).
+    @SerializedName("mensajes")        val mensajes: List<MensajeAdmin> = emptyList(),
+)
+
+// Mensaje enviado por el admin web a la tablet (CAMBIO 4).
+data class MensajeAdmin(
+    @SerializedName("id")        val id: Int,
+    @SerializedName("texto")     val texto: String,
+    @SerializedName("origen")    val origen: String? = null,
+    @SerializedName("creado_en") val creadoEn: String? = null,
 )
 
 // ==========================================

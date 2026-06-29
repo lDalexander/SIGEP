@@ -70,6 +70,14 @@
 
         <!-- 🔥 LIMPIEZA: Se eliminó AlarmaInsumosService de polling -->
 
+        <activity
+            android:name=".MensajeAdminActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:showWhenLocked="true"
+            android:theme="@style/Theme.AppCompat.Light.Dialog"
+            android:turnScreenOn="true" />
+
         <activity android:name=".ui.PendientesActivity" android:exported="false"/>
         <activity android:name=".ui.AjustesTabletActivity" android:exported="false"/>
         <activity android:name=".ui.MantenimientoChecklistActivity" android:exported="false"/>

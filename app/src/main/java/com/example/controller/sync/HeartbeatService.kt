@@ -40,6 +40,11 @@ class HeartbeatService : Service() {
                     if (resp.isSuccessful && resp.body()?.syncSolicitada == true) {
                         enqueueSync()
                     }
+                    // Respaldo de mensajes admin (CAMBIO 4): si el WS no estaba activo,
+                    // llegan por aquí. MensajesAdmin deduplica por id para no repetir popup.
+                    resp.body()?.mensajes?.forEach { m ->
+                        com.example.controller.MensajesAdmin.mostrar(applicationContext, m.id, m.texto)
+                    }
                 } catch (e: Exception) {
                     com.example.controller.ErrorReporter.report("HeartbeatService", "Heartbeat falló", e)
                 }

@@ -10,7 +10,9 @@ import java.util.concurrent.TimeUnit
 
 class TabletsWebSocketManager(
     private val deviceId: String,
-    private val workManager: WorkManager
+    private val workManager: WorkManager,
+    // Callback al recibir un mensaje admin (CAMBIO 4). Se invoca en el hilo principal.
+    private val onMensajeAdmin: (id: Int, texto: String) -> Unit = { _, _ -> }
 ) {
     private var client: OkHttpClient? = null
     private var webSocket: WebSocket? = null
@@ -31,8 +33,13 @@ class TabletsWebSocketManager(
             Log.d("TABLETS_WS", "Mensaje: $text")
             try {
                 val json = JSONObject(text)
-                if (json.optString("tipo") == "sync_now") {
-                    enqueueSync()
+                when (json.optString("tipo")) {
+                    "sync_now" -> enqueueSync()
+                    "mensaje_admin" -> {
+                        val id = json.optInt("id", -1)
+                        val texto = json.optString("texto", "")
+                        if (texto.isNotBlank()) handler.post { onMensajeAdmin(id, texto) }
+                    }
                 }
             } catch (e: Exception) {
                 com.example.controller.ErrorReporter.report("TABLETS_WS", "Error al parsear mensaje WS", e)
