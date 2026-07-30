@@ -102,7 +102,12 @@ frontend_sigep/
     │   ├── TopProductionChart.js # top marcas
     │   ├── SolicitudesInsumos.js # pedidos de insumo del rango
     │   ├── DetalleChecklist.js  # tabla a ancho completo, una columna por ítem
-    │   └── Footer.js
+    │   ├── Footer.js
+    │   └── admin/               # vista /admin
+    │       ├── AdminApp.js      # login, cabecera propia y las 5 pestañas
+    │       ├── AdminLogin.js
+    │       ├── Ayuda.js, FiltroRango.js
+    │       └── TabOperarios / TabProduccion / TabChecklists / TabJerarquia / TabMensajes
     └── components/ui/           # componentes base del sistema de diseño
         ├── Label, Badge, Button, Card, StatCard (+ Cifra)
         ├── ProgressBar, Ring, Tabs, Dot, Logo
@@ -142,6 +147,21 @@ Dos matices heredados de la API, documentados en el código:
 - **`SolicitudesInsumos`** no puede recortar a 24h exactas: `/insumos/dashboard` filtra
   por día natural y cada pedido solo trae `hora_solicitud` (`HH:MM:SS`), sin fecha. Se
   muestra el rango consultado; el rótulo «últimas 24h» solo aparece cuando ese rango es hoy.
+
+### Zona de administración
+
+`lib/adminApi.js` es el único cliente autenticado: una instancia de axios con
+`baseURL: /api/admin` que añade la cabecera `X-Admin-Token` en cada petición. La sesión
+se guarda en `localStorage`, y **cualquier 401 se interpreta como sesión caducada** y
+devuelve al login — los tokens viven en la memoria del proceso del backend, así que un
+`systemctl restart sigep` los invalida todos.
+
+Los componentes que leen datos del admin usan `useApi` pasándole ese cliente:
+`useApi('/operadores', { cliente: admin })`.
+
+**«Eliminar» nunca llama a `DELETE`.** Tanto en Operarios como en las combinaciones de
+Jerarquía hace `PUT {activo: false}` tras confirmación, porque los endpoints de borrado
+del backend son físicos y dejarían huérfano el histórico. Hay un test que lo verifica.
 
 ### Dev server
 

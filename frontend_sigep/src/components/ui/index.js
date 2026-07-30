@@ -10,3 +10,5 @@ export { default as Ring } from './Ring';
 export { default as Tabs } from './Tabs';
 export { default as Dot } from './Dot';
 export { default as Estado, Esqueleto } from './Estado';
+export { default as Campo, Input, Textarea, Select, Checkbox } from './Campo';
+export { default as Aviso, useAviso } from './Aviso';

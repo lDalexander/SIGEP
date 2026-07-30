@@ -14,6 +14,7 @@ import TopProductionChart from './components/TopProductionChart';
 import SolicitudesInsumos from './components/SolicitudesInsumos';
 import DetalleChecklist from './components/DetalleChecklist';
 import Footer from './components/Footer';
+import AdminApp from './components/admin/AdminApp';
 import { Card, Label } from './components/ui';
 import { fechaISO } from './lib/format';
 
@@ -61,6 +62,9 @@ function App() {
   const [ultimoRefresco, setUltimoRefresco] = useState(null);
 
   const timerRef = useRef(null);
+
+  /* La zona de administración tiene su propia cabecera, ancho y autenticación. */
+  const irAlDashboard = useCallback(() => navegar('dashboard'), [navegar]);
 
   /**
    * Un solo refresco para todo el dashboard. Se usa allSettled a propósito: si un
@@ -121,6 +125,11 @@ function App() {
     : aplicado.desde === aplicado.hasta
       ? aplicado.desde
       : `${aplicado.desde} → ${aplicado.hasta}`;
+
+  /* Administración sustituye toda la página: lleva cabecera y ancho propios. */
+  if (vista === 'admin') {
+    return <AdminApp onVolver={irAlDashboard} />;
+  }
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -194,10 +203,13 @@ function App() {
             </div>
           </>
         ) : (
+          /* La cabecera de las capturas lleva un botón «Insumos», pero no hay
+             ninguna captura de esa vista ni especificación de su contenido. El
+             dashboard ya muestra las solicitudes en su propia tarjeta. */
           <div className="py-10">
-            <Card titulo={vista === 'admin' ? 'Administración' : 'Insumos'}>
+            <Card titulo="Insumos">
               <Label caja="normal" className="block py-8 text-center text-sig-dim">
-                Pendiente de la etapa 3
+                Vista sin especificación de referencia
               </Label>
             </Card>
           </div>

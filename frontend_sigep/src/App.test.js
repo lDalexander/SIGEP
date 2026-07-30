@@ -2,7 +2,18 @@ import { render, screen, within } from '@testing-library/react';
 import axios from 'axios';
 import App from './App';
 
-jest.mock('axios');
+/* El automock no basta: `lib/adminApi` llama a axios.create() al importarse (App
+   incluye la zona de administración), así que la instancia debe traer interceptors. */
+jest.mock('axios', () => {
+  const instancia = {
+    get: jest.fn(), post: jest.fn(), put: jest.fn(), delete: jest.fn(),
+    interceptors: { request: { use: jest.fn() }, response: { use: jest.fn() } },
+  };
+  return {
+    get: jest.fn(), post: jest.fn(), put: jest.fn(), delete: jest.fn(),
+    create: jest.fn(() => instancia),
+  };
+});
 
 /* Respuestas mínimas con la forma real de cada endpoint (ver CLAUDE.md §3).
    El objetivo es comprobar que el árbol monta y pinta los datos, no la API. */
