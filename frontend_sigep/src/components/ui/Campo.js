@@ -23,12 +23,15 @@ export function Textarea({ className = '', rows = 3, ...rest }) {
  * Select del sistema. `opciones` es un array de strings; si el valor actual no está
  * entre ellas se añade al principio, para no perder silenciosamente un dato que ya
  * está guardado (por ejemplo una marca que se desactivó del catálogo).
+ *
+ * `vacio` es el texto de la opción sin valor. Pásale `null` cuando el campo sea
+ * obligatorio: si no, el placeholder duplica visualmente a la primera opción.
  */
 export function Select({ opciones = [], value = '', vacio = '—', className = '', ...rest }) {
   const lista = value && !opciones.includes(value) ? [value, ...opciones] : opciones;
   return (
     <select value={value} className={`sig-input w-full ${className}`} {...rest}>
-      <option value="">{vacio}</option>
+      {vacio != null && vacio !== false && <option value="">{vacio}</option>}
       {lista.map((op) => (
         <option key={op} value={op}>{op}</option>
       ))}

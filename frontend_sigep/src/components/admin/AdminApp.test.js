@@ -162,6 +162,17 @@ test('Jerarquía: combinaciones por máquina y alternar el tipo de línea', asyn
   );
 });
 
+test('Jerarquía: el tipo de línea ofrece Sólido y Líquido una sola vez', async () => {
+  render(<AdminApp />);
+  irA('Jerarquía');
+  await screen.findByText('Máquina 7');
+
+  const tipo = screen.getByLabelText('Tipo de línea');
+  // Campo obligatorio: sin opción vacía, y por tanto sin «Sólido» duplicado.
+  expect(within(tipo).getAllByRole('option').map((o) => o.textContent))
+    .toEqual(['Sólido', 'Líquido']);
+});
+
 test('Jerarquía: se puede añadir una combinación marca + presentación', async () => {
   render(<AdminApp />);
   irA('Jerarquía');

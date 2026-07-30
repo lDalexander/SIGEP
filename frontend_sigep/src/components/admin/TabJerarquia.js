@@ -140,7 +140,7 @@ export default function TabJerarquia() {
                 value={tipoMaquina}
                 onChange={(e) => setTipoMaquina(e.target.value)}
                 opciones={TIPOS}
-                vacio="Sólido"
+                vacio={null} /* obligatorio: sin opción vacía */
                 aria-label="Tipo de línea"
                 className="w-[130px]"
               />
