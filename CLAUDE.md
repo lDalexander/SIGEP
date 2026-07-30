@@ -1,0 +1,294 @@
+# SIGEP — Centro de Control de Producción (Detcuador S.A.)
+
+Sistema de control de producción de la planta de llenado. Dos consumidores de la misma
+API: esta web (supervisión y administración) y una app Android en hasta 21 tablets
+industriales con sincronización offline-first.
+
+> **Regla de oro:** el backend (`api_produccion/`) y la base de datos NO se modifican
+> desde el trabajo de frontend. Cualquier cambio ahí puede romper las tablets en planta.
+
+---
+
+## 1. Entorno
+
+| | |
+|---|---|
+| Servidor | `150.36.200.252` · Ubuntu 24.04 · TZ `America/Guayaquil` |
+| Proyecto | `/home/john/Proyectos/App_Llenadora` |
+| Backend | `api_produccion/` — FastAPI + SQLAlchemy, gunicorn/uvicorn en `127.0.0.1:8000` |
+| Servicio | `sigep.service` (systemd, `Restart=always`, `-w 1`) |
+| Frontend | `frontend_sigep/` — Create React App (React 19, JavaScript, sin TypeScript) |
+| Web | nginx en el puerto **3000**, root `frontend_sigep/build`, `/api/` → `127.0.0.1:8000/api/` |
+| BD | MySQL, esquema `produccion_detg` |
+| Repo | GitHub `lDalexander/SIGEP`, rama `main` |
+| Referencia visual | `referencia_ui/*.jpeg` — 9 capturas de la versión a reproducir |
+
+Convive un apache2 en el puerto 80. **No reconfigurar nginx, systemd ni apache.**
+
+### Comandos
+
+```bash
+# Desarrollo (NO usar build)
+cd frontend_sigep && npm start          # CRA dev server
+
+# Compilar — BORRA build/ por completo. Respaldar y hacer push ANTES.
+cp -a frontend_sigep/build ~/RESPALDO_build_$(date +%F_%H%M)
+git push origin main
+cd frontend_sigep && npm run build
+sudo systemctl reload nginx
+
+# Backend
+sudo systemctl restart sigep && systemctl status sigep
+curl -s http://127.0.0.1:8000/api/dashboard/kpis
+```
+
+> ⚠️ `npm run build` fue lo que destruyó el código fuente original del frontend: se
+> compiló sobre un `src/` viejo y el build resultante sobrescribió el único artefacto
+> que contenía la versión buena. El respaldo y el `push` previos no son opcionales.
+
+---
+
+## 2. Frontend
+
+### Stack disponible (ya instalado — no hace falta añadir nada)
+
+| Paquete | Versión | Uso |
+|---|---|---|
+| `react` / `react-dom` | 19.2.5 | — |
+| `react-scripts` | 5.0.1 | CRA |
+| `tailwindcss` | **3.4.19** | **Sí hay Tailwind y está activo** |
+| `axios` | 1.15.0 | Todas las llamadas HTTP |
+| `recharts` | 3.8.1 | Gráficas |
+| `lucide-react` | 1.8.0 | Iconos |
+
+Los estilos se hacen con **clases de utilidad de Tailwind** (no objetos inline). La
+cadena es `src/index.css` (`@tailwind base/components/utilities`) → `postcss.config.js`
+(plugins `tailwindcss` + `autoprefixer`) → `tailwind.config.js` (tema extendido).
+
+Notas de configuración:
+- `@tailwindcss/postcss@4.2.2` está en `dependencies` pero **no se usa**: `postcss.config.js`
+  carga el plugin v3. Es una dependencia huérfana; no romper nada tocándola.
+- El `@import` de Google Fonts en `index.css` está **después** de las directivas
+  `@tailwind`. Funciona (PostCSS lo reubica) pero lo correcto es ponerlo primero.
+- **No hay `react-router`.** La navegación entre Dashboard y Admin se hace por estado
+  en `App.js` (`activeView`) + History API.
+
+### Estructura
+
+```
+frontend_sigep/src/
+├── index.js, index.css          # entrada + tokens globales, scrollbar, animaciones
+├── App.js                       # estado, fetchers axios, polling, layout
+└── components/
+    ├── Header.js                # cabecera
+    ├── FiltroFecha.js           # rango desde/hasta
+    ├── KPICards.js              # tarjetas KPI
+    ├── ProductionChart.js       # producción por hora
+    ├── TerminalLog.js           # actividad en vivo
+    ├── OperationsTable.js       # estado operativo por línea
+    ├── Segmentadores.js         # filtros multi-selección
+    ├── TopProductionChart.js    # top marcas
+    ├── TabletsSyncPanel.js      # estado de las 21 tablets
+    └── Sidebar.js               # (la versión de referencia NO lleva barra lateral)
+```
+
+### Convenciones del código existente
+
+- Fetch con `axios.get`, `timeout: 8000`, envueltos en `useCallback`.
+- Ante error de red: **conservar el dato viejo visible**, marcar bandera de error, no
+  poner el estado a `null`.
+- Polling con `setInterval` guardado en un `useRef`, limpiado en el `return` del efecto.
+- Logs de consola con prefijo `[SIGEP]`.
+- Números con `Number(v).toLocaleString('es-EC')` → `1.873`.
+- Multi-selección serializada como claves repetidas (`maquina=A&maquina=B`), que FastAPI
+  interpreta como `List[str]`.
+
+---
+
+## 3. API — endpoints
+
+Base: `/api`. En producción se consume por el proxy de nginx (ruta relativa `/api`);
+así se evita CORS. El `App.js` heredado apunta a `http://150.36.200.252:8000/api`.
+
+### Públicos (sin autenticación)
+
+| Método | Ruta | Parámetros | Respuesta |
+|---|---|---|---|
+| GET | `/dashboard/kpis` | `desde`,`hasta`,`maquina[]`,`operador[]`,`marca[]`,`presentacion[]`,`fragancia[]` | `{pallets_hoy, pacas_hoy, sacos_hoy, turnos_activos, eficiencia}` |
+| GET | `/dashboard/logs` | — | `[{hora:"HH:MM:SS", mensaje, tipo:"pallet"}]` · 15 más recientes, desc |
+| GET | `/dashboard/produccion_hora` | mismos filtros | `[{hora:"HH:00", pallets, detalle:[{maquina,operario,producto,pacas}]}]` |
+| GET | `/dashboard/estado_operativo` | mismos filtros | `[{sesion_id, maquina, operador, producto, inicio_turno, tiempo_transcurrido, total_pacas, estado}]` |
+| GET | `/dashboard/top_produccion` | mismos filtros | `[{name, value}]` desc |
+| GET | `/dashboard/opciones_filtros` | `desde`,`hasta` | `{maquina[], operador[], marca[], presentacion[], fragancia[]}` |
+| GET | `/dashboard/estadisticas` | `dim`, `rango`, `desde`, `hasta` | `{dim, rango, total_pacas, total_sesiones, items:[{etiqueta,pacas,sesiones,pct}]}` |
+| GET | `/mantenimiento/checklist` | `limit` (def. 30) **o** `desde`,`hasta` | `[{id,maquina,operador,momento,codigo_turno,fecha_turno,fecha,hora,supervisor,comentarios,items:[{etiqueta,marcado}],total_items,items_ok,creado_en}]` |
+| GET | `/tablets/estado` | — | `[{device_id,nombre,maquina,pendientes,ultimo_heartbeat,ultima_sincronizacion,en_linea,segundos_desde_heartbeat}]` |
+| POST | `/tablets/sincronizar/{device_id}` | — | `{device_id, enviada, motivo}` |
+| POST | `/tablets/sincronizar_todas` | — | `{total, enviadas}` |
+| GET | `/insumos/dashboard` | `desde`,`hasta` | `{rango, kpis{total_pedidos,tiempo_resp_prom_seg,con_discrepancia,entregas_proactivas}, pedidos[], entregas[]}` |
+| GET | `/operadores` | — | `[{id, nombre}]` activos |
+| GET | `/maquinas` | — | `[{id,nombre,tipo,marcas:[{nombre,presentaciones[]}]}]` — jerarquía completa |
+| GET | `/reportes/excel` | `desde`,`hasta` | .xlsx producción (404 si el rango está vacío) |
+| GET | `/reportes/formularios_excel` | `desde`,`hasta` | .xlsx checklists (404 si vacío) |
+| GET | `/reportes/insumos_excel` | `desde`,`hasta` | .xlsx insumos (404 si vacío) |
+
+`dim` ∈ `maquina` · `operario` · `marca_presentacion` · `marca_presentacion_fragancia`
+`rango` ∈ `hoy` · `semana` (7d) · `mes` (30d) · `todo`. Si se envían `desde`/`hasta`,
+mandan sobre `rango`.
+
+Sin `desde`/`hasta`, todos los endpoints con rango equivalen **al día de hoy**.
+
+### Administración (requieren cabecera `X-Admin-Token`)
+
+Login: `POST /api/admin/auth {nombre, pin}` → `{token, username, nivel_acceso}`.
+El token se guarda **en memoria del proceso**: al reiniciar `sigep.service` caducan
+todas las sesiones admin y hay que volver a entrar. `POST /api/admin/logout` lo revoca.
+Sin token o con token inválido: **401**.
+
+| Método | Ruta | Notas |
+|---|---|---|
+| GET | `/admin/operadores` | `[{id,nombre,activo}]`, activos primero, luego alfabético |
+| POST | `/admin/operadores` | `{nombre}`. Si existe inactivo lo **reactiva**. 409 si ya está activo |
+| PUT | `/admin/operadores/{id}` | `{nombre?, activo?}` → desactivar = `{activo:false}` |
+| DELETE | `/admin/operadores/{id}` | ⚠️ **borrado físico** (`db.delete`) |
+| GET | `/admin/sesiones` | `desde`,`hasta` → `[{id,maquina,operador,marca,presentacion,fragancia,inicio,fin,estado,total_pacas,n_registros}]` |
+| PUT | `/admin/sesiones/{id}` | `{maquina?,operador?,marca?,presentacion?,fragancia?}` |
+| GET | `/admin/sesiones/{id}/pallets` | `[{id,cantidad_pacas,fecha_hora}]` |
+| PUT | `/admin/pallets/{id}` | `{cantidad_pacas}` |
+| GET | `/admin/checklists` | `desde`,`hasta`. Como el público **pero los items traen `id`** (necesario para editar) |
+| PUT | `/admin/checklists/{id}` | `{supervisor?, comentarios?, items?:[{id,marcado}]}` |
+| GET | `/admin/catalogos` | `{maquinas:[{id,nombre,tipo}], marcas:[str], presentaciones:[str]}` — solo activos |
+| GET | `/admin/maquina_productos` | `[{maquina_id,maquina,tipo,activa,productos:[{id,marca,presentacion,activo}]}]` — incluye inactivos |
+| POST | `/admin/maquina_productos` | `{maquina_id,marca,presentacion}`. Reactiva si existía inactiva |
+| PUT | `/admin/maquina_productos/{id}` | `{marca?,presentacion?,activo?}` → desactivar |
+| DELETE | `/admin/maquina_productos/{id}` | ⚠️ **borrado físico** |
+| POST | `/admin/maquinas` | `{nombre, tipo?}` — `tipo` ∈ `SOLIDO`\|`LIQUIDO` (acepta `Sólido`/`Líquido`) |
+| PUT | `/admin/maquinas/{id}` | `{nombre?, tipo?, activa?}` → alternar tipo y desactivar |
+| POST | `/admin/marcas` | `{nombre}` |
+| POST | `/admin/presentaciones` | `{nombre}` |
+| GET | `/admin/sesiones_activas` | `[{sesion_id,maquina,operador,producto,inicio,tablet_online}]` |
+| POST | `/admin/mensajes` | `{sesion_id, texto}` — individual, máx. 500 caracteres |
+| POST | `/admin/mensajes/masivo` | `{texto, sesion_ids?}` — **lista vacía/ausente ⇒ TODAS las activas** |
+| PUT/DELETE | `/admin/pedidos/{id}`, `/admin/entregas/{id}` | corrección de cantidades de insumos |
+
+Los mensajes se persisten y se empujan por WebSocket a las tablets de esa máquina; el
+heartbeat los recupera como respaldo. **No cambiar el transporte ni el formato.**
+
+### Reglas de negocio del backend
+
+- **Sacos vs pacas:** las presentaciones que contienen `15KG` o `25KG` (normalizando
+  mayúsculas y espacios) se cuentan como **sacos**, no como pacas.
+- **Turno** (`services/turnos.py`, zona Guayaquil): `DIA` de 07:00 a 18:59; `NOCHE` de
+  19:00 a 06:59, y la madrugada (≤06:59) pertenece a la `fecha_turno` del día anterior.
+  El servidor recalcula siempre el turno con su reloj; nunca confía en la tablet.
+- **Idempotencia:** el checklist se deduplica por `request_id` (UNIQUE). Contrato con la
+  app offline: 2xx y 409 = éxito; otro 4xx = fatal sin reintento; 5xx = reintenta.
+- `kpis.eficiencia` está **hardcodeado a `"94.8%"`** en el backend. No es un dato real y
+  la UI de referencia no lo muestra: **no usarlo**.
+
+---
+
+## 4. Mapa: dato de la captura → endpoint
+
+### Dashboard (`/`)
+
+| Elemento | Origen |
+|---|---|
+| Reloj `12:21:31`, fecha `23 · Jul` | Cliente (`toLocaleTimeString('es-EC')`) |
+| `● EN VIVO` | Cliente: éxito del último polling |
+| `Turno actual DÍA · 07:00–19:00` | Cliente, replicando la regla de `services/turnos.py` |
+| Botones `↓ Producción` / `↓ Formularios` / `↓ Insumos` | `/reportes/excel`, `/reportes/formularios_excel`, `/reportes/insumos_excel` con `desde`/`hasta` |
+| KPI `PRODUCCIÓN DE HOY` → `1.873` / `0` | `kpis.pacas_hoy` / `kpis.sacos_hoy` |
+| KPI `TURNOS ACTIVOS` → `5` | `kpis.turnos_activos` |
+| KPI `LÍNEAS CON TURNO HOY` → `7`, `5 activas · 2 finalizada(s)` | **Derivado** de `estado_operativo`: `length`, y conteo por `estado` |
+| `Producción por hora · pacas` | `produccion_hora[].hora` / `.pallets` (`.detalle` para el tooltip) |
+| `Estado operativo · líneas` | `estado_operativo[]` completo |
+| `Estadísticas de producción` | `estadisticas?dim=…&rango=…` |
+| `Actividad en vivo` | `logs[]` |
+| `Checklist de mantenimiento · 8 recientes` | `mantenimiento/checklist?limit=8` |
+| `Tablets · sincronización · 0/21` | `tablets/estado[]`; `en_linea` para el punto, `segundos_desde_heartbeat` para `31m`/`21d` |
+| `Top marcas · hoy` | `top_produccion[].name` / `.value` |
+| `Solicitudes de insumos · últimas 24h` | `insumos/dashboard.pedidos[]` |
+| `Detalle de checklist de mantenimiento` | `mantenimiento/checklist?desde=&hasta=` — mismo criterio y orden que el Excel de formularios |
+| Footer `Actualizado 12:22:11` | Cliente: hora del último refresco |
+
+### Administración (`/admin`)
+
+| Pestaña | Endpoints |
+|---|---|
+| Cabecera / `Salir` | `POST /admin/auth`, `POST /admin/logout` |
+| Operarios | `GET`/`POST` `/admin/operadores`, `PUT /admin/operadores/{id}` |
+| Producción | `GET /admin/sesiones`, `PUT /admin/sesiones/{id}`; selects desde `/admin/catalogos` |
+| Checklists | `GET /admin/checklists`, `PUT /admin/checklists/{id}` |
+| Jerarquía | `GET /admin/maquina_productos`, `GET /admin/catalogos`, `POST`/`PUT`/`DELETE /admin/maquina_productos`, `POST`/`PUT /admin/maquinas`, `POST /admin/marcas`, `POST /admin/presentaciones` |
+| Mensajes | `GET /admin/sesiones_activas`, `POST /admin/mensajes/masivo` |
+
+### Sin endpoint propio (resuelto de otra forma)
+
+- **Catálogo de fragancias** — no existe tabla maestra (sí hay `marcas` y
+  `presentaciones`). El select de FRAGANCIA se puebla con
+  `dashboard/opciones_filtros.fragancia` (valores históricos distintos).
+- **"Últimas 24h" de insumos** — `insumos/dashboard` filtra por día natural, no por
+  ventana móvil. Se pide `desde`=ayer, `hasta`=hoy y se filtra en cliente por
+  `>= ahora - 24h`.
+- **Líneas activas / finalizadas** — derivado en cliente de `estado_operativo`.
+
+---
+
+## 5. Sistema de diseño
+
+Tema oscuro industrial, «centro de control».
+
+```
+fondo             #0A100E     casi negro con tinte verde
+rejilla de fondo  rgba(255,255,255,0.025), celda ~56px, en TODAS las vistas
+tarjetas          #101815
+inputs            #16201C
+bordes            rgba(255,255,255,0.07) 1px
+texto             #E7EFEB
+texto atenuado    #7C8C86
+texto tenue       #5A6A64
+acento ámbar      #F5A623     botones primarios, barras, checks, pestaña activa
+verde OK          #22C55E     puntos activos, badges ENTRADA/ACTIVO, «X» del checklist
+radio             12px
+```
+
+**La clave del aspecto son las etiquetas.** Toda etiqueta, metadato, badge, cabecera de
+tabla, texto de ayuda o contador va en **monoespaciada, MAYÚSCULAS, ~11px,
+`letter-spacing: 0.08em`, color atenuado**: `PACAS`, `MÁQUINA`, `OPERADOR`,
+`SUPERADMIN`, `9 checklists`, `últimas 24h`. Títulos, nombres de máquina/operario y
+números grandes en sans-serif bold.
+
+- **KPI:** línea de acento de 2–3px en el borde superior (verde, verde, ámbar).
+- **Badges:** pill mono mayúsculas 10–11px, fondo tintado al 12%.
+  `ACTIVO`/`ENTRADA` verde · `SALIDA` ámbar · `FINALIZADO`/`OFFLINE` gris.
+- **Botones:** primario ámbar con texto oscuro bold; secundario transparente con borde.
+  `Eliminar` usa el estilo secundario, **sin rojo**.
+- **Números:** `es-EC` siempre (`1.873`). Porcentajes con un decimal (`28.2%`).
+  Duraciones `4h 48m`, `1h 02m`.
+- **Layout:** máx. ~1400px centrado, dos columnas (izq. ~62% / der. ~38%), una sola
+  bajo 1100px. **Sin barra lateral.**
+
+---
+
+## 6. Reglas de trabajo
+
+1. **No** tocar la base de datos (ni esquema, ni datos, ni migraciones).
+2. **No** modificar `api_produccion/`. Si la UI necesita un endpoint inexistente,
+   detenerse y preguntar.
+3. **No** ejecutar `npm run build` sin autorización explícita.
+4. Commit al terminar cada etapa.
+5. **No** reconfigurar nginx, systemd ni apache.
+6. No instalar dependencias nuevas sin preguntar.
+7. Cero datos falsos o hardcodeados: los ítems del checklist y los catálogos se leen
+   siempre de la API.
+
+### Deuda técnica conocida
+
+- `api_produccion/` tiene ~25 archivos `.bak-*` y 3 directorios `.bak_*` versionados.
+- 34 MB de APKs en `api_produccion/static/` dentro del repo git.
+- Contraseñas de administrador en **texto plano** en la tabla `administradores`
+  (`auth.py` compara con `==`; hay un `NOTA DE SEGURIDAD` en el código).
+- Tokens de sesión admin en memoria: se pierden al reiniciar el servicio.
+- El `src/` del frontend no estaba versionado al día: solo 5 de los 10 componentes
+  existían en git antes del checkpoint.
