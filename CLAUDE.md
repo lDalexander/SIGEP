@@ -271,7 +271,19 @@ números grandes en sans-serif bold.
 
 ---
 
-## 6. Reglas de trabajo
+## 6. Decisiones acordadas
+
+1. **Estilos con Tailwind.** Se reescribe `tailwind.config.js` con la paleta de §5 y los
+   componentes existentes se refactorizan sobre esos tokens. No se migra a CSS plano.
+2. **«Eliminar» hace `PUT {activo:false}`, nunca `DELETE`.** Los endpoints
+   `DELETE /admin/operadores/{id}` y `DELETE /admin/maquina_productos/{id}` borran
+   físicamente y dejarían histórico huérfano, así que no se usan desde la UI. «Desactivar»
+   y «Eliminar» tienen el mismo efecto a propósito; «Eliminar» pide confirmación.
+3. **Login admin: pantalla centrada** con logo, `SIGEP · Administración`, campos Usuario y
+   Contraseña, botón ámbar `Entrar` y el error del 401 en línea. No hay captura de
+   referencia de esta pantalla.
+
+## 7. Reglas de trabajo
 
 1. **No** tocar la base de datos (ni esquema, ni datos, ni migraciones).
 2. **No** modificar `api_produccion/`. Si la UI necesita un endpoint inexistente,
