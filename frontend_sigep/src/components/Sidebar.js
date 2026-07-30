@@ -1,12 +1,13 @@
 import React from 'react';
 import {
-  LayoutDashboard, Terminal, Settings, Factory,
+  LayoutDashboard, Terminal, Settings, Factory, Tablet,
   ChevronLeft, ChevronRight,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
   { id: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
   { id: 'terminal',  icon: Terminal,        label: 'Terminal' },
+  { id: 'tablets',   icon: Tablet,          label: 'Tablets' },
   { id: 'settings',  icon: Settings,        label: 'Ajustes' },
 ];
 

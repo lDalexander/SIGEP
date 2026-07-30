@@ -14,7 +14,7 @@ Contrato de códigos HTTP que la app offline-first depende:
   - otro 4xx (400...) -> FATAL, NO reintenta. Úsalo SOLO para payload inválido.
   - 5xx / sin resp.   -> reintenta hasta 10 veces (fallos transitorios).
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -125,19 +125,54 @@ def registrar_checklist(datos: MantenimientoChecklistRequest, db: Session = Depe
 
 
 @router.get("/checklist")
-def listar_checklists(limit: int = 30, db: Session = Depends(get_db)):
-    """Lista los checklists de mantenimiento mas recientes (para el dashboard web).
+def listar_checklists(
+    limit: int = 30,
+    desde: str = Query(None),
+    hasta: str = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Lista los checklists de mantenimiento para el dashboard web.
+
+    - Sin `desde`/`hasta`: devuelve los `limit` mas recientes (comportamiento
+      original; lo usa el panel de tarjetas resumen).
+    - Con `desde`/`hasta` (yyyy-MM-dd): devuelve TODOS los del rango por
+      `fecha_turno`, con el mismo criterio y orden que el Excel de formularios
+      (`/reportes/formularios_excel`). Lo usa la tabla de detalle del dashboard.
 
     Devuelve cabecera + items y un resumen (items_ok / total_items) por registro.
     """
     try:
-        tope = max(1, min(limit, 200))
-        filas = (
-            db.query(MantenimientoChecklistDB)
-            .order_by(MantenimientoChecklistDB.id.desc())
-            .limit(tope)
-            .all()
-        )
+        q = db.query(MantenimientoChecklistDB)
+        if desde or hasta:
+            hoy = datetime.now().date()
+            try:
+                d = datetime.strptime(desde, "%Y-%m-%d").date() if desde else hoy
+            except ValueError:
+                d = hoy
+            try:
+                h = datetime.strptime(hasta, "%Y-%m-%d").date() if hasta else hoy
+            except ValueError:
+                h = hoy
+            if h < d:
+                d, h = h, d
+            filas = (
+                q.filter(
+                    MantenimientoChecklistDB.fecha_turno >= d,
+                    MantenimientoChecklistDB.fecha_turno <= h,
+                )
+                .order_by(
+                    MantenimientoChecklistDB.fecha_turno.asc(),
+                    MantenimientoChecklistDB.id.asc(),
+                )
+                .all()
+            )
+        else:
+            tope = max(1, min(limit, 200))
+            filas = (
+                q.order_by(MantenimientoChecklistDB.id.desc())
+                .limit(tope)
+                .all()
+            )
         salida = []
         for c in filas:
             items = [{"etiqueta": it.etiqueta, "marcado": bool(it.marcado)} for it in c.items]

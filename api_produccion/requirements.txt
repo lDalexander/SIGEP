@@ -6,3 +6,6 @@ mysql-connector-python
 pandas
 openpyxl
 python-dotenv
+gunicorn
+python-multipart
+firebase-admin>=6.4.0

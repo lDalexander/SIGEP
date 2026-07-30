@@ -21,11 +21,11 @@ import asyncio
 from datetime import datetime
 from typing import Dict
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 
-from database import get_db, logger
-from models import EstadoTabletDB
+from database import get_db, logger, SessionLocal
+from models import EstadoTabletDB, MensajeTabletDB
 from schemas import (
     HeartbeatTabletRequest,
     HeartbeatTabletResponse,
@@ -78,8 +78,55 @@ class TabletConnectionManager:
             self.disconnect(device_id, ws)
             return False
 
+    async def send_payload(self, device_id: str, payload: dict) -> bool:
+        """Empuja un JSON arbitrario a la tablet (p.ej. mensajes admin)."""
+        ws = self.connections.get(device_id)
+        if ws is None:
+            return False
+        try:
+            await ws.send_json(payload)
+            return True
+        except Exception:
+            self.disconnect(device_id, ws)
+            return False
+
 
 tablet_manager = TabletConnectionManager()
+
+
+def enviar_payload_ws(device_id: str, payload: dict) -> bool:
+    """Push síncrono de un payload a la tablet vía su WebSocket (si está abierto).
+
+    Reutilizable desde endpoints `def` (no async), igual que `_solicitar_sync`.
+    Devuelve True si se entregó por WS; False si la tablet no tiene WS activo.
+    """
+    if tablet_manager.main_loop and tablet_manager.main_loop.is_running():
+        future = asyncio.run_coroutine_threadsafe(
+            tablet_manager.send_payload(device_id, payload),
+            tablet_manager.main_loop,
+        )
+        try:
+            return future.result(timeout=2)
+        except Exception:
+            return False
+    return False
+
+
+def _mensajes_no_leidos(db: Session, maquina: str) -> list:
+    """Mensajes admin no leídos para una máquina, en orden de llegada (CAMBIO 4)."""
+    if not maquina:
+        return []
+    filas = (
+        db.query(MensajeTabletDB)
+        .filter(MensajeTabletDB.maquina == maquina, MensajeTabletDB.leido.is_(False))
+        .order_by(MensajeTabletDB.creado_en.asc())
+        .all()
+    )
+    return [
+        {"id": m.id, "texto": m.texto, "origen": m.origen,
+         "creado_en": m.creado_en.isoformat() if m.creado_en else None}
+        for m in filas
+    ]
 
 
 def _formatear_estado(tablet: EstadoTabletDB) -> EstadoTabletResponse:
@@ -134,9 +181,13 @@ def heartbeat(datos: HeartbeatTabletRequest, db: Session = Depends(get_db)):
                 tablet.sync_solicitada = False
 
         db.commit()
+        # Respaldo de entrega de mensajes admin (CAMBIO 4): si hay no leídos para
+        # la máquina de esta tablet, viajan en la respuesta del heartbeat.
+        mensajes = _mensajes_no_leidos(db, tablet.maquina)
         return HeartbeatTabletResponse(
             mensaje="Heartbeat recibido",
             sync_solicitada=sync_solicitada_previa,
+            mensajes=mensajes,
         )
     except Exception as e:
         db.rollback()
@@ -219,14 +270,52 @@ def sincronizar_todas(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Error interno")
 
 
+@router.get("/mensajes/{device_id}")
+def mensajes_pendientes(device_id: str, db: Session = Depends(get_db)):
+    """Mensajes admin no leídos para la máquina de esta tablet (CAMBIO 4)."""
+    tablet = db.query(EstadoTabletDB).filter(EstadoTabletDB.device_id == device_id).first()
+    if tablet is None or not tablet.maquina:
+        return []
+    return _mensajes_no_leidos(db, tablet.maquina)
+
+
+@router.post("/mensajes/{mensaje_id}/leido")
+def marcar_mensaje_leido(mensaje_id: int, device_id: str = Query(None), db: Session = Depends(get_db)):
+    """ACK de la tablet: marca el mensaje admin como leído para que no se repita."""
+    m = db.query(MensajeTabletDB).filter(MensajeTabletDB.id == mensaje_id).first()
+    if m is None:
+        raise HTTPException(status_code=404, detail="Mensaje no encontrado")
+    if not m.leido:
+        m.leido = True
+        m.leido_en = datetime.now()
+        m.device_id = device_id or m.device_id
+        db.commit()
+        logger.info(f"📩 Mensaje {mensaje_id} marcado leído por tablet {device_id or '?'}")
+    return {"ok": True, "id": mensaje_id}
+
+
 @router.websocket("/ws/tablets/{device_id}")
 async def websocket_tablet(websocket: WebSocket, device_id: str):
     """
     Canal push para tablets. La tablet abre este socket al iniciar la app y se
-    queda escuchando mensajes del tipo {"tipo": "sync_now"}.
+    queda escuchando mensajes del tipo {"tipo": "sync_now"} o
+    {"tipo": "mensaje_admin", "id": int, "texto": str} (CAMBIO 4).
     Puede enviar pings periódicos como texto para mantener viva la conexión.
     """
     await tablet_manager.connect(websocket, device_id)
+    # Redelivery: al (re)conectar, empujamos los mensajes admin no leídos de la
+    # máquina de esta tablet, para no depender de que estuviera online al enviarse.
+    try:
+        db = SessionLocal()
+        try:
+            tablet = db.query(EstadoTabletDB).filter(EstadoTabletDB.device_id == device_id).first()
+            if tablet and tablet.maquina:
+                for m in _mensajes_no_leidos(db, tablet.maquina):
+                    await websocket.send_json({"tipo": "mensaje_admin", "id": m["id"], "texto": m["texto"]})
+        finally:
+            db.close()
+    except Exception:
+        pass
     try:
         while True:
             # Esperamos mensajes (pings, acks); no procesamos contenido específico aún

@@ -6,6 +6,11 @@ import Header from './components/Header';
 import KPICards from './components/KPICards';
 import ProductionChart from './components/ProductionChart';
 import TerminalLog from './components/TerminalLog';
+import TopProductionChart from './components/TopProductionChart';
+import OperationsTable from './components/OperationsTable';
+import TabletsSyncPanel from './components/TabletsSyncPanel';
+import Segmentadores from './components/Segmentadores';
+import FiltroFecha from './components/FiltroFecha';
 
 /* ══════════════════════════════════════════════
    API CONFIGURATION
@@ -30,9 +35,37 @@ function App() {
 
   /* ── Chart State ──────────────────────────── */
   const [chartData, setChartData] = useState([]);
+  const [topProduction, setTopProduction] = useState([]);
+
+  /* ── Operations State ─────────────────────── */
+  const [operations, setOperations] = useState([]);
+  const [operationsLoading, setOperationsLoading] = useState(true);
+
+  /* ── Segmentadores (filtros) State ────────── */
+  const EMPTY_FILTROS = { maquina: [], operador: [], marca: [], presentacion: [], fragancia: [] };
+  const [filtros, setFiltros] = useState(EMPTY_FILTROS);
+  const [opcionesFiltros, setOpcionesFiltros] = useState(EMPTY_FILTROS);
+
+  /* ── Rango de fechas State (desde/hasta) ──── */
+  const [rango, setRango] = useState({ desde: '', hasta: '' });
 
   /* ── Interval Refs for cleanup ────────────── */
-  const intervalsRef = useRef({ kpi: null, log: null, chart: null });
+  const intervalsRef = useRef({ kpi: null, log: null, chart: null, op: null, top: null });
+
+  /**
+   * Construye los query-params (URLSearchParams) a partir de los filtros activos.
+   * Serializa cada dimensión como claves repetidas (maquina=A&maquina=B), que es
+   * el formato que FastAPI interpreta como List[str].
+   */
+  const buildParams = useCallback(() => {
+    const params = new URLSearchParams();
+    if (rango.desde) params.append('desde', rango.desde);
+    if (rango.hasta) params.append('hasta', rango.hasta);
+    Object.entries(filtros).forEach(([key, vals]) => {
+      (vals || []).forEach((v) => params.append(key, v));
+    });
+    return params;
+  }, [filtros, rango]);
 
   /* ══════════════════════════════════════════════
      DATA FETCHERS
@@ -45,6 +78,7 @@ function App() {
   const fetchKPIs = useCallback(async () => {
     try {
       const { data } = await axios.get(`${API_BASE}/dashboard/kpis`, {
+        params: buildParams(),
         timeout: 8000,
       });
       console.log('[SIGEP] ✅ KPIs recibidos:', data);
@@ -57,7 +91,7 @@ function App() {
     } finally {
       setKpisLoading(false);
     }
-  }, []);
+  }, [buildParams]);
 
   /**
    * GET /dashboard/logs
@@ -87,6 +121,7 @@ function App() {
   const fetchChartData = useCallback(async () => {
     try {
       const { data } = await axios.get(`${API_BASE}/dashboard/produccion_hora`, {
+        params: buildParams(),
         timeout: 8000,
       });
       if (Array.isArray(data)) {
@@ -96,6 +131,41 @@ function App() {
     } catch {
       // Silent fail — ProductionChart will render MOCK_DATA as fallback
     }
+  }, [buildParams]);
+
+  const fetchTopProduction = useCallback(async () => {
+    try {
+      const { data } = await axios.get(`${API_BASE}/dashboard/top_produccion`, {
+        params: buildParams(),
+        timeout: 8000,
+      });
+      setTopProduction(Array.isArray(data) ? data : []);
+    } catch { }
+  }, [buildParams]);
+
+  const fetchOperations = useCallback(async () => {
+    try {
+      const { data } = await axios.get(`${API_BASE}/dashboard/estado_operativo`, {
+        params: buildParams(),
+        timeout: 8000,
+      });
+      setOperations(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('[SIGEP] ❌ Error fetching Operations:', err.message);
+    } finally {
+      setOperationsLoading(false);
+    }
+  }, [buildParams]);
+
+  /* Carga (una vez) las opciones disponibles para llenar los segmentadores. */
+  const fetchOpcionesFiltros = useCallback(async () => {
+    try {
+      const { data } = await axios.get(`${API_BASE}/dashboard/opciones_filtros`, { timeout: 8000 });
+      setOpcionesFiltros({ ...EMPTY_FILTROS, ...data });
+    } catch (err) {
+      console.error('[SIGEP] ❌ Error fetching opciones de filtros:', err.message);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* ══════════════════════════════════════════════
@@ -109,12 +179,16 @@ function App() {
     fetchKPIs();
     fetchLogs();
     fetchChartData();
+    fetchTopProduction();
+    fetchOperations();
 
     // 2. Set up polling intervals
     const t = intervalsRef.current;
     t.kpi   = setInterval(fetchKPIs, POLL_INTERVAL);
     t.log   = setInterval(fetchLogs, POLL_INTERVAL);
     t.chart = setInterval(fetchChartData, POLL_INTERVAL * 6); // 30s for chart
+    t.top   = setInterval(fetchTopProduction, POLL_INTERVAL * 6);
+    t.op    = setInterval(fetchOperations, POLL_INTERVAL);
 
     // 3. Cleanup on unmount
     return () => {
@@ -122,8 +196,31 @@ function App() {
       clearInterval(t.kpi);
       clearInterval(t.log);
       clearInterval(t.chart);
+      clearInterval(t.top);
+      clearInterval(t.op);
     };
-  }, [fetchKPIs, fetchLogs, fetchChartData]);
+  }, [fetchKPIs, fetchLogs, fetchChartData, fetchTopProduction, fetchOperations]);
+
+  /* Cargar opciones de segmentadores una sola vez al montar. */
+  useEffect(() => {
+    fetchOpcionesFiltros();
+  }, [fetchOpcionesFiltros]);
+
+  /* ══════════════════════════════════════════════
+     SEGMENTADORES HANDLERS
+     ══════════════════════════════════════════════ */
+
+  const handleFiltroChange = (dim, valores) => {
+    setFiltros((prev) => ({ ...prev, [dim]: valores }));
+  };
+
+  const handleLimpiarFiltros = () => setFiltros(EMPTY_FILTROS);
+
+  const handleRangoChange = (campo, valor) => {
+    setRango((prev) => ({ ...prev, [campo]: valor }));
+  };
+
+  const handleResetRango = () => setRango({ desde: '', hasta: '' });
 
   /* ══════════════════════════════════════════════
      DOWNLOAD HANDLER
@@ -158,11 +255,24 @@ function App() {
           {activeView === 'dashboard' && (
             <>
               <Header onDownload={handleDownloadReport} />
+              <FiltroFecha
+                desde={rango.desde}
+                hasta={rango.hasta}
+                onChange={handleRangoChange}
+                onReset={handleResetRango}
+              />
               <KPICards data={kpis} loading={kpisLoading} error={kpisError} />
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
                 <ProductionChart liveData={chartData} />
-                <TerminalLog logs={logs} loading={logsLoading} error={logsError} />
+                <TopProductionChart data={topProduction} />
               </div>
+              <Segmentadores
+                opciones={opcionesFiltros}
+                filtros={filtros}
+                onChange={handleFiltroChange}
+                onClear={handleLimpiarFiltros}
+              />
+              <OperationsTable data={operations} loading={operationsLoading} />
             </>
           )}
 
@@ -171,6 +281,14 @@ function App() {
             <>
               <Header onDownload={handleDownloadReport} />
               <TerminalLog logs={logs} loading={logsLoading} error={logsError} />
+            </>
+          )}
+
+          {/* ═══ TABLETS VIEW ═══ */}
+          {activeView === 'tablets' && (
+            <>
+              <Header onDownload={handleDownloadReport} />
+              <TabletsSyncPanel apiBase={API_BASE} pollInterval={POLL_INTERVAL} />
             </>
           )}
 

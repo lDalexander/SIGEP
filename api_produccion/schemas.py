@@ -32,6 +32,22 @@ class FinalizarTurno(BaseModel):
     """Esquema para finalizar un turno activo."""
     sesion_id: int
 
+class ComentarioTurnoRequest(BaseModel):
+    """Comentario libre del turno (CAMBIO 5). Offline-first: idempotente por request_id."""
+    session_id: Optional[int] = None
+    maquina: Optional[str] = None
+    operador: Optional[str] = None
+    texto: str
+    request_id: Optional[str] = None
+
+class ReporteAppRequest(BaseModel):
+    """Reporte de un problema con la app (CAMBIO 5). Puede llegar sin turno."""
+    session_id: Optional[int] = None
+    maquina: Optional[str] = None
+    operador: Optional[str] = None
+    texto: str
+    request_id: Optional[str] = None
+
 class IniciarParo(BaseModel):
     """Esquema para registrar el inicio de un paro o tiempo muerto."""
     sesion_id: int
@@ -111,6 +127,9 @@ class HeartbeatTabletRequest(BaseModel):
 class HeartbeatTabletResponse(BaseModel):
     mensaje: str
     sync_solicitada: bool = False
+    # Mensajes admin no leídos para la máquina de esta tablet (CAMBIO 4).
+    # Cada item: {"id": int, "texto": str, "creado_en": str|None}.
+    mensajes: list = []
 
 
 class EstadoTabletResponse(BaseModel):

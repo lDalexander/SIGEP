@@ -25,3 +25,24 @@ yarn-error.log*
 .agents/
 .next/
 dist/
+
+# Firebase service account credentials — NUNCA versionar
+firebase-credentials*.json
+**/firebase-credentials*.json
+serviceAccountKey*.json
+
+# Copias de seguridad del .env — contienen DATABASE_URL con usuario y contraseña.
+# El patrón `.env` de arriba NO cubre los sufijos (.env.bak-20260624_151919).
+.env.*
+*.env.bak*
+
+# Credenciales del script de respaldo de la base de datos (user/password MySQL)
+backups/.dbcreds.cnf
+backups/*.cnf
+
+# Volcados de la base de datos y respaldos de fotos (pesados, y con datos de planta)
+backups/*.sql.gz
+backups/*.tar.gz
+
+# Skills de agentes: 73 MB / 4.3k archivos ajenos al proyecto
+agents/

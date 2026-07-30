@@ -3,12 +3,12 @@ Router para los endpoints del sistema MES (Insumos).
 Permite la comunicación estilo "Uber" entre operadores de línea y personal de bodega.
 """
 import os
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Form, File, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Form, File, UploadFile, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from datetime import datetime
+from datetime import datetime, timedelta
 from database import get_db, logger
-from models import PedidoBodegaDB, SesionTrabajoDB, MaquinaDB, EntregaProactivaDB
+from models import PedidoBodegaDB, SesionTrabajoDB, MaquinaDB, EntregaProactivaDB, UsuarioDB
 from schemas import NuevoPedidoRequest, PedidoAccionRequest
 import schemas
 import models
@@ -331,3 +331,142 @@ def obtener_entregas_proactivas(insumista_id: int, db: Session = Depends(get_db)
     except Exception as e:
         logger.error(f"Error en /entregas_proactivas/{insumista_id}: {e}")
         raise HTTPException(status_code=500, detail="Error interno")
+
+
+# ============================================================================
+# DASHBOARD DE INSUMOS (vista web abierta de solo lectura)
+# ============================================================================
+# Agrega, para un rango de fechas: tiempos de reacción del flujo de pedidos
+# (solicitud → aceptación → entrega → recepción), comparación de cantidades
+# (solicitada / entregada / recibida) y las entregas proactivas con su evidencia
+# fotográfica. Sin auth (igual que el dashboard de producción).
+
+def _rango_insumos(desde, hasta):
+    """desde/hasta (YYYY-MM-DD) -> (d, h, inicio_dt, fin_dt_exclusivo). Default: hoy."""
+    hoy = datetime.now().date()
+    try:
+        d = datetime.strptime(desde, "%Y-%m-%d").date() if desde else hoy
+    except ValueError:
+        d = hoy
+    try:
+        h = datetime.strptime(hasta, "%Y-%m-%d").date() if hasta else hoy
+    except ValueError:
+        h = hoy
+    if h < d:
+        d, h = h, d
+    inicio = datetime.combine(d, datetime.min.time())
+    fin = datetime.combine(h, datetime.min.time()) + timedelta(days=1)
+    return d, h, inicio, fin
+
+
+def _delta_seg(a, b):
+    """Segundos entre dos datetimes (b - a) o None si falta alguno o sale negativo."""
+    if not a or not b:
+        return None
+    s = (b - a).total_seconds()
+    return int(s) if s >= 0 else None
+
+
+@router.get("/dashboard")
+def dashboard_insumos(desde: str = Query(None), hasta: str = Query(None), db: Session = Depends(get_db)):
+    """Datos del dashboard de insumos: pedidos (tiempos + cantidades) y entregas proactivas."""
+    try:
+        d, h, inicio, fin = _rango_insumos(desde, hasta)
+
+        # --- Pedidos del rango (por fecha de solicitud) + sesión + insumista ---
+        filas = (
+            db.query(PedidoBodegaDB, SesionTrabajoDB)
+            .outerjoin(SesionTrabajoDB, SesionTrabajoDB.id == PedidoBodegaDB.session_id)
+            .filter(PedidoBodegaDB.fecha_solicitud >= inicio, PedidoBodegaDB.fecha_solicitud < fin)
+            .order_by(PedidoBodegaDB.fecha_solicitud.asc())
+            .all()
+        )
+        insumista_ids = {p.insumista_id for p, _ in filas if p.insumista_id is not None}
+        nombres = {}
+        if insumista_ids:
+            for u in db.query(UsuarioDB).filter(UsuarioDB.id.in_(insumista_ids)).all():
+                nombres[u.id] = u.nombre
+
+        def _hms(dt):
+            return dt.strftime("%H:%M:%S") if dt else None
+
+        pedidos = []
+        suma_resp = 0
+        n_resp = 0
+        con_discrepancia = 0
+        for p, s in filas:
+            seg_total = _delta_seg(p.fecha_solicitud, p.fecha_confirmacion) \
+                or _delta_seg(p.fecha_solicitud, p.fecha_entrega)
+            seg_sol_ent = _delta_seg(p.fecha_solicitud, p.fecha_entrega)
+            if seg_sol_ent is not None:
+                suma_resp += seg_sol_ent
+                n_resp += 1
+            ent, rec, sol = p.cantidad_entregada, p.cantidad_recibida, p.cantidad_solicitada
+            hay_disc = (
+                (ent is not None and rec is not None and ent != rec)
+                or (ent is not None and sol is not None and ent != sol)
+            )
+            if hay_disc:
+                con_discrepancia += 1
+            pedidos.append({
+                "id": p.id,
+                "maquina": s.maquina if s else None,
+                "operador": s.operador if s else None,
+                "insumo": p.detalle_pedido,
+                "categoria": p.categoria,
+                "insumista": nombres.get(p.insumista_id) if p.insumista_id else None,
+                "estado": p.estado,
+                "hora_solicitud": _hms(p.fecha_solicitud),
+                "hora_aceptacion": _hms(p.fecha_aceptacion),
+                "hora_entrega": _hms(p.fecha_entrega),
+                "hora_confirmacion": _hms(p.fecha_confirmacion),
+                "seg_aceptacion": _delta_seg(p.fecha_solicitud, p.fecha_aceptacion),
+                "seg_entrega": _delta_seg(p.fecha_aceptacion, p.fecha_entrega),
+                "seg_recepcion": _delta_seg(p.fecha_entrega, p.fecha_confirmacion),
+                "seg_total": seg_total,
+                "solicitada": sol,
+                "entregada": ent,
+                "recibida": rec,
+            })
+
+        # --- Entregas proactivas del rango (con evidencia fotográfica) ---
+        entregas_q = (
+            db.query(EntregaProactivaDB)
+            .filter(EntregaProactivaDB.fecha_hora >= inicio, EntregaProactivaDB.fecha_hora < fin)
+            .order_by(EntregaProactivaDB.fecha_hora.desc())
+            .all()
+        )
+        ep_ids = {e.insumista_id for e in entregas_q if e.insumista_id is not None}
+        ep_nombres = {}
+        if ep_ids:
+            for u in db.query(UsuarioDB).filter(UsuarioDB.id.in_(ep_ids)).all():
+                ep_nombres[u.id] = u.nombre
+        entregas = [
+            {
+                "id": e.id,
+                "insumista": ep_nombres.get(e.insumista_id) if e.insumista_id else None,
+                "tipo_producto": e.tipo_producto,
+                "insumo": e.insumo,
+                "cantidad": e.cantidad,
+                "maquina": e.maquina,
+                "observaciones": e.observaciones,
+                "foto_url": e.foto_path,  # /static/entregas/...  (None si no hay)
+                "fecha_hora": e.fecha_hora.strftime("%Y-%m-%d %H:%M:%S") if e.fecha_hora else None,
+            }
+            for e in entregas_q
+        ]
+
+        return {
+            "rango": {"desde": d.isoformat(), "hasta": h.isoformat()},
+            "kpis": {
+                "total_pedidos": len(pedidos),
+                "tiempo_resp_prom_seg": int(suma_resp / n_resp) if n_resp else None,
+                "con_discrepancia": con_discrepancia,
+                "entregas_proactivas": len(entregas),
+            },
+            "pedidos": pedidos,
+            "entregas": entregas,
+        }
+    except Exception as e:
+        logger.error(f"Error en /api/insumos/dashboard: {e}")
+        raise HTTPException(status_code=500, detail="Error al generar dashboard de insumos")

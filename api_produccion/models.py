@@ -28,6 +28,10 @@ class MaquinaDB(Base):
     __tablename__ = "maquinas"
     id = Column(Integer, primary_key=True, index=True)
     nombre = Column(String(100), unique=True)
+    # Tipo de línea: "SOLIDO" | "LIQUIDO" (mayúsculas, sin tilde — estilo EMPAQUE/GRANEL).
+    # Distinto del `tipo` de la sesión ("Sólido"/"Líquido"); el flujo de inicio de
+    # turno filtra las máquinas por este valor. Columna añadida vía ALTER (ver CAMBIO 2).
+    tipo = Column(String(20), nullable=False, default="SOLIDO")
     activa = Column(Boolean, default=True)
 
 class MaquinaProductoDB(Base):
@@ -236,3 +240,55 @@ class MantenimientoChecklistItemDB(Base):
     marcado = Column(Boolean, nullable=False)             # TINYINT en MySQL
 
     checklist = relationship("MantenimientoChecklistDB", back_populates="items")
+
+
+class MensajeTabletDB(Base):
+    """Mensajes que el admin web envía a una sesión/tablet activa (CAMBIO 4).
+
+    El destino se identifica por `maquina` (la tablet reporta su máquina en el
+    heartbeat). Se entregan por WebSocket de tablets al instante y por el heartbeat
+    como respaldo; la tablet confirma (`leido`) al mostrarlos para no repetir.
+    """
+    __tablename__ = "mensajes_tablet"
+    id = Column(Integer, primary_key=True, index=True)
+    origen = Column(String(100), nullable=False)          # admin que lo envió
+    sesion_id = Column(Integer, nullable=True)            # sesión destino
+    maquina = Column(String(100), nullable=False, index=True)  # máquina destino (targeting)
+    operador = Column(String(150), nullable=True)         # operario destino (informativo)
+    texto = Column(String(500), nullable=False)
+    creado_en = Column(DateTime, default=lambda: datetime.now())
+    leido = Column(Boolean, nullable=False, default=False)
+    leido_en = Column(DateTime, nullable=True)
+    device_id = Column(String(100), nullable=True)        # tablet que confirmó (ACK)
+
+
+class ComentarioTurnoDB(Base):
+    """Comentarios libres del turno escritos por el operario (CAMBIO 5).
+
+    Offline-first: la tablet los encola y los envía el SyncWorker; idempotente por
+    `request_id` (UNIQUE), igual que pallets/checklist.
+    """
+    __tablename__ = "comentarios_turno"
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, nullable=True, index=True)  # turno asociado (cuando aplica)
+    maquina = Column(String(100), nullable=True)
+    operador = Column(String(150), nullable=True)
+    texto = Column(String(1000), nullable=False)
+    request_id = Column(String(64), unique=True, index=True, nullable=True)
+    creado_en = Column(DateTime, default=lambda: datetime.now())
+
+
+class ReporteAppDB(Base):
+    """Reportes de fallas/problemas de la aplicación enviados por el operario (CAMBIO 5).
+
+    Mismo patrón offline-first e idempotencia por `request_id` que los comentarios.
+    Puede llegar sin turno (session_id NULL).
+    """
+    __tablename__ = "reportes_app"
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, nullable=True, index=True)
+    maquina = Column(String(100), nullable=True)
+    operador = Column(String(150), nullable=True)
+    texto = Column(String(1000), nullable=False)
+    request_id = Column(String(64), unique=True, index=True, nullable=True)
+    creado_en = Column(DateTime, default=lambda: datetime.now())

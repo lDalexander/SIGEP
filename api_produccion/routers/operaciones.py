@@ -2,13 +2,20 @@
 Router para los endpoints operacionales en piso de producción.
 Maneja el inicio de turnos, registro de pallets, y paros de máquina.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 
 from database import get_db, logger
-from models import OperadorDB, MaquinaDB, SesionTrabajoDB, PalletDB, ParoMaquinaDB, PedidoBodegaDB, UsuarioDB, InsumoDB, RecetaProductoDB, MaquinaProductoDB
-from schemas import IniciarTurno, RegistrarPalletRequest, FinalizarTurno, IniciarParo, FinalizarParo
+from models import OperadorDB, MaquinaDB, SesionTrabajoDB, PalletDB, ParoMaquinaDB, PedidoBodegaDB, UsuarioDB, InsumoDB, RecetaProductoDB, MaquinaProductoDB, ComentarioTurnoDB, ReporteAppDB
+from schemas import IniciarTurno, RegistrarPalletRequest, FinalizarTurno, IniciarParo, FinalizarParo, ComentarioTurnoRequest, ReporteAppRequest
+from ws_manager import manager
+
+# Estados de un pedido de insumo que aún están "vivos" (no terminados). Al cerrar
+# el turno del operario, estos quedarían huérfanos (el operario ya no puede
+# confirmar la recepción), así que se cierran automáticamente. Ver CAMBIO 3.
+ESTADOS_PEDIDO_ACTIVO = ["Pendiente", "En Camino", "Entregado_Insumista"]
+ESTADO_PEDIDO_CIERRE_TURNO = "Cerrado_Fin_Turno"
 
 router = APIRouter(prefix="/api", tags=["Operaciones"])
 
@@ -72,7 +79,7 @@ def obtener_maquinas(db: Session = Depends(get_db)):
         ]
 
     return [
-        {"id": maq.id, "nombre": maq.nombre, "marcas": _catalogo(maq.id)}
+        {"id": maq.id, "nombre": maq.nombre, "tipo": maq.tipo, "marcas": _catalogo(maq.id)}
         for maq in maquinas
     ]
 
@@ -313,7 +320,7 @@ def registrar_pallet(datos: RegistrarPalletRequest, db: Session = Depends(get_db
         raise HTTPException(status_code=500, detail="Error interno")
 
 @router.post("/finalizar_turno")
-def finalizar(datos: FinalizarTurno, db: Session = Depends(get_db)):
+def finalizar(datos: FinalizarTurno, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     sesion = db.query(SesionTrabajoDB).filter(SesionTrabajoDB.id == datos.sesion_id).first()
     if not sesion:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
@@ -326,11 +333,48 @@ def finalizar(datos: FinalizarTurno, db: Session = Depends(get_db)):
             paro_activo.duracion_segundos = round((paro_activo.fin_paro - paro_activo.inicio_paro).total_seconds(), 2)
             logger.info(f"Paro auto-cerrado: ID {paro_activo.id}")
 
+        # --- Cierre automático de pedidos de insumo huérfanos (CAMBIO 3) ---
+        # Al cerrar el turno, los pedidos que siguen vivos no podrán completarse
+        # (el operario ya no confirmará recepción). Se cierran con un estado propio
+        # y se avisa por WebSocket para que desaparezcan de la bandeja del insumista
+        # al instante (el refresco de 15s es el respaldo).
+        pedidos_activos = db.query(PedidoBodegaDB).filter(
+            PedidoBodegaDB.session_id == datos.sesion_id,
+            PedidoBodegaDB.estado.in_(ESTADOS_PEDIDO_ACTIVO),
+        ).all()
+        pedidos_cerrados = [
+            {"id": p.id, "categoria": (p.categoria or "EMPAQUE").upper()}
+            for p in pedidos_activos
+        ]
+        for p in pedidos_activos:
+            p.estado = ESTADO_PEDIDO_CIERRE_TURNO
+
         sesion.fin_turno = datetime.now()
         sesion.duracion_minutos = (sesion.fin_turno - sesion.inicio_turno).total_seconds() / 60
         db.commit()
-        logger.info(f"Turno finalizado: sesión {sesion.id} — {round(sesion.duracion_minutos, 1)} min")
-        return {"mensaje": "Turno finalizado", "duracion_minutos": round(sesion.duracion_minutos, 2)}
+
+        # Aviso WS por cada pedido cerrado. Reutilizamos el evento "pedido_aceptado"
+        # que la app ya maneja (apaga la alarma del pedido y refresca las listas);
+        # como el pedido ya no está en un estado activo, deja de aparecer.
+        for pc in pedidos_cerrados:
+            background_tasks.add_task(
+                manager.broadcast_to_tipo,
+                pc["categoria"],
+                {"evento": "pedido_aceptado", "solicitud_id": pc["id"]},
+            )
+
+        if pedidos_cerrados:
+            logger.info(
+                f"Turno finalizado: sesión {sesion.id} — {round(sesion.duracion_minutos, 1)} min "
+                f"· {len(pedidos_cerrados)} pedido(s) de insumo cerrado(s) por fin de turno"
+            )
+        else:
+            logger.info(f"Turno finalizado: sesión {sesion.id} — {round(sesion.duracion_minutos, 1)} min")
+        return {
+            "mensaje": "Turno finalizado",
+            "duracion_minutos": round(sesion.duracion_minutos, 2),
+            "pedidos_cerrados": len(pedidos_cerrados),
+        }
     except Exception as e:
         db.rollback()
         logger.error(f"Error en /api/finalizar_turno: {e}")
@@ -370,3 +414,54 @@ def finalizar_paro(datos: FinalizarParo, db: Session = Depends(get_db)):
         db.rollback()
         logger.error(f"Error en /api/paro/finalizar: {e}")
         raise HTTPException(status_code=500, detail="Error interno")
+
+
+# ============================================================================
+# CAMBIO 5 — Comentarios del turno y reportes de problemas con la app
+# ============================================================================
+# Offline-first: la tablet los encola y los envía el SyncWorker. Idempotentes por
+# `request_id` (igual que registrar_pallet): un duplicado responde 200 sin insertar.
+
+def _guardar_feedback(modelo, datos, db, etiqueta):
+    rid = (datos.request_id or "").strip() or None
+    if rid:
+        existente = db.query(modelo).filter(modelo.request_id == rid).first()
+        if existente:
+            logger.info(f"{etiqueta} duplicado ignorado: RID {rid} (id {existente.id})")
+            return {"id": existente.id, "mensaje": f"{etiqueta} ya registrado (idempotencia)", "duplicado": True}
+
+    texto = (datos.texto or "").strip()
+    if not texto:
+        raise HTTPException(status_code=400, detail="El texto no puede estar vacío")
+
+    try:
+        # session_id <= 0 (p.ej. el placeholder -99 de un turno aún encolado) -> None.
+        session_id = datos.session_id if (datos.session_id or 0) > 0 else None
+        fila = modelo(
+            session_id=session_id,
+            maquina=datos.maquina,
+            operador=datos.operador,
+            texto=texto[:1000],
+            request_id=rid,
+        )
+        db.add(fila)
+        db.commit()
+        db.refresh(fila)
+        logger.info(f"{etiqueta} registrado: id {fila.id} — {datos.operador or '?'} / {datos.maquina or '?'}")
+        return {"id": fila.id, "mensaje": f"{etiqueta} registrado"}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al guardar {etiqueta.lower()}: {e}")
+        raise HTTPException(status_code=500, detail="Error interno")
+
+
+@router.post("/comentarios_turno")
+def crear_comentario_turno(datos: ComentarioTurnoRequest, db: Session = Depends(get_db)):
+    """Guarda un comentario libre del turno escrito por el operario."""
+    return _guardar_feedback(ComentarioTurnoDB, datos, db, "Comentario de turno")
+
+
+@router.post("/reportes_app")
+def crear_reporte_app(datos: ReporteAppRequest, db: Session = Depends(get_db)):
+    """Guarda un reporte de problema con la aplicación enviado por el operario."""
+    return _guardar_feedback(ReporteAppDB, datos, db, "Reporte de app")

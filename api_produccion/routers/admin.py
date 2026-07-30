@@ -14,6 +14,7 @@ servicio; basta con volver a iniciar sesión).
 La app Android descarga la lista de operarios ACTIVOS cuando tiene conexión y la
 cachea, así que altas/bajas aquí se reflejan en las tablets al reconectar.
 """
+import os
 import secrets
 from datetime import datetime, timedelta
 
@@ -35,7 +36,12 @@ from models import (
     MaquinaProductoDB,
     MarcaDB,
     PresentacionDB,
+    MensajeTabletDB,
+    EstadoTabletDB,
+    PedidoBodegaDB,
+    EntregaProactivaDB,
 )
+from routers.tablets import enviar_payload_ws, UMBRAL_OFFLINE_SEGUNDOS
 
 router = APIRouter(prefix="/api/admin", tags=["Administración"])
 
@@ -331,7 +337,7 @@ def catalogos_jerarquia(db: Session = Depends(get_db), ctx=Depends(require_admin
         "SELECT nombre FROM presentaciones WHERE activa = 1 ORDER BY id"
     )).fetchall()]
     return {
-        "maquinas": [{"id": m.id, "nombre": m.nombre} for m in maquinas],
+        "maquinas": [{"id": m.id, "nombre": m.nombre, "tipo": m.tipo} for m in maquinas],
         "marcas": marcas,
         "presentaciones": presentaciones,
     }
@@ -348,7 +354,7 @@ def listar_maquina_productos(db: Session = Depends(get_db), ctx=Depends(require_
             {"id": f.id, "marca": f.marca, "presentacion": f.presentacion, "activo": bool(f.activo)}
         )
     return [
-        {"maquina_id": m.id, "maquina": m.nombre, "activa": bool(m.activa),
+        {"maquina_id": m.id, "maquina": m.nombre, "tipo": m.tipo, "activa": bool(m.activa),
          "productos": por_maquina.get(m.id, [])}
         for m in maquinas
     ]
@@ -423,8 +429,29 @@ class NombreIn(BaseModel):
     nombre: str
 
 
+# Tipos de línea válidos para una máquina (mayúsculas, sin tilde).
+TIPOS_MAQUINA = {"SOLIDO", "LIQUIDO"}
+
+
+def _norm_tipo(valor, por_defecto="SOLIDO"):
+    """Normaliza el tipo de máquina a 'SOLIDO'/'LIQUIDO'. Tolera 'Sólido'/'líquido'."""
+    if valor is None:
+        return por_defecto
+    t = (valor or "").strip().upper()
+    t = t.replace("Á", "A").replace("Í", "I").replace("Ó", "O")  # quita tildes comunes
+    if t not in TIPOS_MAQUINA:
+        raise HTTPException(status_code=400, detail="tipo inválido (use SOLIDO o LIQUIDO)")
+    return t
+
+
+class MaquinaIn(BaseModel):
+    nombre: str
+    tipo: str | None = None  # SOLIDO (default) | LIQUIDO
+
+
 class MaquinaUpdate(BaseModel):
     nombre: str | None = None
+    tipo: str | None = None
     activa: bool | None = None
 
 
@@ -450,8 +477,27 @@ def _crear_o_reactivar(db, modelo, campo_activo, nombre, etiqueta, ctx):
 
 
 @router.post("/maquinas")
-def crear_maquina(datos: NombreIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
-    return _crear_o_reactivar(db, MaquinaDB, "activa", datos.nombre, "Máquina", ctx)
+def crear_maquina(datos: MaquinaIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    """Crea (o reactiva) una máquina con su tipo de línea (SOLIDO por defecto)."""
+    nombre = (datos.nombre or "").strip()
+    if not nombre:
+        raise HTTPException(status_code=400, detail="El nombre es obligatorio")
+    tipo = _norm_tipo(datos.tipo)
+    existente = db.query(MaquinaDB).filter(MaquinaDB.nombre == nombre).first()
+    if existente:
+        if existente.activa:
+            raise HTTPException(status_code=409, detail=f"Máquina \"{nombre}\" ya existe")
+        existente.activa = True
+        existente.tipo = tipo
+        db.commit()
+        logger.info(f"Máquina reactivada: {nombre} [{tipo}] (admin {ctx.get('username')})")
+        return {"id": existente.id, "nombre": existente.nombre, "tipo": tipo, "activo": True, "reactivado": True}
+    maq = MaquinaDB(nombre=nombre, tipo=tipo, activa=True)
+    db.add(maq)
+    db.commit()
+    db.refresh(maq)
+    logger.info(f"Máquina creada: {nombre} [{tipo}] (admin {ctx.get('username')})")
+    return {"id": maq.id, "nombre": maq.nombre, "tipo": maq.tipo, "activo": True}
 
 
 @router.put("/maquinas/{maquina_id}")
@@ -467,11 +513,13 @@ def actualizar_maquina(maquina_id: int, datos: MaquinaUpdate, db: Session = Depe
         if choque:
             raise HTTPException(status_code=409, detail="Ya existe otra máquina con ese nombre")
         maq.nombre = nuevo
+    if datos.tipo is not None:
+        maq.tipo = _norm_tipo(datos.tipo)
     if datos.activa is not None:
         maq.activa = datos.activa
     db.commit()
     logger.info(f"Máquina {maq.id} actualizada (admin {ctx.get('username')})")
-    return {"id": maq.id, "nombre": maq.nombre, "activa": bool(maq.activa)}
+    return {"id": maq.id, "nombre": maq.nombre, "tipo": maq.tipo, "activa": bool(maq.activa)}
 
 
 @router.post("/marcas")
@@ -482,3 +530,247 @@ def crear_marca(datos: NombreIn, db: Session = Depends(get_db), ctx=Depends(requ
 @router.post("/presentaciones")
 def crear_presentacion(datos: NombreIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
     return _crear_o_reactivar(db, PresentacionDB, "activa", datos.nombre, "Presentación", ctx)
+
+
+# ----------------------------------------------------------------------------
+# Mensajes admin -> tablets activas (CAMBIO 4)
+# ----------------------------------------------------------------------------
+# El admin lista las sesiones de producción activas y envía un mensaje a una de
+# ellas. Se persiste como no leído y se empuja por WebSocket de tablets (instantáneo
+# si la tablet está online); el heartbeat lo recupera como respaldo. La tablet
+# confirma (leído) al mostrarlo.
+
+class MensajeAdminIn(BaseModel):
+    sesion_id: int
+    texto: str
+
+
+@router.get("/sesiones_activas")
+def listar_sesiones_activas(db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    """Sesiones de producción activas (turno abierto) + si su tablet está online."""
+    sesiones = (
+        db.query(SesionTrabajoDB)
+        .filter(SesionTrabajoDB.fin_turno.is_(None))
+        .order_by(SesionTrabajoDB.maquina.asc())
+        .all()
+    )
+    # Estado de tablets por máquina, para indicar si el mensaje llegará al instante.
+    ahora = datetime.now()
+    tablets = db.query(EstadoTabletDB).all()
+    online_por_maquina: dict[str, bool] = {}
+    for t in tablets:
+        if not t.maquina:
+            continue
+        en_linea = bool(t.en_linea_reportado) and t.ultimo_heartbeat is not None and \
+            (ahora - t.ultimo_heartbeat).total_seconds() <= UMBRAL_OFFLINE_SEGUNDOS
+        online_por_maquina[t.maquina] = online_por_maquina.get(t.maquina, False) or en_linea
+
+    out = []
+    for s in sesiones:
+        producto = " · ".join([x for x in [s.marca, s.presentacion, s.fragancia] if x]) or "—"
+        out.append({
+            "sesion_id": s.id,
+            "maquina": s.maquina,
+            "operador": s.operador,
+            "producto": producto,
+            "inicio": s.inicio_turno.strftime("%H:%M") if s.inicio_turno else "",
+            "tablet_online": online_por_maquina.get(s.maquina, False),
+        })
+    return out
+
+
+def _persistir_y_notificar(db, sesion, texto, origen):
+    """Crea el mensaje para una sesión y lo empuja por WS a las tablets de su máquina.
+
+    Devuelve el dict de resultado. NO hace commit (lo hace el llamador, para poder
+    agrupar varios mensajes en una sola transacción en el envío masivo)."""
+    msg = MensajeTabletDB(
+        origen=origen,
+        sesion_id=sesion.id,
+        maquina=sesion.maquina,
+        operador=sesion.operador,
+        texto=texto,
+    )
+    db.add(msg)
+    db.flush()  # asigna msg.id sin cerrar la transacción
+    return msg
+
+
+def _push_ws_mensaje(db, msg):
+    """Empuja un mensaje ya persistido por WS a las tablets de su máquina."""
+    entregado_ws = False
+    if msg.maquina:
+        tablets = db.query(EstadoTabletDB).filter(EstadoTabletDB.maquina == msg.maquina).all()
+        for t in tablets:
+            if enviar_payload_ws(t.device_id, {"tipo": "mensaje_admin", "id": msg.id, "texto": msg.texto}):
+                entregado_ws = True
+    return entregado_ws
+
+
+@router.post("/mensajes")
+def enviar_mensaje(datos: MensajeAdminIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    """Envía un mensaje a la sesión/tablet de producción indicada (individual)."""
+    texto = (datos.texto or "").strip()
+    if not texto:
+        raise HTTPException(status_code=400, detail="El mensaje no puede estar vacío")
+    if len(texto) > 500:
+        raise HTTPException(status_code=400, detail="El mensaje es demasiado largo (máx. 500)")
+
+    sesion = db.query(SesionTrabajoDB).filter(SesionTrabajoDB.id == datos.sesion_id).first()
+    if not sesion:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+    if sesion.fin_turno is not None:
+        raise HTTPException(status_code=400, detail="Esa sesión ya está finalizada")
+
+    msg = _persistir_y_notificar(db, sesion, texto, ctx.get("username") or "admin")
+    db.commit()
+    db.refresh(msg)
+    entregado_ws = _push_ws_mensaje(db, msg)
+
+    logger.info(
+        f"📨 Mensaje admin {msg.id} → {sesion.maquina} ({sesion.operador}) "
+        f"[{'WS' if entregado_ws else 'pendiente heartbeat'}] por {msg.origen}"
+    )
+    return {
+        "id": msg.id,
+        "maquina": sesion.maquina,
+        "operador": sesion.operador,
+        "entregado_ws": entregado_ws,
+        "mensaje": "Mensaje enviado",
+    }
+
+
+class MensajeMasivoIn(BaseModel):
+    texto: str
+    sesion_ids: list[int] | None = None  # None/[] => TODAS las sesiones activas
+
+
+@router.post("/mensajes/masivo")
+def enviar_mensaje_masivo(datos: MensajeMasivoIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    """Envía la MISMA alerta a varias sesiones activas a la vez.
+
+    - `sesion_ids` vacío o nulo  -> a TODAS las sesiones activas (alerta general).
+    - `sesion_ids` con una lista  -> solo a esas sesiones activas (varias seleccionadas).
+    """
+    texto = (datos.texto or "").strip()
+    if not texto:
+        raise HTTPException(status_code=400, detail="El mensaje no puede estar vacío")
+    if len(texto) > 500:
+        raise HTTPException(status_code=400, detail="El mensaje es demasiado largo (máx. 500)")
+
+    q = db.query(SesionTrabajoDB).filter(SesionTrabajoDB.fin_turno.is_(None))
+    if datos.sesion_ids:
+        q = q.filter(SesionTrabajoDB.id.in_(datos.sesion_ids))
+    sesiones = q.order_by(SesionTrabajoDB.maquina.asc()).all()
+    if not sesiones:
+        raise HTTPException(status_code=404, detail="No hay sesiones activas a las que enviar")
+
+    origen = ctx.get("username") or "admin"
+    msgs = [_persistir_y_notificar(db, s, texto, origen) for s in sesiones]
+    db.commit()
+
+    detalle = []
+    for msg in msgs:
+        db.refresh(msg)
+        entregado_ws = _push_ws_mensaje(db, msg)
+        detalle.append({
+            "id": msg.id, "sesion_id": msg.sesion_id, "maquina": msg.maquina,
+            "operador": msg.operador, "entregado_ws": entregado_ws,
+        })
+
+    logger.info(f"📢 Alerta masiva por {origen}: {len(detalle)} sesión(es) — \"{texto[:60]}\"")
+    return {"enviados": len(detalle), "detalle": detalle, "mensaje": f"Alerta enviada a {len(detalle)} tablet(s)"}
+
+
+# ----------------------------------------------------------------------------
+# Corrección de cantidades de un pedido de insumo (dashboard de insumos)
+# ----------------------------------------------------------------------------
+# "Validar" = corregir lo entregado/recibido cuando difiere de lo solicitado
+# (ej. pidió 100, hubo 80, el operario recibió 79). Solo cantidades; no cambia
+# el flujo ni el estado del pedido.
+
+class PedidoCorreccionIn(BaseModel):
+    cantidad_entregada: int | None = None
+    cantidad_recibida: int | None = None
+
+
+@router.put("/pedidos/{pedido_id}")
+def corregir_pedido(pedido_id: int, datos: PedidoCorreccionIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    p = db.query(PedidoBodegaDB).filter(PedidoBodegaDB.id == pedido_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Pedido no encontrado")
+    if datos.cantidad_entregada is not None:
+        if datos.cantidad_entregada < 0:
+            raise HTTPException(status_code=400, detail="La cantidad entregada no puede ser negativa")
+        p.cantidad_entregada = datos.cantidad_entregada
+    if datos.cantidad_recibida is not None:
+        if datos.cantidad_recibida < 0:
+            raise HTTPException(status_code=400, detail="La cantidad recibida no puede ser negativa")
+        p.cantidad_recibida = datos.cantidad_recibida
+    db.commit()
+    logger.info(
+        f"Pedido {pedido_id} corregido (admin {ctx.get('username')}): "
+        f"ent={p.cantidad_entregada} rec={p.cantidad_recibida}"
+    )
+    return {
+        "id": p.id,
+        "cantidad_solicitada": p.cantidad_solicitada,
+        "cantidad_entregada": p.cantidad_entregada,
+        "cantidad_recibida": p.cantidad_recibida,
+    }
+
+
+@router.delete("/pedidos/{pedido_id}")
+def eliminar_pedido(pedido_id: int, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    """Elimina un registro de pedido de insumo (desde el dashboard de insumos)."""
+    p = db.query(PedidoBodegaDB).filter(PedidoBodegaDB.id == pedido_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Pedido no encontrado")
+    db.delete(p)
+    db.commit()
+    logger.info(f"Pedido {pedido_id} eliminado (admin {ctx.get('username')})")
+    return {"eliminado": pedido_id}
+
+
+# ----------------------------------------------------------------------------
+# Entregas proactivas (entregar sin pedido) — corregir cantidad / eliminar
+# ----------------------------------------------------------------------------
+class EntregaCorreccionIn(BaseModel):
+    cantidad: int | None = None
+
+
+@router.put("/entregas/{entrega_id}")
+def corregir_entrega(entrega_id: int, datos: EntregaCorreccionIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    """Corrige la cantidad de una entrega proactiva."""
+    e = db.query(EntregaProactivaDB).filter(EntregaProactivaDB.id == entrega_id).first()
+    if not e:
+        raise HTTPException(status_code=404, detail="Entrega no encontrada")
+    if datos.cantidad is not None:
+        if datos.cantidad < 0:
+            raise HTTPException(status_code=400, detail="La cantidad no puede ser negativa")
+        e.cantidad = datos.cantidad
+    db.commit()
+    logger.info(f"Entrega proactiva {entrega_id} corregida (admin {ctx.get('username')}): cant={e.cantidad}")
+    return {"id": e.id, "cantidad": e.cantidad}
+
+
+@router.delete("/entregas/{entrega_id}")
+def eliminar_entrega(entrega_id: int, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    """Elimina una entrega proactiva y, si existe, su foto de evidencia en disco."""
+    e = db.query(EntregaProactivaDB).filter(EntregaProactivaDB.id == entrega_id).first()
+    if not e:
+        raise HTTPException(status_code=404, detail="Entrega no encontrada")
+    foto_path = e.foto_path  # p.ej. "/static/entregas/2_1_....jpg"
+    db.delete(e)
+    db.commit()
+    # Borrado best-effort del archivo físico (no es crítico si falla).
+    if foto_path:
+        try:
+            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # api_produccion/
+            ruta = os.path.join(base, foto_path.lstrip("/"))
+            if os.path.isfile(ruta):
+                os.remove(ruta)
+        except Exception as ex:
+            logger.warning(f"No se pudo borrar la foto de la entrega {entrega_id}: {ex}")
+    logger.info(f"Entrega proactiva {entrega_id} eliminada (admin {ctx.get('username')})")
+    return {"eliminado": entrega_id}
