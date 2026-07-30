@@ -76,21 +76,58 @@ Notas de configuración:
 ### Estructura
 
 ```
-frontend_sigep/src/
-├── index.js, index.css          # entrada + tokens globales, scrollbar, animaciones
-├── App.js                       # estado, fetchers axios, polling, layout
-└── components/
-    ├── Header.js                # cabecera
-    ├── FiltroFecha.js           # rango desde/hasta
-    ├── KPICards.js              # tarjetas KPI
-    ├── ProductionChart.js       # producción por hora
-    ├── TerminalLog.js           # actividad en vivo
-    ├── OperationsTable.js       # estado operativo por línea
-    ├── Segmentadores.js         # filtros multi-selección
-    ├── TopProductionChart.js    # top marcas
-    ├── TabletsSyncPanel.js      # estado de las 21 tablets
-    └── Sidebar.js               # (la versión de referencia NO lleva barra lateral)
+frontend_sigep/
+├── .env.development             # HOST/PORT del dev server (ver más abajo)
+├── package.json                 # "proxy": "http://127.0.0.1:8000"
+├── tailwind.config.js           # tokens del sistema de diseño (colores sig-*)
+└── src/
+    ├── index.js
+    ├── index.css                # rejilla de fondo, fuentes, .sig-label / .sig-card / .sig-input
+    ├── App.js                   # estado, polling, layout de dos columnas, navegación
+    ├── lib/format.js            # es-EC, duraciones, turno, antigüedad, etiqueta de tablet
+    ├── components/
+    │   ├── Header.js            # cabecera: reloj, EN VIVO, Insumos, Admin
+    │   ├── BarraTitulo.js       # sobre-título, H1, turno actual
+    │   ├── FiltroFecha.js       # rango desde/hasta + Cargar + 3 descargas
+    │   ├── KPICards.js          # las 3 tarjetas KPI
+    │   ├── ProductionChart.js   # producción por hora (área)
+    │   ├── OperationsTable.js   # estado operativo · líneas
+    │   ├── EstadisticasProduccion.js  # ranking por agrupación y período
+    │   ├── TerminalLog.js       # actividad en vivo
+    │   ├── TabletsSyncPanel.js  # chips de las 21 tablets
+    │   ├── TopProductionChart.js # top marcas
+    │   └── Footer.js
+    └── components/ui/           # componentes base del sistema de diseño
+        ├── Label, Badge, Button, Card, StatCard (+ Cifra)
+        ├── ProgressBar, Ring, Tabs, Dot, Logo
+        └── Estado (+ Esqueleto)  # carga / error / vacío
 ```
+
+Todo componente se importa desde `./ui` (barrel en `ui/index.js`), y todo número pasa
+por `lib/format.js`. Colores nuevos van a `tailwind.config.js`, nunca sueltos en el JSX.
+
+### Componente → endpoint
+
+| Componente | Endpoint |
+|---|---|
+| `KPICards` | `/dashboard/kpis` + derivación de `/dashboard/estado_operativo` |
+| `ProductionChart` | `/dashboard/produccion_hora` |
+| `OperationsTable` | `/dashboard/estado_operativo` |
+| `EstadisticasProduccion` | `/dashboard/estadisticas` (fetch propio) |
+| `TerminalLog` | `/dashboard/logs` |
+| `TabletsSyncPanel` | `/tablets/estado`, `/tablets/sincronizar/{id}` (fetch propio) |
+| `TopProductionChart` | `/dashboard/top_produccion` |
+| `FiltroFecha` | `/reportes/excel`, `/reportes/formularios_excel`, `/reportes/insumos_excel` |
+
+`App.js` refresca los cinco endpoints del dashboard cada 15 s con `Promise.allSettled`:
+si uno falla, los demás se actualizan igual y el que falló conserva su último dato.
+
+### Dev server
+
+`.env.development` fija `HOST` a la IP del servidor. Es necesario: la clave `proxy`
+activa el host check de CRA (protección anti DNS-rebinding) y con el `HOST` por defecto
+(`0.0.0.0`) CRA no puede resolver la URL de LAN, deja `allowedHosts` vacío y aborta con
+`options.allowedHosts[0] should be a non-empty string`.
 
 ### Convenciones del código existente
 

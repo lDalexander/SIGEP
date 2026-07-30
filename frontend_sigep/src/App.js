@@ -1,318 +1,187 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 
-import Sidebar from './components/Sidebar';
 import Header from './components/Header';
+import BarraTitulo from './components/BarraTitulo';
 import KPICards from './components/KPICards';
 import ProductionChart from './components/ProductionChart';
-import TerminalLog from './components/TerminalLog';
-import TopProductionChart from './components/TopProductionChart';
 import OperationsTable from './components/OperationsTable';
+import EstadisticasProduccion from './components/EstadisticasProduccion';
+import TerminalLog from './components/TerminalLog';
 import TabletsSyncPanel from './components/TabletsSyncPanel';
-import Segmentadores from './components/Segmentadores';
-import FiltroFecha from './components/FiltroFecha';
+import TopProductionChart from './components/TopProductionChart';
+import Footer from './components/Footer';
+import { Card, Label } from './components/ui';
+import { fechaISO } from './lib/format';
 
-/* ══════════════════════════════════════════════
-   API CONFIGURATION
-   ══════════════════════════════════════════════ */
-const API_BASE = 'http://150.36.200.252:8000/api';
-const POLL_INTERVAL = 5000; // 5 seconds
+/* Ruta relativa: en producción la resuelve el proxy de nginx (`/api/` ->
+   127.0.0.1:8000) y en desarrollo la clave "proxy" de package.json. Así no hay
+   CORS ni IPs incrustadas en el bundle. */
+const API_BASE = '/api';
+const POLL_INTERVAL = 15000;
 
 function App() {
-  /* ── Navigation State ─────────────────────── */
-  const [activeView, setActiveView] = useState('dashboard');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  /* ── Navegación ─────────────────────────────────────── */
+  const [vista, setVista] = useState(() =>
+    window.location.pathname.startsWith('/admin') ? 'admin' : 'dashboard'
+  );
 
-  /* ── KPI State ────────────────────────────── */
+  const navegar = useCallback((destino) => {
+    setVista(destino);
+    const ruta = destino === 'dashboard' ? '/' : `/${destino}`;
+    if (window.location.pathname !== ruta) window.history.pushState({ vista: destino }, '', ruta);
+  }, []);
+
+  useEffect(() => {
+    const alVolver = () =>
+      setVista(window.location.pathname.startsWith('/admin') ? 'admin' : 'dashboard');
+    window.addEventListener('popstate', alVolver);
+    return () => window.removeEventListener('popstate', alVolver);
+  }, []);
+
+  /* ── Rango de fechas ────────────────────────────────────
+     `rango` son los inputs; `aplicado` es lo que se está consultando. Se separan
+     para que el dashboard no recargue con cada pulsación de tecla en la fecha. */
+  const hoy = fechaISO();
+  const [rango, setRango] = useState({ desde: hoy, hasta: hoy });
+  const [aplicado, setAplicado] = useState({ desde: hoy, hasta: hoy });
+
+  /* ── Datos ──────────────────────────────────────────── */
   const [kpis, setKpis] = useState(null);
-  const [kpisLoading, setKpisLoading] = useState(true);
-  const [kpisError, setKpisError] = useState(false);
-
-  /* ── Logs State ───────────────────────────── */
   const [logs, setLogs] = useState([]);
-  const [logsLoading, setLogsLoading] = useState(true);
-  const [logsError, setLogsError] = useState(false);
+  const [produccionHora, setProduccionHora] = useState([]);
+  const [operaciones, setOperaciones] = useState([]);
+  const [topMarcas, setTopMarcas] = useState([]);
 
-  /* ── Chart State ──────────────────────────── */
-  const [chartData, setChartData] = useState([]);
-  const [topProduction, setTopProduction] = useState([]);
+  const [cargando, setCargando] = useState(true);
+  const [error, setError] = useState(false);
+  const [ultimoRefresco, setUltimoRefresco] = useState(null);
 
-  /* ── Operations State ─────────────────────── */
-  const [operations, setOperations] = useState([]);
-  const [operationsLoading, setOperationsLoading] = useState(true);
-
-  /* ── Segmentadores (filtros) State ────────── */
-  const EMPTY_FILTROS = { maquina: [], operador: [], marca: [], presentacion: [], fragancia: [] };
-  const [filtros, setFiltros] = useState(EMPTY_FILTROS);
-  const [opcionesFiltros, setOpcionesFiltros] = useState(EMPTY_FILTROS);
-
-  /* ── Rango de fechas State (desde/hasta) ──── */
-  const [rango, setRango] = useState({ desde: '', hasta: '' });
-
-  /* ── Interval Refs for cleanup ────────────── */
-  const intervalsRef = useRef({ kpi: null, log: null, chart: null, op: null, top: null });
+  const timerRef = useRef(null);
 
   /**
-   * Construye los query-params (URLSearchParams) a partir de los filtros activos.
-   * Serializa cada dimensión como claves repetidas (maquina=A&maquina=B), que es
-   * el formato que FastAPI interpreta como List[str].
+   * Un solo refresco para todo el dashboard. Se usa allSettled a propósito: si un
+   * endpoint falla, los demás sí actualizan, y el que falla conserva su último dato
+   * visible en lugar de vaciarse.
    */
-  const buildParams = useCallback(() => {
-    const params = new URLSearchParams();
-    if (rango.desde) params.append('desde', rango.desde);
-    if (rango.hasta) params.append('hasta', rango.hasta);
-    Object.entries(filtros).forEach(([key, vals]) => {
-      (vals || []).forEach((v) => params.append(key, v));
-    });
-    return params;
-  }, [filtros, rango]);
+  const refrescar = useCallback(async () => {
+    const params = { desde: aplicado.desde, hasta: aplicado.hasta };
+    const opciones = { params, timeout: 8000 };
 
-  /* ══════════════════════════════════════════════
-     DATA FETCHERS
-     ══════════════════════════════════════════════ */
+    const peticiones = [
+      ['kpis',        () => axios.get(`${API_BASE}/dashboard/kpis`, opciones),            setKpis],
+      ['logs',        () => axios.get(`${API_BASE}/dashboard/logs`, { timeout: 8000 }),   setLogs],
+      ['hora',        () => axios.get(`${API_BASE}/dashboard/produccion_hora`, opciones), setProduccionHora],
+      ['operativo',   () => axios.get(`${API_BASE}/dashboard/estado_operativo`, opciones), setOperaciones],
+      ['top',         () => axios.get(`${API_BASE}/dashboard/top_produccion`, opciones),  setTopMarcas],
+    ];
 
-  /**
-   * GET /dashboard/kpis
-   * Expected: { pallets_hoy: number, turnos_activos: number, eficiencia: string }
-   */
-  const fetchKPIs = useCallback(async () => {
-    try {
-      const { data } = await axios.get(`${API_BASE}/dashboard/kpis`, {
-        params: buildParams(),
-        timeout: 8000,
-      });
-      console.log('[SIGEP] ✅ KPIs recibidos:', data);
-      setKpis(data);
-      setKpisError(false);
-    } catch (err) {
-      console.error('[SIGEP] ❌ Error fetching KPIs:', err.message);
-      setKpisError(true);
-      // IMPORTANT: Do NOT setKpis(null) here — keep stale data visible
-    } finally {
-      setKpisLoading(false);
-    }
-  }, [buildParams]);
+    const resultados = await Promise.allSettled(peticiones.map(([, ejecutar]) => ejecutar()));
 
-  /**
-   * GET /dashboard/logs
-   * Expected: [{ hora: string, mensaje: string, tipo: string }, ...]
-   */
-  const fetchLogs = useCallback(async () => {
-    try {
-      const { data } = await axios.get(`${API_BASE}/dashboard/logs`, {
-        timeout: 8000,
-      });
-      console.log('[SIGEP] ✅ Logs recibidos:', data.length, 'entradas');
-      setLogs(Array.isArray(data) ? data : []);
-      setLogsError(false);
-    } catch (err) {
-      console.error('[SIGEP] ❌ Error fetching Logs:', err.message);
-      setLogsError(true);
-    } finally {
-      setLogsLoading(false);
-    }
-  }, []);
-
-  /**
-   * GET /dashboard/produccion_hora
-   * Expected: [{ hora: string, pallets: number }, ...]
-   * Note: Chart falls back to MOCK_DATA internally if this returns empty
-   */
-  const fetchChartData = useCallback(async () => {
-    try {
-      const { data } = await axios.get(`${API_BASE}/dashboard/produccion_hora`, {
-        params: buildParams(),
-        timeout: 8000,
-      });
-      if (Array.isArray(data)) {
-        setChartData(data);
-        console.log('[SIGEP] ✅ Chart data recibido:', data.length, 'horas');
+    let algunoFallo = false;
+    resultados.forEach((resultado, i) => {
+      const [nombre, , aplicar] = peticiones[i];
+      if (resultado.status === 'fulfilled') {
+        aplicar(resultado.value.data);
+      } else {
+        algunoFallo = true;
+        console.error(`[SIGEP] Error en ${nombre}:`, resultado.reason?.message);
       }
-    } catch {
-      // Silent fail — ProductionChart will render MOCK_DATA as fallback
-    }
-  }, [buildParams]);
+    });
 
-  const fetchTopProduction = useCallback(async () => {
-    try {
-      const { data } = await axios.get(`${API_BASE}/dashboard/top_produccion`, {
-        params: buildParams(),
-        timeout: 8000,
-      });
-      setTopProduction(Array.isArray(data) ? data : []);
-    } catch { }
-  }, [buildParams]);
-
-  const fetchOperations = useCallback(async () => {
-    try {
-      const { data } = await axios.get(`${API_BASE}/dashboard/estado_operativo`, {
-        params: buildParams(),
-        timeout: 8000,
-      });
-      setOperations(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.error('[SIGEP] ❌ Error fetching Operations:', err.message);
-    } finally {
-      setOperationsLoading(false);
-    }
-  }, [buildParams]);
-
-  /* Carga (una vez) las opciones disponibles para llenar los segmentadores. */
-  const fetchOpcionesFiltros = useCallback(async () => {
-    try {
-      const { data } = await axios.get(`${API_BASE}/dashboard/opciones_filtros`, { timeout: 8000 });
-      setOpcionesFiltros({ ...EMPTY_FILTROS, ...data });
-    } catch (err) {
-      console.error('[SIGEP] ❌ Error fetching opciones de filtros:', err.message);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  /* ══════════════════════════════════════════════
-     LIFECYCLE: Initial Fetch + Polling (5s)
-     ══════════════════════════════════════════════ */
+    setError(algunoFallo);
+    if (!algunoFallo) setUltimoRefresco(new Date());
+    setCargando(false);
+  }, [aplicado]);
 
   useEffect(() => {
-    console.log('[SIGEP] 🚀 Iniciando conexión a', API_BASE);
+    if (vista !== 'dashboard') return undefined;
+    setCargando(true);
+    refrescar();
+    timerRef.current = setInterval(refrescar, POLL_INTERVAL);
+    return () => clearInterval(timerRef.current);
+  }, [refrescar, vista]);
 
-    // 1. Fire initial fetches immediately
-    fetchKPIs();
-    fetchLogs();
-    fetchChartData();
-    fetchTopProduction();
-    fetchOperations();
+  /* ── Handlers ───────────────────────────────────────── */
+  const cambiarFecha = (campo, valor) => setRango((prev) => ({ ...prev, [campo]: valor }));
+  const cargarRango = () => setAplicado({ ...rango });
 
-    // 2. Set up polling intervals
-    const t = intervalsRef.current;
-    t.kpi   = setInterval(fetchKPIs, POLL_INTERVAL);
-    t.log   = setInterval(fetchLogs, POLL_INTERVAL);
-    t.chart = setInterval(fetchChartData, POLL_INTERVAL * 6); // 30s for chart
-    t.top   = setInterval(fetchTopProduction, POLL_INTERVAL * 6);
-    t.op    = setInterval(fetchOperations, POLL_INTERVAL);
-
-    // 3. Cleanup on unmount
-    return () => {
-      console.log('[SIGEP] 🛑 Limpiando intervalos de polling');
-      clearInterval(t.kpi);
-      clearInterval(t.log);
-      clearInterval(t.chart);
-      clearInterval(t.top);
-      clearInterval(t.op);
-    };
-  }, [fetchKPIs, fetchLogs, fetchChartData, fetchTopProduction, fetchOperations]);
-
-  /* Cargar opciones de segmentadores una sola vez al montar. */
-  useEffect(() => {
-    fetchOpcionesFiltros();
-  }, [fetchOpcionesFiltros]);
-
-  /* ══════════════════════════════════════════════
-     SEGMENTADORES HANDLERS
-     ══════════════════════════════════════════════ */
-
-  const handleFiltroChange = (dim, valores) => {
-    setFiltros((prev) => ({ ...prev, [dim]: valores }));
+  const descargar = (ruta) => {
+    const qs = new URLSearchParams({ desde: aplicado.desde, hasta: aplicado.hasta });
+    window.open(`${API_BASE}/reportes/${ruta}?${qs}`, '_blank', 'noopener');
   };
 
-  const handleLimpiarFiltros = () => setFiltros(EMPTY_FILTROS);
-
-  const handleRangoChange = (campo, valor) => {
-    setRango((prev) => ({ ...prev, [campo]: valor }));
-  };
-
-  const handleResetRango = () => setRango({ desde: '', hasta: '' });
-
-  /* ══════════════════════════════════════════════
-     DOWNLOAD HANDLER
-     ══════════════════════════════════════════════ */
-
-  const handleDownloadReport = () => {
-    window.open(`${API_BASE}/reportes/excel`, '_blank');
-  };
-
-  /* ══════════════════════════════════════════════
-     RENDER — ZERO CHANGES TO TAILWIND CLASSES
-     ══════════════════════════════════════════════ */
-
-  const sidebarW = sidebarCollapsed ? 68 : 230;
+  /* Texto del metadato de las tarjetas: «hoy» cuando el rango es el día actual. */
+  const periodo =
+    aplicado.desde === hoy && aplicado.hasta === hoy
+      ? 'hoy'
+      : aplicado.desde === aplicado.hasta
+        ? aplicado.desde
+        : `${aplicado.desde} → ${aplicado.hasta}`;
 
   return (
-    <div className="min-h-screen bg-[#0a0f1a] text-slate-200 font-sans">
-      <Sidebar
-        activeView={activeView}
-        onNavigate={setActiveView}
-        collapsed={sidebarCollapsed}
-        onToggleCollapse={() => setSidebarCollapsed((p) => !p)}
-      />
+    <div className="min-h-screen flex flex-col">
+      <Header enVivo={!error} onNavegar={navegar} />
 
-      <main
-        className="transition-all duration-300 ease-out min-h-screen"
-        style={{ marginLeft: sidebarW }}
-      >
-        <div className="px-6 py-6 lg:px-8 lg:py-7 max-w-[1600px]">
+      <main className="flex-1 mx-auto w-full max-w-[1400px] px-6">
+        {vista === 'dashboard' ? (
+          <>
+            <BarraTitulo
+              desde={rango.desde}
+              hasta={rango.hasta}
+              onChange={cambiarFecha}
+              onCargar={cargarRango}
+              onDescargar={descargar}
+            />
 
-          {/* ═══ DASHBOARD VIEW ═══ */}
-          {activeView === 'dashboard' && (
-            <>
-              <Header onDownload={handleDownloadReport} />
-              <FiltroFecha
-                desde={rango.desde}
-                hasta={rango.hasta}
-                onChange={handleRangoChange}
-                onReset={handleResetRango}
-              />
-              <KPICards data={kpis} loading={kpisLoading} error={kpisError} />
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-                <ProductionChart liveData={chartData} />
-                <TopProductionChart data={topProduction} />
+            <KPICards
+              kpis={kpis}
+              operaciones={operaciones}
+              cargando={cargando}
+              error={error}
+            />
+
+            {/* Dos columnas: 62% / 38%. Colapsan a una sola bajo 1100px. */}
+            <div className="mt-5 grid grid-cols-1 wide:grid-cols-[62fr_38fr] gap-5 items-start">
+              <div className="space-y-5 min-w-0">
+                <ProductionChart
+                  datos={produccionHora}
+                  periodo={periodo}
+                  cargando={cargando}
+                  error={error}
+                />
+                <OperationsTable
+                  datos={operaciones}
+                  periodo={periodo}
+                  cargando={cargando}
+                  error={error}
+                />
+                <EstadisticasProduccion apiBase={API_BASE} />
               </div>
-              <Segmentadores
-                opciones={opcionesFiltros}
-                filtros={filtros}
-                onChange={handleFiltroChange}
-                onClear={handleLimpiarFiltros}
-              />
-              <OperationsTable data={operations} loading={operationsLoading} />
-            </>
-          )}
 
-          {/* ═══ TERMINAL VIEW ═══ */}
-          {activeView === 'terminal' && (
-            <>
-              <Header onDownload={handleDownloadReport} />
-              <TerminalLog logs={logs} loading={logsLoading} error={logsError} />
-            </>
-          )}
-
-          {/* ═══ TABLETS VIEW ═══ */}
-          {activeView === 'tablets' && (
-            <>
-              <Header onDownload={handleDownloadReport} />
-              <TabletsSyncPanel apiBase={API_BASE} pollInterval={POLL_INTERVAL} />
-            </>
-          )}
-
-          {/* ═══ SETTINGS VIEW ═══ */}
-          {activeView === 'settings' && (
-            <>
-              <Header onDownload={handleDownloadReport} />
-              <div className="bg-sigep-card border border-sigep-border rounded-2xl p-10 text-center animate-fade-in shadow-[0_1px_3px_rgba(0,0,0,0.5)]">
-                <div className="w-12 h-12 mx-auto mb-4 rounded-lg bg-sigep-neon/10 text-sigep-neon flex items-center justify-center">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-                    <circle cx="12" cy="12" r="3"/>
-                  </svg>
-                </div>
-                <h2 className="text-lg font-semibold text-white mb-2">Panel de Ajustes</h2>
-                <p className="text-sm text-slate-400 max-w-md mx-auto leading-relaxed">
-                  Módulo en construcción — próximamente: gestión de operadores,
-                  máquinas, y configuración del sistema SIGEP.
-                </p>
+              <div className="space-y-5 min-w-0">
+                <TerminalLog logs={logs} cargando={cargando} error={error} />
+                <TabletsSyncPanel apiBase={API_BASE} intervalo={POLL_INTERVAL} />
+                <TopProductionChart
+                  datos={topMarcas}
+                  periodo={periodo}
+                  cargando={cargando}
+                  error={error}
+                />
               </div>
-            </>
-          )}
+            </div>
+          </>
+        ) : (
+          <div className="py-10">
+            <Card titulo={vista === 'admin' ? 'Administración' : 'Insumos'}>
+              <Label caja="normal" className="block py-8 text-center text-sig-dim">
+                Pendiente de la etapa 3
+              </Label>
+            </Card>
+          </div>
+        )}
 
-        </div>
+        <Footer actualizado={ultimoRefresco} />
       </main>
     </div>
   );

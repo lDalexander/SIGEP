@@ -36,6 +36,9 @@ serviceAccountKey*.json
 .env.*
 *.env.bak*
 
+# Excepción: configuración del dev server del frontend, sin secretos y útil de compartir.
+!frontend_sigep/.env.development
+
 # Credenciales del script de respaldo de la base de datos (user/password MySQL)
 backups/.dbcreds.cnf
 backups/*.cnf

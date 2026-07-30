@@ -1,35 +1,70 @@
+/* El @import debe ir ANTES de las directivas @tailwind: en CSS las reglas @import
+   solo son válidas al principio de la hoja. */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@layer base {
+  html, body, #root {
+    min-height: 100%;
+  }
+
+  body {
+    @apply bg-sig-bg text-sig-text font-sans antialiased;
+
+    /* Rejilla de fondo del «centro de control»: celda de 56px, visible en TODAS
+       las vistas. Va en el body para que no se corte al hacer scroll. */
+    background-image:
+      linear-gradient(to right,  rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+    background-size: 56px 56px;
+    background-attachment: fixed;
+  }
+
+  /* Los date pickers nativos se dibujan en claro si no se declara el esquema. */
+  input[type='date'] {
+    color-scheme: dark;
+  }
+}
+
+@layer components {
+  /* LA clave del aspecto: toda etiqueta, metadato, badge, cabecera de tabla, texto
+     de ayuda o contador va en monoespaciada, mayúsculas, ~11px y tracking amplio.
+     Existe como clase además de como componente <Label> para poder aplicarla a
+     elementos que no admiten wrapper (th, option, placeholder). */
+  .sig-label {
+    @apply font-mono text-[11px] uppercase tracking-label text-sig-muted;
+  }
+
+  /* Variante sin mayúsculas, para metadatos que en las capturas conservan su caja
+     original (por ejemplo «9 checklists», «últimas 24h», «se sincroniza con...»). */
+  .sig-meta {
+    @apply font-mono text-[11px] tracking-label text-sig-muted;
+  }
+
+  .sig-card {
+    @apply bg-sig-card border border-sig-line rounded-xl;
+  }
+
+  .sig-input {
+    @apply bg-sig-input border border-sig-line rounded-lg px-3 py-2 text-sm text-sig-text
+           placeholder:text-sig-dim focus:border-sig-amber/50 focus:outline-none transition-colors;
+  }
+}
 
 /* === Scrollbar === */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #334155 transparent;
+  scrollbar-color: #253029 transparent;
 }
-::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar { width: 8px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #334155; border-radius: 9999px; }
-::-webkit-scrollbar-thumb:hover { background: #475569; }
+::-webkit-scrollbar-thumb { background: #253029; border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: #33413a; }
 
-/* === Terminal scanlines overlay === */
-.terminal-scanlines::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: repeating-linear-gradient(
-    0deg,
-    transparent,
-    transparent 2px,
-    rgba(0,232,135,0.012) 2px,
-    rgba(0,232,135,0.012) 4px
-  );
-  pointer-events: none;
-}
-
-/* === Reduced motion === */
+/* === Accesibilidad === */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

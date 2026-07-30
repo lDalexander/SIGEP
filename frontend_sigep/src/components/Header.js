@@ -1,49 +1,77 @@
-import React from 'react';
-import { Download, Radio, Clock } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Package, Settings } from 'lucide-react';
+import { Label, Button, Dot, Logo } from './ui';
+import { hora, fechaCorta } from '../lib/format';
 
-export default function Header({ onDownload }) {
-  const now = new Date();
-  const dateStr = now.toLocaleDateString('es-EC', {
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-  });
-  const timeStr = now.toLocaleTimeString('es-EC', { hour: '2-digit', minute: '2-digit' });
+/**
+ * Cabecera del centro de control.
+ *   izquierda : logo + SIGEP / CENTRO DE CONTROL
+ *   centro    : reloj en vivo (HORA PLANTA · GYE) y fecha, separados por filetes
+ *   derecha   : ● EN VIVO, Insumos, ⚙ Admin
+ *
+ * Props:
+ *   enVivo    : true si el último refresco fue correcto
+ *   onNavegar : (vista) => void  — 'insumos' | 'admin'
+ */
+export default function Header({ enVivo = true, onNavegar = () => {} }) {
+  const [ahora, setAhora] = useState(() => new Date());
+
+  // El reloj de la cabecera corre por su cuenta, sin depender del polling de datos.
+  useEffect(() => {
+    const id = setInterval(() => setAhora(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   return (
-    <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8 animate-fade-in">
-      {/* Title */}
-      <div>
-        <div className="flex items-center gap-3 mb-1.5">
-          <h1 className="text-2xl sm:text-[1.75rem] font-bold tracking-tight text-white">
-            SIGEP Web Portal
-          </h1>
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider bg-sigep-neon/10 text-sigep-neon border border-sigep-neon/15">
-            <Radio size={9} className="animate-pulse" />
-            Live
-          </span>
+    <header className="border-b border-sig-line">
+      <div className="mx-auto max-w-[1400px] px-6 py-3.5 flex items-center gap-6">
+        {/* Marca */}
+        <div className="flex items-center gap-3 shrink-0">
+          <Logo tamano={34} />
+          <div className="leading-none">
+            <p className="text-[17px] font-bold tracking-tight text-sig-text">SIGEP</p>
+            <Label className="block mt-1 text-sig-dim">Centro de control</Label>
+          </div>
         </div>
-        <p className="text-sm text-slate-400 leading-relaxed">
-          Detcuador S.A. — Sistema Integral de Gestión de Empaque y Producción
-        </p>
-        <div className="flex items-center gap-2 mt-1.5 text-xs text-slate-500">
-          <Clock size={12} />
-          <span className="capitalize">{dateStr}</span>
-          <span className="text-slate-600">·</span>
-          <span>{timeStr}</span>
-        </div>
-      </div>
 
-      {/* Download button — uses window.open via onDownload callback */}
-      <div className="flex items-center gap-3 shrink-0">
-        <button
-          id="btn-download-report"
-          type="button"
-          onClick={onDownload}
-          aria-label="Descargar reporte Excel de producción"
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold no-underline cursor-pointer bg-sigep-neon text-[#0a0f1a] shadow-[0_0_16px_rgba(0,232,135,0.3)] hover:bg-sigep-neon-dim hover:shadow-[0_0_24px_rgba(0,232,135,0.5)] hover:-translate-y-0.5 active:translate-y-0 transition-all duration-200 border-0"
-        >
-          <Download size={15} strokeWidth={2.3} />
-          Descargar Reporte
-        </button>
+        {/* Reloj y fecha, centrados */}
+        <div className="flex-1 flex items-center justify-center gap-6">
+          <div className="text-center">
+            <p className="font-mono text-[19px] font-semibold tabular-nums leading-none text-sig-text">
+              {hora(ahora)}
+            </p>
+            <Label className="block mt-1.5">Hora planta · GYE</Label>
+          </div>
+
+          <span aria-hidden="true" className="h-9 w-px bg-sig-line" />
+
+          <div className="text-center">
+            <p className="text-[19px] font-bold leading-none text-sig-text">{fechaCorta(ahora)}</p>
+            <Label className="block mt-1.5">Fecha</Label>
+          </div>
+
+          <span aria-hidden="true" className="h-9 w-px bg-sig-line" />
+        </div>
+
+        {/* Estado y accesos */}
+        <div className="flex items-center gap-3 shrink-0">
+          <span className="inline-flex items-center gap-2">
+            <Dot tono={enVivo ? 'ok' : 'bad'} pulso={enVivo} />
+            <Label className={enVivo ? 'text-sig-ok' : 'text-red-400'}>
+              {enVivo ? 'En vivo' : 'Sin conexión'}
+            </Label>
+          </span>
+
+          <Button onClick={() => onNavegar('insumos')}>
+            <Package size={14} className="text-sig-amber" />
+            Insumos
+          </Button>
+
+          <Button onClick={() => onNavegar('admin')}>
+            <Settings size={14} />
+            Admin
+          </Button>
+        </div>
       </div>
     </header>
   );
