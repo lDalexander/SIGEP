@@ -35,8 +35,8 @@ export default function OperationsTable({ datos = [], periodo = 'hoy', cargando,
                   <Label className="block mt-1">{fila.operador}</Label>
                 </div>
 
-                {/* Producto */}
-                <p className="flex-1 min-w-0 truncate text-[13px] text-sig-muted">
+                {/* Producto — centrado en la fila, como en las capturas */}
+                <p className="flex-1 min-w-0 truncate text-center text-[13px] text-sig-muted">
                   {fila.producto || '—'}
                 </p>
 

@@ -58,7 +58,9 @@ function App() {
   const [topMarcas, setTopMarcas] = useState([]);
 
   const [cargando, setCargando] = useState(true);
-  const [error, setError] = useState(false);
+  /* Errores por endpoint, no uno global: si solo falla `logs`, no tiene sentido
+     marcar como caídas las tarjetas que sí recibieron datos. */
+  const [errores, setErrores] = useState({});
   const [ultimoRefresco, setUltimoRefresco] = useState(null);
 
   const timerRef = useRef(null);
@@ -85,19 +87,21 @@ function App() {
 
     const resultados = await Promise.allSettled(peticiones.map(([, ejecutar]) => ejecutar()));
 
-    let algunoFallo = false;
+    const fallos = {};
     resultados.forEach((resultado, i) => {
       const [nombre, , aplicar] = peticiones[i];
       if (resultado.status === 'fulfilled') {
         aplicar(resultado.value.data);
       } else {
-        algunoFallo = true;
+        fallos[nombre] = true;
         console.error(`[SIGEP] Error en ${nombre}:`, resultado.reason?.message);
       }
     });
 
-    setError(algunoFallo);
-    if (!algunoFallo) setUltimoRefresco(new Date());
+    setErrores(fallos);
+    /* La hora del footer refleja cuándo se refrescaron datos: basta con que uno
+       haya respondido, si no se quedaría congelada por un solo endpoint caído. */
+    if (resultados.some((r) => r.status === 'fulfilled')) setUltimoRefresco(new Date());
     setCargando(false);
   }, [aplicado]);
 
@@ -118,6 +122,8 @@ function App() {
     window.open(`${API_BASE}/reportes/${ruta}?${qs}`, '_blank', 'noopener');
   };
 
+  const sinFallos = Object.keys(errores).length === 0;
+
   /* Texto del metadato de las tarjetas: «hoy» cuando el rango es el día actual. */
   const esHoy = aplicado.desde === hoy && aplicado.hasta === hoy;
   const periodo = esHoy
@@ -133,7 +139,7 @@ function App() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      <Header enVivo={!error} onNavegar={navegar} />
+      <Header enVivo={sinFallos} onNavegar={navegar} />
 
       <main className="flex-1 mx-auto w-full max-w-[1400px] px-6">
         {vista === 'dashboard' ? (
@@ -150,7 +156,7 @@ function App() {
               kpis={kpis}
               operaciones={operaciones}
               cargando={cargando}
-              error={error}
+              error={errores.kpis || errores.operativo}
             />
 
             {/* Dos columnas: 62% / 38%. Colapsan a una sola bajo 1100px. */}
@@ -160,26 +166,26 @@ function App() {
                   datos={produccionHora}
                   periodo={periodo}
                   cargando={cargando}
-                  error={error}
+                  error={errores.hora}
                 />
                 <OperationsTable
                   datos={operaciones}
                   periodo={periodo}
                   cargando={cargando}
-                  error={error}
+                  error={errores.operativo}
                 />
                 <EstadisticasProduccion apiBase={API_BASE} intervalo={POLL_INTERVAL} />
               </div>
 
               <div className="space-y-5 min-w-0">
-                <TerminalLog logs={logs} cargando={cargando} error={error} />
+                <TerminalLog logs={logs} cargando={cargando} error={errores.logs} />
                 <ChecklistMantenimiento apiBase={API_BASE} intervalo={POLL_INTERVAL} />
                 <TabletsSyncPanel apiBase={API_BASE} intervalo={POLL_INTERVAL} />
                 <TopProductionChart
                   datos={topMarcas}
                   periodo={periodo}
                   cargando={cargando}
-                  error={error}
+                  error={errores.top}
                 />
                 <SolicitudesInsumos
                   apiBase={API_BASE}

@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { Card, Button, Textarea, Checkbox, Estado, Aviso, useAviso, Label } from '../ui';
-import { plural } from '../../lib/format';
 import useApi from '../../lib/useApi';
 import { admin, mensajeDeError } from '../../lib/adminApi';
 
@@ -134,7 +133,7 @@ export default function TabMensajes() {
           ) : (
             <ul className="divide-y divide-sig-line">
               {sesiones.map((s) => (
-                <li key={s.sesion_id} className="flex items-center gap-4 px-5 py-3.5">
+                <li key={s.sesion_id} className="flex items-center gap-6 px-5 py-3.5">
                   <Checkbox
                     checked={elegidas.includes(s.sesion_id)}
                     onChange={() => alternar(s.sesion_id)}
@@ -162,10 +161,6 @@ export default function TabMensajes() {
             </ul>
           )}
         </Card>
-
-        <Label caja="normal" className="block text-sig-dim">
-          {plural(sesiones.length, 'sesión activa', 'sesiones activas')}
-        </Label>
       </div>
     </div>
   );

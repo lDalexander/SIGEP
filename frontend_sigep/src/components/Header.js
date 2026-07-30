@@ -62,6 +62,8 @@ export default function Header({ enVivo = true, onNavegar = () => {} }) {
             </Label>
           </span>
 
+          <span aria-hidden="true" className="h-9 w-px bg-sig-line" />
+
           <Button onClick={() => onNavegar('insumos')}>
             <Package size={14} className="text-sig-amber" />
             Insumos

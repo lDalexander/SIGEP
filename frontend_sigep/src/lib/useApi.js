@@ -26,16 +26,25 @@ export default function useApi(url, { params, intervalo = 0, cliente = axios } =
   const paramsRef = useRef(params);
   paramsRef.current = params;
 
+  /* Evita tocar el estado de un componente ya desmontado: al cambiar de pestaña en
+     Administración quedan peticiones en vuelo. */
+  const montado = useRef(true);
+  useEffect(() => {
+    montado.current = true;
+    return () => { montado.current = false; };
+  }, []);
+
   const cargar = useCallback(async () => {
     try {
       const { data } = await cliente.get(url, { params: paramsRef.current, timeout: 8000 });
+      if (!montado.current) return;
       setDatos(data);
       setError(false);
     } catch (err) {
       console.error(`[SIGEP] Error en ${url}:`, err.message);
-      setError(true);
+      if (montado.current) setError(true);
     } finally {
-      setCargando(false);
+      if (montado.current) setCargando(false);
     }
     // `clave` entra a propósito: es el disparador cuando cambian los params.
     // eslint-disable-next-line react-hooks/exhaustive-deps

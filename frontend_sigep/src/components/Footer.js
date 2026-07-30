@@ -13,7 +13,7 @@ export default function Footer({ actualizado }) {
         SIGEP · Centro de Control de Producción
       </Label>
       <Label caja="normal" className="text-sig-dim">
-        © Admin&nbsp;&nbsp; Actualizado {actualizado ? hora(actualizado) : '—'}
+        ·&nbsp;&nbsp;© Admin&nbsp;&nbsp; Actualizado {actualizado ? hora(actualizado) : '—'}
       </Label>
     </footer>
   );

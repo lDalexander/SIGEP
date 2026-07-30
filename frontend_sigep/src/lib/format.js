@@ -22,6 +22,9 @@ export function pct(v) {
  * Los minutos van a dos dígitos cuando hay horas delante.
  */
 export function duracion(minutos) {
+  // Ojo: Number(null) es 0, así que la ausencia de dato se descarta antes de convertir;
+  // si no, un `tiempo_transcurrido: null` se mostraría como "0m".
+  if (minutos === null || minutos === undefined || minutos === '') return '—';
   const m = Number(minutos);
   if (!Number.isFinite(m) || m < 0) return '—';
   if (m < 60) return `${Math.round(m)}m`;
@@ -35,6 +38,10 @@ export function duracion(minutos) {
  * "45s" / "31m" / "68m" / "5h" / "21d".
  */
 export function antiguedad(segundos) {
+  // El backend manda `segundos_desde_heartbeat: null` cuando la tablet nunca ha
+  // reportado. Sin este descarte previo, Number(null)=0 lo pintaría como "0s", es
+  // decir como si acabara de conectarse.
+  if (segundos === null || segundos === undefined || segundos === '') return '—';
   const s = Number(segundos);
   if (!Number.isFinite(s) || s < 0) return '—';
   if (s < 60) return `${s}s`;

@@ -126,7 +126,7 @@ test('las tarjetas de checklist muestran el anillo, el momento y el supervisor',
 
   // Supervisor y comentario entre comillas.
   expect(screen.getAllByText('Emilio').length).toBeGreaterThan(0);
-  expect(screen.getByText('«Seguimos con la dosificacion»')).toBeInTheDocument();
+  expect(screen.getByText('“Seguimos con la dosificacion”')).toBeInTheDocument();
 });
 
 test('el detalle de checklist genera una columna por ítem, con X y –', async () => {
@@ -149,6 +149,27 @@ test('el detalle de checklist genera una columna por ítem, con X y –', async 
 test('sin solicitudes de insumos se muestra el estado vacío de las capturas', async () => {
   render(<App />);
   expect(await screen.findByText('Sin solicitudes en las últimas 24h')).toBeInTheDocument();
+});
+
+test('un endpoint caído no arrastra a las demás tarjetas', async () => {
+  // Solo falla la actividad en vivo; el resto debe seguir mostrando sus datos.
+  axios.get.mockImplementation((url) => {
+    if (url.startsWith('/api/dashboard/logs')) return Promise.reject(new Error('boom'));
+    if (url.startsWith('/api/mantenimiento/checklist')) {
+      return Promise.resolve({ data: CHECKLIST_RECIENTES });
+    }
+    const clave = Object.keys(RESPUESTAS).find((k) => url.startsWith(k));
+    return clave ? Promise.resolve({ data: RESPUESTAS[clave] }) : Promise.reject(new Error('nope'));
+  });
+
+  render(<App />);
+
+  // La tarjeta caída avisa…
+  expect(await screen.findByText('Sin conexión con el servidor')).toBeInTheDocument();
+  // …y las demás siguen con sus datos, sin aviso de desconexión propio.
+  expect(screen.getByText('2.272')).toBeInTheDocument();
+  expect(screen.getByText('ANTHONY MERCADO')).toBeInTheDocument();
+  expect(screen.queryByText(/se muestran los últimos datos recibidos/i)).not.toBeInTheDocument();
 });
 
 test('si la API falla no se inventan datos y se avisa de la desconexión', async () => {

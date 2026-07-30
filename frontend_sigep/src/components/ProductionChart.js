@@ -68,8 +68,10 @@ export default function ProductionChart({ datos = [], periodo = 'hoy', cargando,
                 tick={{ fill: '#5A6A64', fontSize: 11, fontFamily: 'JetBrains Mono' }}
                 axisLine={false}
                 tickLine={false}
-                interval="preserveStartEnd"
-                minTickGap={18}
+                /* Una marca por cada hora con producción: el endpoint solo devuelve
+                   las horas que tienen datos, así que el eje salta los huecos igual
+                   que en las capturas (…04 05 08 09…). */
+                interval={0}
               />
               <Tooltip
                 content={<TooltipHora />}

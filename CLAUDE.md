@@ -163,6 +163,33 @@ Los componentes que leen datos del admin usan `useApi` pasándole ese cliente:
 Jerarquía hace `PUT {activo: false}` tras confirmación, porque los endpoints de borrado
 del backend son físicos y dejarían huérfano el histórico. Hay un test que lo verifica.
 
+### Estados y errores
+
+Tres reglas que se aplican en todo el frontend:
+
+1. **Nunca se inventa un dato.** Sin valor se muestra `—`; sin filas, el estado vacío
+   de la tarjeta. `lib/format.js` descarta `null`/`undefined` **antes** de convertir a
+   número, porque `Number(null)` es `0` y pintaría un cero falso (una tablet sin
+   heartbeat saldría como «0s», es decir como recién conectada).
+2. **Un endpoint caído no arrastra a los demás.** `App.js` guarda los errores por
+   endpoint, así que solo la tarjeta afectada avisa; las otras conservan sus datos. El
+   indicador `EN VIVO` de la cabecera es el único que refleja el estado global.
+3. **Ante un fallo se conserva el último dato bueno** en lugar de vaciar la tarjeta: en
+   un centro de control una cifra de hace 15 segundos vale más que un hueco.
+
+### Tests
+
+```bash
+cd frontend_sigep && CI=true npx react-scripts test --watchAll=false
+npx eslint --ext .js src/
+```
+
+- `src/lib/format.test.js` — formato es-EC, duraciones, turnos, antigüedad.
+- `src/App.test.js` — montaje del dashboard, tarjetas, tabla de detalle, y los dos
+  casos de fallo (endpoint aislado y API entera caída).
+- `src/components/admin/AdminApp.test.js` — las cinco pestañas, incluido que
+  «Eliminar» haga `PUT {activo:false}` y nunca `DELETE`.
+
 ### Dev server
 
 `.env.development` fija `HOST` a la IP del servidor. Es necesario: la clave `proxy`

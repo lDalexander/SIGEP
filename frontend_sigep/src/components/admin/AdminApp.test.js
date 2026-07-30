@@ -200,8 +200,10 @@ test('Producción: los campos son selects de catálogo y solo guardan lo cambiad
   expect(await screen.findByText(/Sesión #330 · 2026-07-23 11:19/)).toBeInTheDocument();
   expect(screen.getByText('Pacas: 0 (0 reg.)')).toBeInTheDocument();
 
-  const guardar = screen.getByRole('button', { name: 'Guardar sesión' });
-  expect(guardar).toBeDisabled(); // sin cambios no hay nada que guardar
+  // Sin cambios no se manda ningún PUT: se avisa en la propia pestaña.
+  fireEvent.click(screen.getByRole('button', { name: 'Guardar sesión' }));
+  expect(await screen.findByText('No hay cambios en esta sesión')).toBeInTheDocument();
+  expect(mockAdmin.put).not.toHaveBeenCalled();
 
   const maquina = screen.getByLabelText(/^maquina$/i, { selector: 'select' });
   expect(maquina.tagName).toBe('SELECT');

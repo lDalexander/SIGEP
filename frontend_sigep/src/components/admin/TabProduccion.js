@@ -139,10 +139,13 @@ export default function TabProduccion() {
                   <Label caja="normal" className="rounded-lg bg-sig-input px-3 py-1.5">
                     Pacas: {num(sesion.total_pacas)} ({num(sesion.n_registros)} reg.)
                   </Label>
+                  {/* Habilitado siempre, como en las capturas: si no hay cambios el
+                      propio `guardar` lo avisa en lugar de mandar un PUT vacío. */}
                   <Button
                     variante="primary"
                     onClick={() => guardar(sesion)}
-                    disabled={!tocada || guardando === sesion.id}
+                    disabled={guardando === sesion.id}
+                    title={tocada ? undefined : 'Sin cambios pendientes'}
                   >
                     {guardando === sesion.id ? 'Guardando…' : 'Guardar sesión'}
                   </Button>

@@ -33,9 +33,7 @@ export default function ChecklistMantenimiento({ apiBase, intervalo }) {
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   <Badge tono={c.momento === 'ENTRADA' ? 'ok' : 'amber'}>{c.momento}</Badge>
-                  <span className="font-mono text-[11px] tabular-nums tracking-label text-sig-muted">
-                    {c.hora}
-                  </span>
+                  <Badge tono="gray" className="tabular-nums">{c.hora}</Badge>
                   <Badge tono="gray">{c.codigo_turno}</Badge>
                 </div>
 
@@ -51,7 +49,7 @@ export default function ChecklistMantenimiento({ apiBase, intervalo }) {
 
                 {c.comentarios && (
                   <p className="mt-1 text-[12px] italic text-sig-dim truncate">
-                    «{c.comentarios}»
+                    “{c.comentarios}”
                   </p>
                 )}
               </div>

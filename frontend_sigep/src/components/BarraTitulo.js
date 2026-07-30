@@ -11,31 +11,32 @@ export default function BarraTitulo({ desde, hasta, onChange, onCargar, onDescar
   const turno = turnoActual();
 
   return (
-    <div className="pt-7 pb-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <Label className="block mb-2">Detcuador · Planta de llenado</Label>
-          <h1 className="text-[34px] leading-none font-extrabold tracking-tight text-white">
-            Producción en tiempo real
-          </h1>
-        </div>
+    <div className="pt-7 pb-6 flex flex-wrap items-end justify-between gap-x-6 gap-y-4">
+      <div>
+        <Label className="block mb-2">Detcuador · Planta de llenado</Label>
+        <h1 className="text-[34px] leading-none font-extrabold tracking-tight text-white">
+          Producción en tiempo real
+        </h1>
+      </div>
 
-        <div className="text-right shrink-0">
+      {/* El turno queda arriba y los controles a su altura del H1, como en las capturas. */}
+      <div className="flex-1 min-w-[420px]">
+        <p className="text-right mb-4">
           <span className="text-[13px] text-sig-muted">Turno actual&nbsp;&nbsp;</span>
           <span className="font-mono text-[13px] font-semibold tracking-label text-sig-amber">
             {turno.codigo} · {turno.franja}
           </span>
-        </div>
-      </div>
+        </p>
 
-      <div className="mt-5">
-        <FiltroFecha
-          desde={desde}
-          hasta={hasta}
-          onChange={onChange}
-          onCargar={onCargar}
-          onDescargar={onDescargar}
-        />
+        <div className="flex justify-end">
+          <FiltroFecha
+            desde={desde}
+            hasta={hasta}
+            onChange={onChange}
+            onCargar={onCargar}
+            onDescargar={onDescargar}
+          />
+        </div>
       </div>
     </div>
   );
