@@ -20,8 +20,12 @@ module.exports = function (app) {
     createProxyMiddleware({
       target: 'http://127.0.0.1:8000',
       changeOrigin: true,
-      ws: true, // el backend expone WebSockets bajo /api (tablets, insumos)
       logLevel: 'warn',
+      // Sin `ws: true` a propósito: http-proxy-middleware monta el listener de
+      // 'upgrade' en todo el servidor, no solo en /api, y se traga el WebSocket
+      // del hot reload de webpack (ERR_STREAM_WRITE_AFTER_END). El dashboard usa
+      // polling; los WebSockets del backend los consumen las tablets Android
+      // directamente contra el puerto 8000.
     })
   );
 };

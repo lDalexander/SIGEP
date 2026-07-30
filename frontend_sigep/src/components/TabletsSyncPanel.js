@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import axios from 'axios';
 import { Card, Estado } from './ui';
 import { antiguedad, etiquetaTablet } from '../lib/format';
+import useApi from '../lib/useApi';
 
 /**
  * «Tablets · sincronización» — rejilla de chips, uno por tablet registrada.
@@ -12,30 +13,12 @@ import { antiguedad, etiquetaTablet } from '../lib/format';
  * capacidad que el backend ya ofrece; si la tablet está offline, la orden se
  * entrega en su próximo heartbeat.
  */
-export default function TabletsSyncPanel({ apiBase, intervalo = 15000 }) {
-  const [tablets, setTablets] = useState([]);
-  const [cargando, setCargando] = useState(true);
-  const [error, setError] = useState(false);
+export default function TabletsSyncPanel({ apiBase, intervalo }) {
+  const { datos, cargando, error, recargar } = useApi(`${apiBase}/tablets/estado`, { intervalo });
   const [aviso, setAviso] = useState(null);
 
-  const cargar = useCallback(async () => {
-    try {
-      const { data } = await axios.get(`${apiBase}/tablets/estado`, { timeout: 8000 });
-      setTablets(Array.isArray(data) ? data : []);
-      setError(false);
-    } catch (err) {
-      console.error('[SIGEP] Error en tablets/estado:', err.message);
-      setError(true);
-    } finally {
-      setCargando(false);
-    }
-  }, [apiBase]);
-
-  useEffect(() => {
-    cargar();
-    const id = setInterval(cargar, intervalo);
-    return () => clearInterval(id);
-  }, [cargar, intervalo]);
+  const tablets = Array.isArray(datos) ? datos : [];
+  const enLinea = tablets.filter((t) => t.en_linea).length;
 
   const sincronizar = async (tablet) => {
     try {
@@ -43,20 +26,15 @@ export default function TabletsSyncPanel({ apiBase, intervalo = 15000 }) {
         `${apiBase}/tablets/sincronizar/${encodeURIComponent(tablet.device_id)}`
       );
       setAviso(data.motivo || 'Señal enviada');
-      cargar();
+      recargar();
     } catch {
       setAviso('No se pudo enviar la señal de sincronización');
     }
     setTimeout(() => setAviso(null), 4000);
   };
 
-  const enLinea = tablets.filter((t) => t.en_linea).length;
-
   return (
-    <Card
-      titulo="Tablets · sincronización"
-      meta={`${enLinea}/${tablets.length} en línea`}
-    >
+    <Card titulo="Tablets · sincronización" meta={`${enLinea}/${tablets.length} en línea`}>
       {tablets.length === 0 ? (
         <Estado cargando={cargando} error={error} vacio="Sin tablets registradas" />
       ) : (

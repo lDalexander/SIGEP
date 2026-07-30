@@ -84,7 +84,10 @@ frontend_sigep/
     ├── index.js
     ├── index.css                # rejilla de fondo, fuentes, .sig-label / .sig-card / .sig-input
     ├── App.js                   # estado, polling, layout de dos columnas, navegación
-    ├── lib/format.js            # es-EC, duraciones, turno, antigüedad, etiqueta de tablet
+    ├── setupProxy.js            # reenvío de /api al backend en desarrollo
+    ├── lib/
+    │   ├── format.js            # es-EC, duraciones, turno, antigüedad, etiqueta de tablet
+    │   └── useApi.js            # GET con polling; conserva el último dato bueno
     ├── components/
     │   ├── Header.js            # cabecera: reloj, EN VIVO, Insumos, Admin
     │   ├── BarraTitulo.js       # sobre-título, H1, turno actual
@@ -94,8 +97,11 @@ frontend_sigep/
     │   ├── OperationsTable.js   # estado operativo · líneas
     │   ├── EstadisticasProduccion.js  # ranking por agrupación y período
     │   ├── TerminalLog.js       # actividad en vivo
+    │   ├── ChecklistMantenimiento.js  # tarjetas con anillo de progreso
     │   ├── TabletsSyncPanel.js  # chips de las 21 tablets
     │   ├── TopProductionChart.js # top marcas
+    │   ├── SolicitudesInsumos.js # pedidos de insumo del rango
+    │   ├── DetalleChecklist.js  # tabla a ancho completo, una columna por ítem
     │   └── Footer.js
     └── components/ui/           # componentes base del sistema de diseño
         ├── Label, Badge, Button, Card, StatCard (+ Cifra)
@@ -115,12 +121,27 @@ por `lib/format.js`. Colores nuevos van a `tailwind.config.js`, nunca sueltos en
 | `OperationsTable` | `/dashboard/estado_operativo` |
 | `EstadisticasProduccion` | `/dashboard/estadisticas` (fetch propio) |
 | `TerminalLog` | `/dashboard/logs` |
+| `ChecklistMantenimiento` | `/mantenimiento/checklist?limit=8` (fetch propio) |
 | `TabletsSyncPanel` | `/tablets/estado`, `/tablets/sincronizar/{id}` (fetch propio) |
 | `TopProductionChart` | `/dashboard/top_produccion` |
+| `SolicitudesInsumos` | `/insumos/dashboard?desde&hasta` (fetch propio) |
+| `DetalleChecklist` | `/mantenimiento/checklist?desde&hasta` (fetch propio) |
 | `FiltroFecha` | `/reportes/excel`, `/reportes/formularios_excel`, `/reportes/insumos_excel` |
 
 `App.js` refresca los cinco endpoints del dashboard cada 15 s con `Promise.allSettled`:
-si uno falla, los demás se actualizan igual y el que falló conserva su último dato.
+si uno falla, los demás se actualizan igual y el que falló conserva su último dato. Las
+tarjetas marcadas como «fetch propio» usan el hook `lib/useApi.js`, con el mismo criterio.
+
+Dos matices heredados de la API, documentados en el código:
+
+- **`DetalleChecklist`** usa el mismo endpoint, criterio y orden que
+  `/reportes/formularios_excel`, pero el Excel separa ENTRADA y SALIDA en hojas distintas
+  (columnas de ítems homogéneas por hoja) mientras la tabla las mezcla con una columna
+  `MOMENTO`. Las columnas son por tanto la unión de los ítems de ambos momentos; un ítem
+  que un momento no usa aparece como «–».
+- **`SolicitudesInsumos`** no puede recortar a 24h exactas: `/insumos/dashboard` filtra
+  por día natural y cada pedido solo trae `hora_solicitud` (`HH:MM:SS`), sin fecha. Se
+  muestra el rango consultado; el rótulo «últimas 24h» solo aparece cuando ese rango es hoy.
 
 ### Dev server
 

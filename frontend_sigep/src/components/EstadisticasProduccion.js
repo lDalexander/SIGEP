@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import axios from 'axios';
+import React, { useState } from 'react';
 import { Card, Tabs, ProgressBar, Label, Estado } from './ui';
 import { num, pct, plural } from '../lib/format';
+import useApi from '../lib/useApi';
 
 /* Agrupaciones que acepta /dashboard/estadisticas en `dim`. `resumen` es cómo se
    nombra la agrupación en la línea de totales («por máquina»). */
@@ -26,33 +26,14 @@ const PERIODOS = [
  * Mantiene su propio período, independiente del rango global del dashboard: así
  * están las pestañas en las capturas.
  */
-export default function EstadisticasProduccion({ apiBase }) {
+export default function EstadisticasProduccion({ apiBase, intervalo }) {
   const [dim, setDim] = useState('maquina');
   const [rango, setRango] = useState('hoy');
-  const [datos, setDatos] = useState(null);
-  const [cargando, setCargando] = useState(true);
-  const [error, setError] = useState(false);
 
-  const cargar = useCallback(async () => {
-    try {
-      const { data } = await axios.get(`${apiBase}/dashboard/estadisticas`, {
-        params: { dim, rango },
-        timeout: 8000,
-      });
-      setDatos(data);
-      setError(false);
-    } catch (err) {
-      console.error('[SIGEP] Error en estadisticas:', err.message);
-      setError(true);
-    } finally {
-      setCargando(false);
-    }
-  }, [apiBase, dim, rango]);
-
-  useEffect(() => {
-    setCargando(true);
-    cargar();
-  }, [cargar]);
+  const { datos, cargando, error } = useApi(`${apiBase}/dashboard/estadisticas`, {
+    params: { dim, rango },
+    intervalo,
+  });
 
   const items = datos?.items || [];
   const maximo = items.length > 0 ? Math.max(...items.map((i) => i.pacas)) : 0;

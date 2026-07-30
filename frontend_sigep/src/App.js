@@ -8,8 +8,11 @@ import ProductionChart from './components/ProductionChart';
 import OperationsTable from './components/OperationsTable';
 import EstadisticasProduccion from './components/EstadisticasProduccion';
 import TerminalLog from './components/TerminalLog';
+import ChecklistMantenimiento from './components/ChecklistMantenimiento';
 import TabletsSyncPanel from './components/TabletsSyncPanel';
 import TopProductionChart from './components/TopProductionChart';
+import SolicitudesInsumos from './components/SolicitudesInsumos';
+import DetalleChecklist from './components/DetalleChecklist';
 import Footer from './components/Footer';
 import { Card, Label } from './components/ui';
 import { fechaISO } from './lib/format';
@@ -112,12 +115,12 @@ function App() {
   };
 
   /* Texto del metadato de las tarjetas: «hoy» cuando el rango es el día actual. */
-  const periodo =
-    aplicado.desde === hoy && aplicado.hasta === hoy
-      ? 'hoy'
-      : aplicado.desde === aplicado.hasta
-        ? aplicado.desde
-        : `${aplicado.desde} → ${aplicado.hasta}`;
+  const esHoy = aplicado.desde === hoy && aplicado.hasta === hoy;
+  const periodo = esHoy
+    ? 'hoy'
+    : aplicado.desde === aplicado.hasta
+      ? aplicado.desde
+      : `${aplicado.desde} → ${aplicado.hasta}`;
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -156,11 +159,12 @@ function App() {
                   cargando={cargando}
                   error={error}
                 />
-                <EstadisticasProduccion apiBase={API_BASE} />
+                <EstadisticasProduccion apiBase={API_BASE} intervalo={POLL_INTERVAL} />
               </div>
 
               <div className="space-y-5 min-w-0">
                 <TerminalLog logs={logs} cargando={cargando} error={error} />
+                <ChecklistMantenimiento apiBase={API_BASE} intervalo={POLL_INTERVAL} />
                 <TabletsSyncPanel apiBase={API_BASE} intervalo={POLL_INTERVAL} />
                 <TopProductionChart
                   datos={topMarcas}
@@ -168,7 +172,25 @@ function App() {
                   cargando={cargando}
                   error={error}
                 />
+                <SolicitudesInsumos
+                  apiBase={API_BASE}
+                  desde={aplicado.desde}
+                  hasta={aplicado.hasta}
+                  esHoy={esHoy}
+                  intervalo={POLL_INTERVAL}
+                />
               </div>
+            </div>
+
+            {/* Ancho completo, al final */}
+            <div className="mt-5">
+              <DetalleChecklist
+                apiBase={API_BASE}
+                desde={aplicado.desde}
+                hasta={aplicado.hasta}
+                periodo={periodo}
+                intervalo={POLL_INTERVAL}
+              />
             </div>
           </>
         ) : (
