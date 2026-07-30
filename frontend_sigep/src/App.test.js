@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import axios from 'axios';
 import App from './App';
 
@@ -51,14 +51,14 @@ test('el dashboard monta y muestra los KPI con formato es-EC', async () => {
   expect(screen.getByRole('heading', { name: /producción en tiempo real/i })).toBeInTheDocument();
 
   // 2272 -> "2.272" con el separador de miles de es-EC.
-  await waitFor(() => expect(screen.getByText('2.272')).toBeInTheDocument());
+  expect(await screen.findByText('2.272')).toBeInTheDocument();
   expect(screen.getByText('100')).toBeInTheDocument();
 });
 
 test('las sesiones se listan con su estado y duración', async () => {
   render(<App />);
 
-  await waitFor(() => expect(screen.getByText('ANTHONY MERCADO')).toBeInTheDocument());
+  expect(await screen.findByText('ANTHONY MERCADO')).toBeInTheDocument();
   // 288 minutos -> "4h 48m"
   expect(screen.getByText(/Activo · 4h 48m/i)).toBeInTheDocument();
   expect(screen.getByText(/^Finalizado$/i)).toBeInTheDocument();
@@ -66,13 +66,13 @@ test('las sesiones se listan con su estado y duración', async () => {
 
 test('el ranking de estadísticas muestra porcentaje con un decimal', async () => {
   render(<App />);
-  await waitFor(() => expect(screen.getByText(/1 sesión · 28\.2%/)).toBeInTheDocument());
+  expect(await screen.findByText(/1 sesión · 28\.2%/)).toBeInTheDocument();
 });
 
 test('las tablets muestran su antigüedad de contacto', async () => {
   render(<App />);
   // 1860 s -> "31m"
-  await waitFor(() => expect(screen.getByText('31m')).toBeInTheDocument());
+  expect(await screen.findByText('31m')).toBeInTheDocument();
   expect(screen.getByText('0/1 en línea')).toBeInTheDocument();
 });
 
@@ -80,9 +80,9 @@ test('si la API falla no se inventan datos y se avisa de la desconexión', async
   axios.get.mockRejectedValue(new Error('network down'));
   render(<App />);
 
-  await waitFor(() =>
-    expect(screen.getByText(/se muestran los últimos datos recibidos/i)).toBeInTheDocument()
-  );
+  expect(
+    await screen.findByText(/se muestran los últimos datos recibidos/i)
+  ).toBeInTheDocument();
   // Ningún número inventado en las tarjetas KPI.
   expect(screen.queryByText('2.272')).not.toBeInTheDocument();
 });
