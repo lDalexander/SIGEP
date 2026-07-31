@@ -70,7 +70,7 @@
         android:id="@+id/textViewVersion"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="DETCUADOR S.A. | John Garcia | Versión 1.2.1"
+        android:text="DETCUADOR S.A. | John Garcia | Versión 1.4.0"
         android:textColor="#888888"
         android:textSize="14sp" />
 
