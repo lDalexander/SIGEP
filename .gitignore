@@ -46,6 +46,10 @@ backups/*.cnf
 # Volcados de la base de datos y respaldos de fotos (pesados, y con datos de planta)
 backups/*.sql.gz
 backups/*.tar.gz
+backups/backup.log
+
+# Directorio temporal donde compila deploy.sh antes de reemplazar build/
+frontend_sigep/.build-nuevo/
 
 # Skills de agentes: 73 MB / 4.3k archivos ajenos al proyecto
 agents/
