@@ -28,23 +28,41 @@ Convive un apache2 en el puerto 80. **No reconfigurar nginx, systemd ni apache.*
 ### Comandos
 
 ```bash
-# Desarrollo (NO usar build)
-cd frontend_sigep && npm start          # CRA dev server
+# Desarrollo
+cd frontend_sigep && npm start          # dev server en el 3001
 
-# Compilar — BORRA build/ por completo. Respaldar y hacer push ANTES.
-cp -a frontend_sigep/build ~/RESPALDO_build_$(date +%F_%H%M)
-git push origin main
-cd frontend_sigep && npm run build
-sudo systemctl reload nginx
+# Desplegar a producción — usar SIEMPRE el script, nunca `npm run build` a mano
+./deploy.sh --revisar                   # comprueba sin tocar nada
+./deploy.sh                             # despliega
 
 # Backend
 sudo systemctl restart sigep && systemctl status sigep
 curl -s http://127.0.0.1:8000/api/dashboard/kpis
 ```
 
-> ⚠️ `npm run build` fue lo que destruyó el código fuente original del frontend: se
-> compiló sobre un `src/` viejo y el build resultante sobrescribió el único artefacto
-> que contenía la versión buena. El respaldo y el `push` previos no son opcionales.
+### Por qué no se ejecuta `npm run build` a mano
+
+`npm run build` **vacía su carpeta de destino nada más empezar**. Así se perdió el
+código original: se compiló sobre un `src/` viejo y el resultado sobrescribió el único
+build que tenía la versión buena.
+
+`deploy.sh` lo hace imposible:
+
+1. Aborta si hay cambios sin commitear.
+2. Aborta si hay commits sin subir a GitHub — el fuente siempre está en el remoto
+   **antes** de compilar.
+3. Respalda el build vigente en `~/respaldos_build_sigep/build_<fecha>` (rota a 10).
+4. Compila con `BUILD_PATH` a `.build-nuevo/`, así que si la compilación falla el build
+   en producción sigue intacto y servido.
+5. Solo intercambia los directorios cuando el resultado está completo y verificado.
+6. Comprueba `/` y `/api` al terminar, e indica cómo revertir si algo va mal.
+
+Para volver a una versión anterior basta con copiar el respaldo sobre `build/`:
+
+```bash
+ls ~/respaldos_build_sigep/
+rm -rf frontend_sigep/build && cp -a ~/respaldos_build_sigep/build_<fecha> frontend_sigep/build
+```
 
 ---
 

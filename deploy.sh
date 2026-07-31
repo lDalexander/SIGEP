@@ -33,8 +33,8 @@ CONSERVAR=10
 SELLO="$(date +%F_%H%M%S)"
 PUERTO=3000
 
-rojo()  { printf '\033[31m%s\033[0m\n' "$*"; }
-verde() { printf '\033[32m%s\033[0m\n' "$*"; }
+rojo()  { printf '\033[31m%b\033[0m\n' "$*"; }
+verde() { printf '\033[32m%b\033[0m\n' "$*"; }
 paso()  { printf '\n\033[1m▸ %s\033[0m\n' "$*"; }
 
 abortar() {
