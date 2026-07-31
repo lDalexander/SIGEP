@@ -21,9 +21,9 @@ jest.mock('../../lib/adminApi', () => ({
 }));
 
 const OPERARIOS = [
-  { id: 2, nombre: 'JONATHAN VICUÑA', activo: true },
-  { id: 1, nombre: 'ALEX VALENZUELA', activo: true },
-  { id: 9, nombre: 'ZOILO PEREZ', activo: false },
+  { id: 2, nombre: 'JONATHAN VICUÑA', tipo: 'SOLIDO', activo: true },
+  { id: 1, nombre: 'ALEX VALENZUELA', tipo: 'SOLIDO', activo: true },
+  { id: 9, nombre: 'ZOILO PEREZ', tipo: 'LIQUIDO', activo: false },
 ];
 
 const MAQUINA_PRODUCTOS = [
@@ -122,14 +122,64 @@ test('Operarios: orden alfabético, contador y alta en mayúsculas', async () =>
   const nombres = screen.getAllByText(/VALENZUELA|VICUÑA|PEREZ/).map((n) => n.textContent);
   expect(nombres).toEqual(['ALEX VALENZUELA', 'JONATHAN VICUÑA', 'ZOILO PEREZ']);
 
-  // El nombre se guarda en mayúsculas aunque se escriba en minúsculas.
+  // El nombre se guarda en mayúsculas y por defecto en la línea sólida.
   fireEvent.change(screen.getByLabelText('Nombre del operario'), {
     target: { value: 'juan pérez' },
   });
   fireEvent.click(screen.getByRole('button', { name: 'Agregar' }));
 
   await waitFor(() =>
-    expect(mockAdmin.post).toHaveBeenCalledWith('/operadores', { nombre: 'JUAN PÉREZ' })
+    expect(mockAdmin.post).toHaveBeenCalledWith('/operadores',
+      { nombre: 'JUAN PÉREZ', tipo: 'Sólido' })
+  );
+});
+
+test('Operarios: se puede dar de alta en la línea líquida', async () => {
+  render(<AdminApp />);
+  await screen.findByText('ALEX VALENZUELA');
+
+  fireEvent.change(screen.getByLabelText('Nombre del operario'), {
+    target: { value: 'nuevo operario' },
+  });
+  fireEvent.change(screen.getByLabelText('Línea del operario'), {
+    target: { value: 'Líquido' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Agregar' }));
+
+  await waitFor(() =>
+    expect(mockAdmin.post).toHaveBeenCalledWith('/operadores',
+      { nombre: 'NUEVO OPERARIO', tipo: 'Líquido' })
+  );
+});
+
+test('Operarios: el filtro por línea separa sólido de líquido', async () => {
+  render(<AdminApp />);
+  await screen.findByText('ALEX VALENZUELA');
+
+  // «Todos» los muestra a los tres.
+  expect(screen.getByText('2 activos · 3 en total')).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('tab', { name: 'Líquido' }));
+  expect(screen.getByText('ZOILO PEREZ')).toBeInTheDocument();
+  expect(screen.queryByText('ALEX VALENZUELA')).not.toBeInTheDocument();
+  expect(screen.getByText('0 activos · 1 en total')).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('tab', { name: 'Sólido' }));
+  expect(screen.getByText('ALEX VALENZUELA')).toBeInTheDocument();
+  expect(screen.queryByText('ZOILO PEREZ')).not.toBeInTheDocument();
+  expect(screen.getByText('2 activos · 2 en total')).toBeInTheDocument();
+});
+
+test('Operarios: se puede cambiar a un operario de línea', async () => {
+  render(<AdminApp />);
+  await screen.findByText('ALEX VALENZUELA');
+
+  const fila = screen.getByRole('listitem', { name: 'ALEX VALENZUELA' });
+  fireEvent.click(within(fila).getByRole('button', { name: '→ Líquido' }));
+
+  expect(window.confirm).toHaveBeenCalled();
+  await waitFor(() =>
+    expect(mockAdmin.put).toHaveBeenCalledWith('/operadores/1', { tipo: 'Líquido' })
   );
 });
 

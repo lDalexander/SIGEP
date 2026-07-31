@@ -8,10 +8,16 @@ from datetime import datetime
 from database import Base
 
 class OperadorDB(Base):
-    """Tabla para registrar a los operadores de las máquinas."""
+    """Tabla para registrar a los operadores de las máquinas.
+
+    `tipo` clasifica al operario por línea (SOLIDO / LIQUIDO), con el mismo
+    vocabulario que `MaquinaDB.tipo`, para que el selector de operador de la
+    tablet solo muestre a los de su línea. Ver alter_operadores_tipo.sql.
+    """
     __tablename__ = "operadores"
     id = Column(Integer, primary_key=True, index=True)
     nombre = Column(String(150), unique=True)
+    tipo = Column(String(10), nullable=False, server_default="SOLIDO", default="SOLIDO")
     activo = Column(Boolean, default=True)
 
 class UsuarioDB(Base):

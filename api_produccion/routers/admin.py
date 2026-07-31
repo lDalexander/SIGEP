@@ -91,17 +91,23 @@ def admin_logout(x_admin_token: str = Header(default=None), ctx=Depends(require_
 # ----------------------------------------------------------------------------
 class OperadorIn(BaseModel):
     nombre: str
+    tipo: str | None = None  # SOLIDO (default) | LIQUIDO
 
 
 class OperadorUpdate(BaseModel):
     nombre: str | None = None
+    tipo: str | None = None
     activo: bool | None = None
 
 
 @router.get("/operadores")
-def listar_operadores(db: Session = Depends(get_db), ctx=Depends(require_admin)):
-    ops = db.query(OperadorDB).order_by(OperadorDB.activo.desc(), OperadorDB.nombre.asc()).all()
-    return [{"id": o.id, "nombre": o.nombre, "activo": bool(o.activo)} for o in ops]
+def listar_operadores(tipo: str = Query(None), db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    """Lista los operarios. Con `tipo` se limita a los de esa línea."""
+    q = db.query(OperadorDB)
+    if tipo:
+        q = q.filter(OperadorDB.tipo == _norm_tipo(tipo))
+    ops = q.order_by(OperadorDB.activo.desc(), OperadorDB.nombre.asc()).all()
+    return [{"id": o.id, "nombre": o.nombre, "tipo": o.tipo, "activo": bool(o.activo)} for o in ops]
 
 
 @router.post("/operadores")
@@ -109,20 +115,23 @@ def crear_operador(datos: OperadorIn, db: Session = Depends(get_db), ctx=Depends
     nombre = (datos.nombre or "").strip()
     if not nombre:
         raise HTTPException(status_code=400, detail="El nombre es obligatorio")
+    tipo = _norm_tipo(datos.tipo)
     existente = db.query(OperadorDB).filter(OperadorDB.nombre == nombre).first()
     if existente:
         if existente.activo:
             raise HTTPException(status_code=409, detail="Ese operario ya existe y está activo")
         existente.activo = True
+        existente.tipo = tipo
         db.commit()
-        logger.info(f"Operario reactivado: {nombre} (id {existente.id})")
-        return {"id": existente.id, "nombre": existente.nombre, "activo": True, "reactivado": True}
-    op = OperadorDB(nombre=nombre, activo=True)
+        logger.info(f"Operario reactivado: {nombre} [{tipo}] (id {existente.id})")
+        return {"id": existente.id, "nombre": existente.nombre, "tipo": tipo,
+                "activo": True, "reactivado": True}
+    op = OperadorDB(nombre=nombre, tipo=tipo, activo=True)
     db.add(op)
     db.commit()
     db.refresh(op)
-    logger.info(f"Operario creado: {nombre} (id {op.id})")
-    return {"id": op.id, "nombre": op.nombre, "activo": True}
+    logger.info(f"Operario creado: {nombre} [{tipo}] (id {op.id})")
+    return {"id": op.id, "nombre": op.nombre, "tipo": op.tipo, "activo": True}
 
 
 @router.put("/operadores/{operador_id}")
@@ -138,11 +147,13 @@ def actualizar_operador(operador_id: int, datos: OperadorUpdate, db: Session = D
         if choque:
             raise HTTPException(status_code=409, detail="Ya existe otro operario con ese nombre")
         op.nombre = nuevo
+    if datos.tipo is not None:
+        op.tipo = _norm_tipo(datos.tipo)
     if datos.activo is not None:
         op.activo = datos.activo
     db.commit()
-    logger.info(f"Operario actualizado: id {op.id} activo={op.activo} nombre={op.nombre}")
-    return {"id": op.id, "nombre": op.nombre, "activo": bool(op.activo)}
+    logger.info(f"Operario actualizado: id {op.id} activo={op.activo} tipo={op.tipo} nombre={op.nombre}")
+    return {"id": op.id, "nombre": op.nombre, "tipo": op.tipo, "activo": bool(op.activo)}
 
 
 @router.delete("/operadores/{operador_id}")
@@ -429,17 +440,18 @@ class NombreIn(BaseModel):
     nombre: str
 
 
-# Tipos de línea válidos para una máquina (mayúsculas, sin tilde).
-TIPOS_MAQUINA = {"SOLIDO", "LIQUIDO"}
+# Tipos de línea válidos (mayúsculas, sin tilde). Los comparten `maquinas.tipo` y
+# `operadores.tipo`: un operario de línea líquida trabaja en máquinas líquidas.
+TIPOS_LINEA = {"SOLIDO", "LIQUIDO"}
 
 
 def _norm_tipo(valor, por_defecto="SOLIDO"):
-    """Normaliza el tipo de máquina a 'SOLIDO'/'LIQUIDO'. Tolera 'Sólido'/'líquido'."""
+    """Normaliza el tipo de línea a 'SOLIDO'/'LIQUIDO'. Tolera 'Sólido'/'líquido'."""
     if valor is None:
         return por_defecto
     t = (valor or "").strip().upper()
     t = t.replace("Á", "A").replace("Í", "I").replace("Ó", "O")  # quita tildes comunes
-    if t not in TIPOS_MAQUINA:
+    if t not in TIPOS_LINEA:
         raise HTTPException(status_code=400, detail="tipo inválido (use SOLIDO o LIQUIDO)")
     return t
 

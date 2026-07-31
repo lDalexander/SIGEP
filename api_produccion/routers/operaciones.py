@@ -2,7 +2,7 @@
 Router para los endpoints operacionales en piso de producción.
 Maneja el inicio de turnos, registro de pallets, y paros de máquina.
 """
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 
@@ -40,8 +40,24 @@ ANTI_RAFAGA_VENTANA_SEG = 5
 ANTI_RAFAGA_MAX_INSERTS = 3
 
 @router.get("/operadores")
-def obtener_operadores(db: Session = Depends(get_db)):
-    operadores = db.query(OperadorDB).filter(OperadorDB.activo.is_(True)).all()
+def obtener_operadores(tipo: str = Query(None), db: Session = Depends(get_db)):
+    """Operarios activos para el selector de la tablet.
+
+    `tipo` (SOLIDO / LIQUIDO) es OPCIONAL y filtra por línea. Sin él se devuelven
+    todos, con el mismo formato de siempre: la app que hay hoy en las 21 tablets no
+    lo envía, así que sigue viendo exactamente lo mismo que antes. Para que el
+    selector muestre solo a los de su línea, la app debe pasar el tipo de la
+    máquina en la que está trabajando (`GET /api/maquinas` ya devuelve ese tipo).
+
+    Un valor de `tipo` desconocido se ignora y se devuelven todos, en vez de dejar
+    la tablet con un selector vacío.
+    """
+    q = db.query(OperadorDB).filter(OperadorDB.activo.is_(True))
+    if tipo:
+        t = tipo.strip().upper().replace("Á", "A").replace("Í", "I").replace("Ó", "O")
+        if t in ("SOLIDO", "LIQUIDO"):
+            q = q.filter(OperadorDB.tipo == t)
+    operadores = q.all()
     return [{"id": op.id, "nombre": op.nombre} for op in operadores]
 
 @router.get("/maquinas")
