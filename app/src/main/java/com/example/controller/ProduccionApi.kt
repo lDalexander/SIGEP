@@ -45,8 +45,10 @@ interface ProduccionApi {
     @POST("/api/logout")
     suspend fun cerrarSesionUsuario(@Body request: LogoutRequest): Response<RespuestaGenerica>
 
+    // tipo opcional ("SOLIDO"/"LIQUIDO"): filtra los operarios por línea. Si es null
+    // Retrofit omite el query param y el server devuelve todos (contrato retro-compatible).
     @GET("api/operadores")
-    suspend fun obtenerOperadores(): Response<List<OperadorResponse>>
+    suspend fun obtenerOperadores(@Query("tipo") tipo: String? = null): Response<List<OperadorResponse>>
 
     @GET("api/maquinas")
     suspend fun obtenerMaquinas(): Response<List<MaquinaResponse>>

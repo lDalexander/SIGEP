@@ -131,6 +131,13 @@ class MainActivity : AppCompatActivity() {
     private var listaOperadoresServidor: List<String> = emptyList()
     private var listaMaquinasServidor: List<String> = emptyList()
 
+    // Operarios por línea ("SOLIDO"/"LIQUIDO"), descargados con api/operadores?tipo=
+    // y cacheados. Cada lista incluye el placeholder inicial. Al elegir la máquina se
+    // usa su tipo para poblar el spinner de operador (CAMBIO operarios por línea).
+    // Si un tipo está presente aquí (aunque sea solo el placeholder) se respeta tal cual;
+    // solo si el tipo NO está (caché vieja / sin red aún) se cae a la lista completa.
+    private var operadoresPorTipo: Map<String, List<String>> = emptyMap()
+
     // Tipo de línea por máquina ("SOLIDO"/"LIQUIDO"), descargado con api/maquinas y
     // cacheado. Al elegir Sólido/Líquido el spinner de máquina se filtra por esto
     // (ver CAMBIO 2). Si una máquina no aparece aquí, se asume SOLIDO.
@@ -525,7 +532,9 @@ class MainActivity : AppCompatActivity() {
                 if (position > 0) {
                     val maquinaSeleccionada = spinnerMaquina.selectedItem.toString()
 
-                    val operadores = if (listaOperadoresServidor.size > 1) listaOperadoresServidor else listaOperadoresLocal
+                    // Operarios de la línea de esta máquina (su tipo es la fuente de verdad).
+                    val tipoMaquina = tipoPorMaquina[maquinaSeleccionada] ?: "SOLIDO"
+                    val operadores = operadoresParaTipo(tipoMaquina)
                     spinnerOperador.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, operadores)
                     spinnerOperador.isEnabled = true
                     spinnerFragancia.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, fragancias)
@@ -867,12 +876,31 @@ class MainActivity : AppCompatActivity() {
     private fun descargarCatalogosDesdeServidor() {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val respOps  = RetrofitClient.apiService.obtenerOperadores()
-                val respMaqs = RetrofitClient.apiService.obtenerMaquinas()
+                // Descargamos los operarios por línea (SOLIDO/LIQUIDO) para que el
+                // spinner se filtre por el tipo de la máquina, incluso offline luego.
+                val respOpsSolido  = RetrofitClient.apiService.obtenerOperadores("SOLIDO")
+                val respOpsLiquido = RetrofitClient.apiService.obtenerOperadores("LIQUIDO")
+                val respMaqs       = RetrofitClient.apiService.obtenerMaquinas()
 
-                if (respOps.isSuccessful && respMaqs.isSuccessful) {
-                    val operadores = listOf("-- Seleccione Operador --") + (respOps.body()?.map { it.nombre } ?: emptyList())
+                if (respMaqs.isSuccessful) {
                     val maquinas   = listOf("-- Seleccione Máquina --") + (respMaqs.body()?.map { it.nombre } ?: emptyList())
+
+                    // Operarios por tipo: solo poblamos el tipo cuya llamada tuvo éxito,
+                    // así una respuesta fallida no borra la caché previa de ese tipo.
+                    val opsPorTipo = operadoresPorTipo.toMutableMap()
+                    if (respOpsSolido.isSuccessful) {
+                        opsPorTipo["SOLIDO"] = listOf("-- Seleccione Operador --") +
+                            (respOpsSolido.body()?.map { it.nombre } ?: emptyList())
+                    }
+                    if (respOpsLiquido.isSuccessful) {
+                        opsPorTipo["LIQUIDO"] = listOf("-- Seleccione Operador --") +
+                            (respOpsLiquido.body()?.map { it.nombre } ?: emptyList())
+                    }
+                    // Lista combinada (unión) como fallback/retro-compatibilidad de caché.
+                    val todos = (opsPorTipo["SOLIDO"].orEmpty().drop(1) +
+                                 opsPorTipo["LIQUIDO"].orEmpty().drop(1)).distinct()
+                    val operadores = if (todos.isNotEmpty()) listOf("-- Seleccione Operador --") + todos
+                                     else listaOperadoresServidor
 
                     // Extraemos la jerarquía si el backend ya la incluye en la respuesta.
                     // Si el campo `marcas` es null, el fallback local sigue activo.
@@ -890,8 +918,9 @@ class MainActivity : AppCompatActivity() {
                         listaOperadoresServidor = operadores
                         listaMaquinasServidor   = maquinas
                         tipoPorMaquina          = tiposMap
+                        operadoresPorTipo       = opsPorTipo
                         if (jerarquia.isNotEmpty()) jerarquiaMaquinas = jerarquia
-                        guardarCatalogosEnCache(operadores, maquinas, jerarquia, tiposMap)
+                        guardarCatalogosEnCache(operadores, maquinas, jerarquia, tiposMap, opsPorTipo)
                         // Si ya hay un tipo elegido, refrescamos el spinner de máquina con el filtro vigente.
                         val pos = spinnerTipo.selectedItemPosition
                         if (pos > 0) {
@@ -1193,7 +1222,8 @@ class MainActivity : AppCompatActivity() {
         operadores: List<String>,
         maquinas: List<String>,
         jerarquia: Map<String, List<MarcaResponse>>,
-        tipos: Map<String, String>
+        tipos: Map<String, String>,
+        operadoresTipo: Map<String, List<String>>
     ) {
         val gson = Gson()
         getSharedPreferences("SIGEP_CATALOGOS", MODE_PRIVATE).edit().apply {
@@ -1204,8 +1234,21 @@ class MainActivity : AppCompatActivity() {
                 putString("cache_jerarquia_maquinas", gson.toJson(jerarquia))
             }
             putString("cache_tipos_maquina", gson.toJson(tipos))
+            if (operadoresTipo.isNotEmpty()) {
+                putString("cache_operadores_por_tipo", gson.toJson(operadoresTipo))
+            }
             apply()
         }
+    }
+
+    // Operarios a mostrar para el tipo de línea de la máquina elegida. Si hay caché
+    // por tipo (aunque solo tenga el placeholder) se respeta tal cual, para no mezclar
+    // líneas. Solo cuando no hay dato por tipo (caché vieja / primera vez sin red) se
+    // cae a la lista completa del servidor y, en último caso, al fallback local.
+    private fun operadoresParaTipo(tipoMaquina: String): List<String> {
+        val canon = if (tipoMaquina.startsWith("L", ignoreCase = true)) "LIQUIDO" else "SOLIDO"
+        operadoresPorTipo[canon]?.let { return it }
+        return if (listaOperadoresServidor.size > 1) listaOperadoresServidor else listaOperadoresLocal
     }
 
     private fun cargarCatalogosDesdeCache() {
@@ -1225,6 +1268,14 @@ class MainActivity : AppCompatActivity() {
         if (jsonTipos != null) {
             val tipoMapa = object : TypeToken<Map<String, String>>() {}.type
             tipoPorMaquina = gson.fromJson(jsonTipos, tipoMapa) ?: emptyMap()
+        }
+
+        // Operarios por línea. Si la caché es vieja y no lo tiene, queda vacío y el
+        // spinner cae a la lista completa hasta la próxima descarga (retro-compatible).
+        val jsonOpsTipo = prefs.getString("cache_operadores_por_tipo", null)
+        if (jsonOpsTipo != null) {
+            val opsTipoMapa = object : TypeToken<Map<String, List<String>>>() {}.type
+            operadoresPorTipo = gson.fromJson(jsonOpsTipo, opsTipoMapa) ?: emptyMap()
         }
 
         // La jerarquía cacheada solo es válida si la escribió esta versión del esquema.
