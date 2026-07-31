@@ -4,8 +4,59 @@ Sistema de control de producción de la planta de llenado. Dos consumidores de l
 API: esta web (supervisión y administración) y una app Android en hasta 21 tablets
 industriales con sincronización offline-first.
 
-> **Regla de oro:** el backend (`api_produccion/`) y la base de datos NO se modifican
-> desde el trabajo de frontend. Cualquier cambio ahí puede romper las tablets en planta.
+> **Regla de oro:** el backend (`api_produccion/`) y la base de datos NO se modifican sin
+> autorización explícita del responsable. Cualquier cambio ahí puede romper las tablets en
+> planta. Si la UI necesita algo que no existe, **hay que parar y preguntar**.
+
+---
+
+## 0. Estado actual
+
+**Última sesión: 2026-07-31.** El frontend está reconstruido y **desplegado en producción**
+(nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
+capturas de `referencia_ui/`. 65 tests en verde.
+
+### Punto de recuperación
+
+| | |
+|---|---|
+| Tag estable | `v1.0-frontend-reconstruido` (en GitHub) |
+| Build de esa versión | `~/RESPALDO_build_estable_v1.0` |
+| Builds rotados | `~/respaldos_build_sigep/` (últimos 10) |
+| BD previa al último `ALTER` | `backups/produccion_detg_pre_tipo_operario_*.sql.gz` |
+
+```bash
+git checkout v1.0-frontend-reconstruido     # volver al frontend estable
+```
+
+### Cambios de backend ya autorizados y aplicados
+
+Tras la reconstrucción se autorizó **una** excepción a la regla de oro, ya en producción:
+
+- **Operarios clasificados por línea** (`operadores.tipo` = `SOLIDO` | `LIQUIDO`), igual que
+  las máquinas. Migración en `api_produccion/alter_operadores_tipo.sql`.
+- `GET /api/operadores` acepta `?tipo=` **opcional**. Sin el parámetro devuelve todos con el
+  formato de siempre, así que **las tablets no necesitaron actualización**.
+- La web permite alta por línea, filtro y cambio de línea desde `/admin` → Operarios.
+
+### Pendiente
+
+1. **App Android** — para que el selector «Seleccione Operador» filtre de verdad, la app
+   debe pasar `?tipo=` con el tipo de su máquina. Instrucciones completas en
+   `api_produccion/CAMBIO_ANDROID_tipo_operario.md`. **No corre prisa**: sin ese cambio
+   todo sigue funcionando como antes.
+2. **Aún no hay máquinas de línea líquida** dadas de alta; las 6 registradas son `SOLIDO`.
+   Hasta que exista una, la clasificación de operarios no tiene efecto práctico.
+3. **Logo provisional** — `public/logo192.png` es el de Create React App. El de la cabecera
+   es un SVG hecho a partir de las capturas (`components/ui/Logo.js`); si aparece el
+   original, se sustituye por un `<img>`.
+4. **Botón «Insumos» de la cabecera** — aparece en las capturas pero no hay ninguna captura
+   ni especificación de esa vista. Hoy muestra un aviso de «vista sin especificación de
+   referencia». Falta decidir qué debe contener, o quitar el botón.
+5. **Filtrado multi-selección perdido** — la versión anterior tenía segmentadores por
+   máquina/operador/marca/presentación/fragancia. No aparecen en ninguna captura, así que
+   se retiraron, pero el backend los sigue soportando en todos los endpoints del dashboard
+   (`?maquina=A&maquina=B…`). Recuperables del commit `d5c0839`.
 
 ---
 
@@ -249,7 +300,7 @@ así se evita CORS. El `App.js` heredado apunta a `http://150.36.200.252:8000/ap
 | POST | `/tablets/sincronizar/{device_id}` | — | `{device_id, enviada, motivo}` |
 | POST | `/tablets/sincronizar_todas` | — | `{total, enviadas}` |
 | GET | `/insumos/dashboard` | `desde`,`hasta` | `{rango, kpis{total_pedidos,tiempo_resp_prom_seg,con_discrepancia,entregas_proactivas}, pedidos[], entregas[]}` |
-| GET | `/operadores` | — | `[{id, nombre}]` activos |
+| GET | `/operadores` | `tipo` (opcional) | `[{id, nombre}]` activos. `?tipo=SOLIDO\|LIQUIDO` filtra por línea; **sin el parámetro devuelve todos**, que es lo que hace la app Android actual. Un tipo desconocido se ignora en vez de vaciar el selector |
 | GET | `/maquinas` | — | `[{id,nombre,tipo,marcas:[{nombre,presentaciones[]}]}]` — jerarquía completa |
 | GET | `/reportes/excel` | `desde`,`hasta` | .xlsx producción (404 si el rango está vacío) |
 | GET | `/reportes/formularios_excel` | `desde`,`hasta` | .xlsx checklists (404 si vacío) |
@@ -270,9 +321,9 @@ Sin token o con token inválido: **401**.
 
 | Método | Ruta | Notas |
 |---|---|---|
-| GET | `/admin/operadores` | `[{id,nombre,activo}]`, activos primero, luego alfabético |
-| POST | `/admin/operadores` | `{nombre}`. Si existe inactivo lo **reactiva**. 409 si ya está activo |
-| PUT | `/admin/operadores/{id}` | `{nombre?, activo?}` → desactivar = `{activo:false}` |
+| GET | `/admin/operadores` | `[{id,nombre,tipo,activo}]`, activos primero, luego alfabético. Acepta `?tipo=` |
+| POST | `/admin/operadores` | `{nombre, tipo?}` — `tipo` ∈ `SOLIDO` (default) \| `LIQUIDO`. Si existe inactivo lo **reactiva**. 409 si ya está activo |
+| PUT | `/admin/operadores/{id}` | `{nombre?, tipo?, activo?}` → desactivar = `{activo:false}` |
 | DELETE | `/admin/operadores/{id}` | ⚠️ **borrado físico** (`db.delete`) |
 | GET | `/admin/sesiones` | `desde`,`hasta` → `[{id,maquina,operador,marca,presentacion,fragancia,inicio,fin,estado,total_pacas,n_registros}]` |
 | PUT | `/admin/sesiones/{id}` | `{maquina?,operador?,marca?,presentacion?,fragancia?}` |
@@ -304,6 +355,11 @@ heartbeat los recupera como respaldo. **No cambiar el transporte ni el formato.*
 - **Turno** (`services/turnos.py`, zona Guayaquil): `DIA` de 07:00 a 18:59; `NOCHE` de
   19:00 a 06:59, y la madrugada (≤06:59) pertenece a la `fecha_turno` del día anterior.
   El servidor recalcula siempre el turno con su reloj; nunca confía en la tablet.
+- **Tipo de línea** (`TIPOS_LINEA` en `admin.py`): `SOLIDO` y `LIQUIDO`, en mayúsculas y
+  sin tilde. Lo comparten `maquinas.tipo` y `operadores.tipo`. `_norm_tipo()` tolera
+  `Sólido`/`líquido` y rechaza cualquier otra cosa con 400. Un operario pertenece a **una
+  sola** línea, y su nombre es único en toda la tabla (no puede haber un «JUAN PÉREZ» en
+  sólido y otro en líquido).
 - **Idempotencia:** el checklist se deduplica por `request_id` (UNIQUE). Contrato con la
   app offline: 2xx y 409 = éxito; otro 4xx = fatal sin reintento; 5xx = reintenta.
 - `kpis.eficiencia` está **hardcodeado a `"94.8%"`** en el backend. No es un dato real y
