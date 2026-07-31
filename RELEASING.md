@@ -63,8 +63,8 @@ keyPassword=********
 Edita `app/build.gradle.kts` → bloque `defaultConfig`:
 
 ```kotlin
-versionCode = 3            // SIEMPRE +1 respecto a la versión anterior
-versionName = "1.1.0"      // versión legible (semver)
+versionCode = 10           // SIEMPRE +1 respecto a la versión anterior (última: 10)
+versionName = "1.4.0"      // versión legible (semver) — última publicada: 1.4.0
 ```
 
 Reglas:
@@ -115,11 +115,11 @@ Confirma versión y firma antes de distribuir:
 
 ```bash
 git add app/build.gradle.kts
-git commit -m "chore: version 1.1.0 (versionCode 3)"
+git commit -m "chore: version 1.4.0 (versionCode 10)"
 git checkout master && git merge --no-ff <rama>          # si venías de una rama de feature
-git tag -a v1.1.0 -m "SIGEP v1.1.0"
+git tag -a v1.4.0 -m "SIGEP v1.4.0"
 git push origin master
-git push origin v1.1.0
+git push origin v1.4.0
 ```
 
 ---
