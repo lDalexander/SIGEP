@@ -64,6 +64,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnIniciarTurno: Button
     private lateinit var btnEnviarPallet: Button
     private lateinit var tvHistorialPacas: TextView
+    private lateinit var tvTotalPacas: TextView
+    // Total de pacas del turno, para no tener que sumar línea por línea el historial.
+    private var totalPacasTurno = 0
     private lateinit var btnTerminarTurno: Button
     private lateinit var tvStatusPedidos: TextView
     private lateinit var btnVerEstadoPedidos: Button
@@ -204,6 +207,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         tvHistorialPacas    = findViewById(R.id.tvHistorialPacas)
+        tvTotalPacas        = findViewById(R.id.tvTotalPacas)
         btnVerEstadoPedidos = findViewById(R.id.btnVerEstadoPedidos)
         tvBadge             = findViewById(R.id.tvBadgePendientes)
         vincularVistas()
@@ -1013,6 +1017,8 @@ class MainActivity : AppCompatActivity() {
                     }
                     seccionConfiguracion.visibility = View.GONE
                     seccionProduccion.visibility    = View.VISIBLE
+                    totalPacasTurno = 0
+                    actualizarTotalPacas()
                     Toast.makeText(this@MainActivity, "Turno iniciado", Toast.LENGTH_SHORT).show()
                     iniciarRadarStatusPedidos(sesionId)
                 } else {
@@ -1043,6 +1049,8 @@ class MainActivity : AppCompatActivity() {
                 }
                 seccionConfiguracion.visibility = View.GONE
                 seccionProduccion.visibility    = View.VISIBLE
+                totalPacasTurno = 0
+                actualizarTotalPacas()
                 Toast.makeText(
                     this@MainActivity,
                     "Sin red — turno guardado, se enviará al reconectar",
@@ -1075,6 +1083,7 @@ class MainActivity : AppCompatActivity() {
             if (sesionActualId == -99) {
                 colaRepo.enqueueRegistrarPallet(datos)
                 tvHistorialPacas.text = "🟡 $cantidad pacas - $hora (pendiente)\n" + tvHistorialPacas.text
+                sumarPacas(cantidad)
                 etCantidadPacas.text.clear()
                 btnEnviarPallet.isEnabled = true
                 return@launch
@@ -1086,6 +1095,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (resp.isSuccessful) {
                     tvHistorialPacas.text = "🟢 $cantidad pacas - $hora\n" + tvHistorialPacas.text
+                    sumarPacas(cantidad)
                     etCantidadPacas.text.clear()
                 } else {
                     AlertDialog.Builder(this@MainActivity)
@@ -1098,6 +1108,7 @@ class MainActivity : AppCompatActivity() {
                 ErrorReporter.warn("MainActivity", "Sin red al registrar paca, encolando: ${e.message}")
                 colaRepo.enqueueRegistrarPallet(datos)
                 tvHistorialPacas.text = "🟡 $cantidad pacas - $hora (pendiente)\n" + tvHistorialPacas.text
+                sumarPacas(cantidad)
                 etCantidadPacas.text.clear()
             } finally {
                 btnEnviarPallet.isEnabled = true
@@ -1219,6 +1230,8 @@ class MainActivity : AppCompatActivity() {
         sesionActualId = null
         getSharedPreferences(NOMBRE_PREFS, MODE_PRIVATE).edit().remove("sesion_activa").apply()
         etCantidadPacas.text.clear()
+        totalPacasTurno = 0
+        actualizarTotalPacas()
         spinnerTipo.setSelection(0)
         bloquearSpinnersDesdeMaquina()
         limpiarEstadoParo()
@@ -1562,6 +1575,16 @@ class MainActivity : AppCompatActivity() {
     // HISTORIAL Y MÓDULO DE INSUMOS
     // ==========================================
 
+    // Total de pacas del turno: evita tener que sumar el historial línea por línea.
+    private fun sumarPacas(cantidad: Int) {
+        totalPacasTurno += cantidad
+        actualizarTotalPacas()
+    }
+
+    private fun actualizarTotalPacas() {
+        tvTotalPacas.text = "🧮 Total: $totalPacasTurno pacas"
+    }
+
     private fun recuperarHistorial(idSesion: Int) {
         tvHistorialPacas.text = "Cargando historial..."
         lifecycleScope.launch(Dispatchers.IO) {
@@ -1569,11 +1592,15 @@ class MainActivity : AppCompatActivity() {
                 val respuesta = RetrofitClient.apiService.obtenerHistorialSesion(idSesion)
                 withContext(Dispatchers.Main) {
                     var texto = ""
+                    var suma = 0
                     if (respuesta.isSuccessful && respuesta.body() != null) {
                         for (p in respuesta.body()!!) {
                             texto += "🟢 ${p.cantidad_pacas} pacas - ${p.hora}\n"
+                            suma += p.cantidad_pacas
                         }
                     }
+                    totalPacasTurno = suma
+                    actualizarTotalPacas()
                     tvHistorialPacas.text = if (texto.isEmpty()) "No hay registros aún." else texto
                 }
             } catch (e: Exception) {
