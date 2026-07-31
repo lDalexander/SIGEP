@@ -69,6 +69,33 @@
             android:orientation="vertical"
             android:visibility="gone">
 
+            <!-- Banner del PARO ALMUERZO: contador en vivo, visible solo durante el almuerzo. -->
+            <LinearLayout
+                android:id="@+id/bannerAlmuerzo"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:padding="12dp"
+                android:layout_marginBottom="16dp"
+                android:background="#E8F5E9"
+                android:visibility="gone">
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="🍽️ ALMUERZO EN CURSO"
+                    android:textColor="#2E7D32"
+                    android:textStyle="bold"
+                    android:textSize="18sp"/>
+                <Chronometer
+                    android:id="@+id/chronoAlmuerzo"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="#1B5E20"
+                    android:textStyle="bold"
+                    android:textSize="40sp"/>
+            </LinearLayout>
+
             <EditText android:id="@+id/etCantidadPacas" android:textColor="#000000" android:textColorHint="#757575" android:layout_width="match_parent" android:layout_height="60dp" android:inputType="number" android:hint="Cantidad de Pacas" android:textSize="20sp" android:layout_marginBottom="16dp"/>
             <Button android:id="@+id/btnEnviarPallet" android:layout_width="match_parent" android:layout_height="60dp" android:text="ENVIAR REGISTRO" android:backgroundTint="#2196F3" android:layout_marginBottom="16dp"/>
 
@@ -172,6 +199,16 @@
                 android:textColor="#FFFFFF"
                 android:textStyle="bold"
                 android:backgroundTint="#FA8400"
+                android:layout_marginBottom="12dp" />
+
+            <Button
+                android:id="@+id/btnAlmuerzo"
+                android:layout_width="match_parent"
+                android:layout_height="60dp"
+                android:text="🍽️ PARO ALMUERZO"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:backgroundTint="#2E7D32"
                 android:layout_marginBottom="12dp" />
 
             <Button

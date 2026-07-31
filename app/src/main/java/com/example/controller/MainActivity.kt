@@ -44,6 +44,9 @@ class MainActivity : AppCompatActivity() {
     private var sesionActualId: Int? = null
     private lateinit var btnSolicitarInsumo: Button
     private lateinit var btnParo: Button
+    private lateinit var btnAlmuerzo: Button
+    private lateinit var bannerAlmuerzo: View
+    private lateinit var chronoAlmuerzo: android.widget.Chronometer
     private lateinit var btnComentarioTurno: Button
     private lateinit var btnReporteApp: Button
     private lateinit var colaRepo: ColaSyncRepository
@@ -52,6 +55,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvBadge: android.widget.TextView
 
     private var paroActivo = false
+    // PARO ALMUERZO: reusa el mecanismo de paro (motivo fijo) con contador en pantalla.
+    private var almuerzoActivo = false
+    private val MOTIVO_ALMUERZO = "ALMUERZO"
     private lateinit var seccionConfiguracion: LinearLayout
     private lateinit var seccionProduccion: LinearLayout
     private lateinit var etCantidadPacas: EditText
@@ -271,6 +277,7 @@ class MainActivity : AppCompatActivity() {
                         AppState.usuarioRol = prefs.getString("usuario_rol", "OPERADOR")
                         seccionConfiguracion.visibility = View.GONE
                         seccionProduccion.visibility    = View.VISIBLE
+                        restaurarEstadoAlmuerzo()
                         Toast.makeText(this@MainActivity, "Turno en sincronización…", Toast.LENGTH_SHORT).show()
                     } else {
                         forzarReinicioPorError("Sesión local huérfana — inicie un turno nuevo.")
@@ -282,6 +289,7 @@ class MainActivity : AppCompatActivity() {
                 seccionConfiguracion.visibility = View.GONE
                 seccionProduccion.visibility    = View.VISIBLE
                 Toast.makeText(this, "Turno recuperado", Toast.LENGTH_SHORT).show()
+                restaurarEstadoAlmuerzo()
                 recuperarHistorial(sesionGuardada)
                 iniciarRadarStatusPedidos(sesionGuardada)
             }
@@ -496,6 +504,9 @@ class MainActivity : AppCompatActivity() {
         btnEnviarPallet      = findViewById(R.id.btnEnviarPallet)
         btnTerminarTurno     = findViewById(R.id.btnTerminarTurno)
         btnParo              = findViewById(R.id.btnParo)
+        btnAlmuerzo          = findViewById(R.id.btnAlmuerzo)
+        bannerAlmuerzo       = findViewById(R.id.bannerAlmuerzo)
+        chronoAlmuerzo       = findViewById(R.id.chronoAlmuerzo)
         btnComentarioTurno   = findViewById(R.id.btnComentarioTurno)
         btnReporteApp        = findViewById(R.id.btnReporteApp)
         tvStatusPedidos               = findViewById(R.id.tvStatusPedidos)
@@ -736,6 +747,11 @@ class MainActivity : AppCompatActivity() {
             } else {
                 llamarApiFinalizarParo()
             }
+        }
+
+        // PARO ALMUERZO — un toque inicia (motivo fijo), otro reanuda. Offline-first.
+        btnAlmuerzo.setOnClickListener {
+            if (!almuerzoActivo) iniciarAlmuerzo() else finalizarAlmuerzo()
         }
 
         // CAMBIO 5 — Comentarios del turno (requiere turno activo).
@@ -1206,6 +1222,7 @@ class MainActivity : AppCompatActivity() {
         spinnerTipo.setSelection(0)
         bloquearSpinnersDesdeMaquina()
         limpiarEstadoParo()
+        limpiarEstadoAlmuerzo()
         // Re-habilitar el botón de cerrar turno: la rama de éxito de finalizar lo
         // deja deshabilitado, y sin esto el siguiente turno lo mostraría bloqueado.
         btnTerminarTurno.isEnabled = true
@@ -1305,6 +1322,7 @@ class MainActivity : AppCompatActivity() {
             btnParo.setBackgroundColor(Color.parseColor("#4CAF50"))
             btnEnviarPallet.isEnabled = false
             btnEnviarPallet.setBackgroundColor(Color.GRAY)
+            btnAlmuerzo.isEnabled = false   // exclusión mutua: un solo paro activo por sesión
             Toast.makeText(this@MainActivity, mensaje, Toast.LENGTH_SHORT).show()
         }
 
@@ -1349,6 +1367,7 @@ class MainActivity : AppCompatActivity() {
             btnParo.setBackgroundColor(Color.parseColor("#FA8400"))
             btnEnviarPallet.isEnabled = true
             btnEnviarPallet.setBackgroundColor(Color.parseColor("#2196F3"))
+            btnAlmuerzo.isEnabled = true
             Toast.makeText(this@MainActivity, mensaje, Toast.LENGTH_SHORT).show()
         }
 
@@ -1390,6 +1409,153 @@ class MainActivity : AppCompatActivity() {
         btnParo.isEnabled = true
         btnEnviarPallet.isEnabled = true
         btnEnviarPallet.setBackgroundColor(Color.parseColor("#2196F3"))
+        btnAlmuerzo.isEnabled = true
+    }
+
+    // ==========================================
+    // PARO ALMUERZO (contador en pantalla; reusa el mecanismo de paro con
+    // motivo fijo "ALMUERZO" y la misma cola offline-first).
+    // ==========================================
+
+    private fun iniciarAlmuerzo() {
+        val sesion = sesionActualId
+        if (sesion == null) {
+            Toast.makeText(this, "Debe tener un turno activo.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (paroActivo) {
+            Toast.makeText(this, "Finalice el paro actual antes del almuerzo.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        btnAlmuerzo.isEnabled = false
+        val inicioMs = System.currentTimeMillis()
+        val req = IniciarParoRequest(sesion_id = sesion, motivo = MOTIVO_ALMUERZO)
+
+        lifecycleScope.launch {
+            // Sesión aún sin id real (turno encolado): encolamos y el SyncWorker
+            // reescribe -99 con el id real. El contador arranca igual (es local).
+            if (sesion == -99) {
+                colaRepo.enqueueIniciarParo(req)
+                aplicarAlmuerzoActivo(inicioMs, "Almuerzo iniciado (en cola)")
+                btnAlmuerzo.isEnabled = true
+                return@launch
+            }
+
+            try {
+                val resp = withContext(Dispatchers.IO) {
+                    RetrofitClient.apiService.iniciarParo(req)
+                }
+                // 409 = ya había un paro abierto en el server; igual reflejamos el
+                // almuerzo localmente para poder reanudarlo (lo cerrará finalizar).
+                if (resp.isSuccessful || resp.code() == 409) {
+                    aplicarAlmuerzoActivo(inicioMs, "Almuerzo iniciado")
+                } else {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("No se pudo iniciar el almuerzo")
+                        .setMessage(extraerDetalleErrorHttp(resp))
+                        .setPositiveButton("Entendido", null)
+                        .show()
+                    btnAlmuerzo.isEnabled = true
+                }
+            } catch (e: Exception) {
+                ErrorReporter.warn("MainActivity", "Sin red al iniciar almuerzo, encolando: ${e.message}")
+                colaRepo.enqueueIniciarParo(req)
+                aplicarAlmuerzoActivo(inicioMs, "Sin red — almuerzo guardado, se enviará al reconectar")
+            }
+        }
+    }
+
+    private fun finalizarAlmuerzo() {
+        val sesion = sesionActualId ?: return
+        btnAlmuerzo.isEnabled = false
+        val req = FinalizarParoRequest(sesion_id = sesion)
+
+        lifecycleScope.launch {
+            if (sesion == -99) {
+                colaRepo.enqueueFinalizarParo(req)
+                aplicarAlmuerzoInactivo("Almuerzo finalizado (en cola)")
+                return@launch
+            }
+
+            try {
+                val resp = withContext(Dispatchers.IO) {
+                    RetrofitClient.apiService.finalizarParo(req)
+                }
+                // 404 = no había paro abierto en el server (ya cerrado); limpiamos igual.
+                if (resp.isSuccessful || resp.code() == 404) {
+                    aplicarAlmuerzoInactivo("Almuerzo finalizado")
+                } else {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("No se pudo finalizar el almuerzo")
+                        .setMessage(extraerDetalleErrorHttp(resp))
+                        .setPositiveButton("Entendido", null)
+                        .show()
+                    btnAlmuerzo.isEnabled = true
+                }
+            } catch (e: Exception) {
+                ErrorReporter.warn("MainActivity", "Sin red al finalizar almuerzo, encolando: ${e.message}")
+                colaRepo.enqueueFinalizarParo(req)
+                aplicarAlmuerzoInactivo("Sin red — reanudación guardada, se enviará al reconectar")
+            }
+        }
+    }
+
+    // Activa la UI del almuerzo: contador anclado a la hora de inicio (sobrevive
+    // rotación/reinicio vía prefs), bloqueo de pacas y del paro general.
+    private fun aplicarAlmuerzoActivo(inicioMs: Long, mensaje: String) {
+        almuerzoActivo = true
+        getSharedPreferences(NOMBRE_PREFS, MODE_PRIVATE).edit().apply {
+            putBoolean("almuerzo_activo", true)
+            putLong("almuerzo_inicio_ms", inicioMs)
+            apply()
+        }
+        bannerAlmuerzo.visibility = View.VISIBLE
+        val transcurrido = System.currentTimeMillis() - inicioMs
+        chronoAlmuerzo.base = android.os.SystemClock.elapsedRealtime() - transcurrido
+        chronoAlmuerzo.start()
+
+        btnAlmuerzo.text = "REANUDAR (FIN ALMUERZO)"
+        btnAlmuerzo.setBackgroundColor(Color.parseColor("#B71C1C"))
+        btnAlmuerzo.isEnabled = true
+
+        btnEnviarPallet.isEnabled = false
+        btnEnviarPallet.setBackgroundColor(Color.GRAY)
+        btnParo.isEnabled = false
+        Toast.makeText(this, mensaje, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun aplicarAlmuerzoInactivo(mensaje: String) {
+        limpiarEstadoAlmuerzo()
+        btnEnviarPallet.isEnabled = true
+        btnEnviarPallet.setBackgroundColor(Color.parseColor("#2196F3"))
+        btnParo.isEnabled = true
+        Toast.makeText(this, mensaje, Toast.LENGTH_SHORT).show()
+    }
+
+    // Restaura el contador si la app se reabrió con un almuerzo en curso (se llama
+    // al recuperar la sesión de trabajo).
+    private fun restaurarEstadoAlmuerzo() {
+        val prefs = getSharedPreferences(NOMBRE_PREFS, MODE_PRIVATE)
+        if (prefs.getBoolean("almuerzo_activo", false)) {
+            val inicioMs = prefs.getLong("almuerzo_inicio_ms", System.currentTimeMillis())
+            aplicarAlmuerzoActivo(inicioMs, "Almuerzo en curso")
+        }
+    }
+
+    // Apaga el contador y limpia el estado/persistencia del almuerzo (al reanudar
+    // o al cerrar el turno). No toca botones ajenos al almuerzo.
+    private fun limpiarEstadoAlmuerzo() {
+        almuerzoActivo = false
+        getSharedPreferences(NOMBRE_PREFS, MODE_PRIVATE).edit().apply {
+            putBoolean("almuerzo_activo", false)
+            remove("almuerzo_inicio_ms")
+            apply()
+        }
+        chronoAlmuerzo.stop()
+        bannerAlmuerzo.visibility = View.GONE
+        btnAlmuerzo.text = "🍽️ PARO ALMUERZO"
+        btnAlmuerzo.setBackgroundColor(Color.parseColor("#2E7D32"))
+        btnAlmuerzo.isEnabled = true
     }
 
     // ==========================================
