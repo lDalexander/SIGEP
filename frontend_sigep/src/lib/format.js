@@ -64,6 +64,34 @@ export function fechaCorta(d = new Date()) {
   return `${dia} · ${mes.charAt(0).toUpperCase()}${mes.slice(1)}`;
 }
 
+/**
+ * "2026-08-01" -> Date local, o null si no es una fecha ISO válida.
+ * Se parsea a mano a propósito: `new Date('2026-08-01')` se interpreta como UTC y
+ * en Guayaquil (UTC-5) se mostraría como el día anterior.
+ */
+function fechaDesdeISO(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso ?? '').trim());
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** "2026-08-01" -> "01 ago". Etiqueta del eje X cuando la serie va por día. */
+export function fechaEje(iso) {
+  const d = fechaDesdeISO(iso);
+  if (!d) return String(iso ?? '—');
+  const mes = d.toLocaleDateString('es-EC', { month: 'short' }).replace('.', '');
+  return `${String(d.getDate()).padStart(2, '0')} ${mes}`;
+}
+
+/** "2026-08-01" -> "sáb 01 ago". Cabecera del tooltip en la serie por día. */
+export function fechaLegible(iso) {
+  const d = fechaDesdeISO(iso);
+  if (!d) return String(iso ?? '—');
+  const dia = d.toLocaleDateString('es-EC', { weekday: 'short' }).replace('.', '');
+  return `${dia} ${fechaEje(iso)}`;
+}
+
 /** Date -> "2026-07-23", el formato que esperan los input[type=date] y la API. */
 export function fechaISO(d = new Date()) {
   const mes = String(d.getMonth() + 1).padStart(2, '0');

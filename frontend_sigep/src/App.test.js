@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, fireEvent } from '@testing-library/react';
 import axios from 'axios';
 import App from './App';
 
@@ -181,4 +181,56 @@ test('si la API falla no se inventan datos y se avisa de la desconexión', async
   ).toBeInTheDocument();
   // Ningún número inventado en las tarjetas KPI.
   expect(screen.queryByText('2.272')).not.toBeInTheDocument();
+});
+
+/* ── Agrupación del gráfico de producción ─────────────────────────────────
+   El endpoint suma la misma hora de todos los días del rango, así que en un
+   rango largo la serie por hora no es una línea de tiempo. La UI cambia sola. */
+
+test('con el rango en hoy la serie va por hora y no envía `agrupar`', async () => {
+  render(<App />);
+
+  expect(await screen.findByText('Producción por hora · pacas')).toBeInTheDocument();
+
+  const llamada = axios.get.mock.calls.find(([url]) =>
+    url.startsWith('/api/dashboard/produccion_hora'));
+  expect(llamada[1].params).not.toHaveProperty('agrupar');
+
+  // Un solo día no da serie diaria: el toggle deja DÍA fuera de alcance.
+  expect(screen.getByRole('tab', { name: 'DÍA' })).toBeDisabled();
+});
+
+test('un rango de varios días pasa el gráfico a por día y pide agrupar=dia', async () => {
+  render(<App />);
+  await screen.findByText('Producción por hora · pacas');
+
+  axios.get.mockImplementation((url) => {
+    if (url.startsWith('/api/dashboard/produccion_hora')) {
+      return Promise.resolve({
+        data: [
+          { hora: '2026-07-29', pallets: 900, detalle: [] },
+          { hora: '2026-07-30', pallets: 1200, detalle: [] },
+        ],
+      });
+    }
+    if (url.startsWith('/api/mantenimiento/checklist')) {
+      return Promise.resolve({ data: CHECKLIST_RECIENTES });
+    }
+    const clave = Object.keys(RESPUESTAS).find((k) => url.startsWith(k));
+    return clave ? Promise.resolve({ data: RESPUESTAS[clave] }) : Promise.reject(new Error(url));
+  });
+
+  fireEvent.change(screen.getByLabelText('Fecha desde'), { target: { value: '2026-07-29' } });
+  fireEvent.change(screen.getByLabelText('Fecha hasta'), { target: { value: '2026-07-30' } });
+  fireEvent.click(screen.getByRole('button', { name: /cargar/i }));
+
+  expect(await screen.findByText('Producción por día · pacas')).toBeInTheDocument();
+
+  const llamada = axios.get.mock.calls
+    .filter(([url]) => url.startsWith('/api/dashboard/produccion_hora')).pop();
+  expect(llamada[1].params).toMatchObject({ desde: '2026-07-29', hasta: '2026-07-30', agrupar: 'dia' });
+
+  // Y se puede volver a la vista por hora a mano, que ya sí está habilitada.
+  fireEvent.click(screen.getByRole('tab', { name: 'HORA' }));
+  expect(await screen.findByText('Producción por hora · pacas')).toBeInTheDocument();
 });

@@ -8,7 +8,7 @@ import React from 'react';
  *                 subrayado de 2px, y una línea de borde recorre toda la fila.
  *
  * Props:
- *   items    : [{ value, label }]
+ *   items    : [{ value, label, disabled?, title? }]
  *   value    : value activo
  *   onChange : (value) => void
  */
@@ -47,11 +47,14 @@ export default function Tabs({ items, value, onChange, variante = 'pill', classN
             type="button"
             role="tab"
             aria-selected={activo}
+            disabled={it.disabled}
+            title={it.title}
             onClick={() => onChange(it.value)}
             className={`rounded-lg px-3 py-1.5 text-[12px] font-semibold transition-colors whitespace-nowrap
               ${activo
                 ? 'bg-sig-amber text-sig-bg'
-                : 'text-sig-muted hover:text-sig-text hover:bg-white/[0.04]'}`}
+                : 'text-sig-muted hover:text-sig-text hover:bg-white/[0.04]'}
+              ${it.disabled ? 'opacity-40 cursor-not-allowed hover:bg-transparent hover:text-sig-muted' : ''}`}
           >
             {it.label}
           </button>

@@ -127,17 +127,26 @@ def obtener_logs_recientes(db: Session = Depends(get_db)):
 
 @router.get("/produccion_hora")
 def obtener_produccion_hora(desde: str = Query(None), hasta: str = Query(None),
+                            agrupar: str = Query(None),
                             maquina: List[str] = _FiltroMaquina, operador: List[str] = _FiltroOperador,
                             marca: List[str] = _FiltroMarca, presentacion: List[str] = _FiltroPresentacion,
                             fragancia: List[str] = _FiltroFragancia, db: Session = Depends(get_db)):
-    """Producción por hora para la gráfica, con DETALLE por hora para el tooltip.
+    """Producción para la gráfica, con DETALLE por punto para el tooltip.
 
     Cada punto trae `detalle`: lista de {maquina, operario, producto, pacas} de lo
-    producido en esa hora (agrupado por sesión). Para un rango de varios días, la
-    hora agrega lo de esa hora del reloj a lo largo de todo el rango."""
+    producido en ese punto (agrupado por sesión).
+
+    `agrupar` (opcional) elige el eje de la serie:
+      - ausente o "hora" (por defecto): un punto por hora del reloj, etiqueta "HH:00".
+        Para un rango de varios días, la hora agrega lo de esa hora a lo largo de todo
+        el rango — es el comportamiento histórico y el que consume la app Android.
+      - "dia": un punto por fecha natural, etiqueta "YYYY-MM-DD".
+    Un valor desconocido se trata como "hora", igual que `?tipo=` en /operadores: se
+    ignora en vez de romper al cliente."""
     try:
         inicio, fin = _rango(desde, hasta)
-        hora_col = func.extract("hour", PalletDB.fecha_hora)
+        por_dia = (agrupar or "").strip().lower() == "dia"
+        hora_col = func.date(PalletDB.fecha_hora) if por_dia else func.extract("hour", PalletDB.fecha_hora)
         q = (
             db.query(
                 hora_col.label("hora"),
@@ -160,7 +169,7 @@ def obtener_produccion_hora(desde: str = Query(None), hasta: str = Query(None),
         )
         por_hora = {}
         for r in filas:
-            hk = int(r.hora)
+            hk = str(r.hora) if por_dia else int(r.hora)
             bucket = por_hora.setdefault(hk, {"pallets": 0, "detalle": []})
             pacas = int(r.pacas or 0)
             bucket["pallets"] += pacas
@@ -175,7 +184,8 @@ def obtener_produccion_hora(desde: str = Query(None), hasta: str = Query(None),
         for hk in sorted(por_hora.keys()):
             b = por_hora[hk]
             b["detalle"].sort(key=lambda x: x["pacas"], reverse=True)
-            data.append({"hora": f"{hk:02d}:00", "pallets": b["pallets"], "detalle": b["detalle"]})
+            etiqueta = hk if por_dia else f"{hk:02d}:00"
+            data.append({"hora": etiqueta, "pallets": b["pallets"], "detalle": b["detalle"]})
         return data
     except Exception as e:
         logger.error(f"Error en /dashboard/produccion_hora: {e}")

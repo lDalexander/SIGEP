@@ -50,6 +50,16 @@ function App() {
   const [rango, setRango] = useState({ desde: hoy, hasta: hoy });
   const [aplicado, setAplicado] = useState({ desde: hoy, hasta: hoy });
 
+  /* ── Agrupación del gráfico de producción ───────────────
+     `null` = automático: por hora cuando se mira un solo día, por día en cuanto el
+     rango abarca varios. Es lo que se espera al pedir una semana, y evita el error de
+     leer como línea de tiempo un eje que en realidad suma la misma hora de cada día.
+     El toggle de la tarjeta guarda aquí la elección manual, que solo dura hasta el
+     siguiente «Cargar»: al cambiar de rango vuelve a mandar el automático. */
+  const [agrupacionManual, setAgrupacionManual] = useState(null);
+  const rangoMultiDia = aplicado.desde !== aplicado.hasta;
+  const agrupacion = rangoMultiDia ? (agrupacionManual ?? 'dia') : 'hora';
+
   /* ── Datos ──────────────────────────────────────────── */
   const [kpis, setKpis] = useState(null);
   const [logs, setLogs] = useState([]);
@@ -80,7 +90,12 @@ function App() {
     const peticiones = [
       ['kpis',        () => axios.get(`${API_BASE}/dashboard/kpis`, opciones),            setKpis],
       ['logs',        () => axios.get(`${API_BASE}/dashboard/logs`, { timeout: 8000 }),   setLogs],
-      ['hora',        () => axios.get(`${API_BASE}/dashboard/produccion_hora`, opciones), setProduccionHora],
+      /* `agrupar` solo se envía en modo día: sin el parámetro la respuesta es la de
+         siempre, que es justo lo que consume la app Android. */
+      ['hora',        () => axios.get(`${API_BASE}/dashboard/produccion_hora`, {
+                        ...opciones,
+                        params: agrupacion === 'dia' ? { ...params, agrupar: 'dia' } : params,
+                      }), setProduccionHora],
       ['operativo',   () => axios.get(`${API_BASE}/dashboard/estado_operativo`, opciones), setOperaciones],
       ['top',         () => axios.get(`${API_BASE}/dashboard/top_produccion`, opciones),  setTopMarcas],
     ];
@@ -103,7 +118,7 @@ function App() {
        haya respondido, si no se quedaría congelada por un solo endpoint caído. */
     if (resultados.some((r) => r.status === 'fulfilled')) setUltimoRefresco(new Date());
     setCargando(false);
-  }, [aplicado]);
+  }, [aplicado, agrupacion]);
 
   useEffect(() => {
     if (vista !== 'dashboard') return undefined;
@@ -115,7 +130,10 @@ function App() {
 
   /* ── Handlers ───────────────────────────────────────── */
   const cambiarFecha = (campo, valor) => setRango((prev) => ({ ...prev, [campo]: valor }));
-  const cargarRango = () => setAplicado({ ...rango });
+  const cargarRango = () => {
+    setAplicado({ ...rango });
+    setAgrupacionManual(null);   // el rango nuevo vuelve a decidir la agrupación
+  };
 
   const descargar = (ruta) => {
     const qs = new URLSearchParams({ desde: aplicado.desde, hasta: aplicado.hasta });
@@ -165,6 +183,9 @@ function App() {
                 <ProductionChart
                   datos={produccionHora}
                   periodo={periodo}
+                  agrupacion={agrupacion}
+                  onAgrupacion={setAgrupacionManual}
+                  diaHabilitado={rangoMultiDia}
                   cargando={cargando}
                   error={errores.hora}
                 />

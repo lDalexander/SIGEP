@@ -31,8 +31,15 @@ git checkout v1.0-frontend-reconstruido     # volver al frontend estable
 
 ### Cambios de backend ya autorizados y aplicados
 
-Tras la reconstrucción se autorizó **una** excepción a la regla de oro, ya en producción:
+Tras la reconstrucción se autorizaron **dos** excepciones a la regla de oro, ya en producción:
 
+- **Agrupación diaria del gráfico de producción** (2026-08-03).
+  `GET /api/dashboard/produccion_hora` acepta `?agrupar=hora|dia` **opcional**. Sin el
+  parámetro la respuesta es idéntica byte a byte a la anterior (verificado con `diff`),
+  así que **las tablets no necesitan actualización**. Motivo: el endpoint agrupa por
+  `extract("hour", …)`, de modo que en un rango de varios días sumaba la misma hora de
+  todos los días en un punto — no era una línea de tiempo, y se leía mal.
+  La web elige la agrupación sola según el rango (ver §2).
 - **Operarios clasificados por línea** (`operadores.tipo` = `SOLIDO` | `LIQUIDO`), igual que
   las máquinas. Migración en `api_produccion/alter_operadores_tipo.sql`.
 - `GET /api/operadores` acepta `?tipo=` **opcional**. Sin el parámetro devuelve todos con el
@@ -191,7 +198,7 @@ por `lib/format.js`. Colores nuevos van a `tailwind.config.js`, nunca sueltos en
 | Componente | Endpoint |
 |---|---|
 | `KPICards` | `/dashboard/kpis` + derivación de `/dashboard/estado_operativo` |
-| `ProductionChart` | `/dashboard/produccion_hora` |
+| `ProductionChart` | `/dashboard/produccion_hora` (+`agrupar=dia` cuando el rango pasa de un día) |
 | `OperationsTable` | `/dashboard/estado_operativo` |
 | `EstadisticasProduccion` | `/dashboard/estadisticas` (fetch propio) |
 | `TerminalLog` | `/dashboard/logs` |
@@ -290,7 +297,7 @@ así se evita CORS. El `App.js` heredado apunta a `http://150.36.200.252:8000/ap
 |---|---|---|---|
 | GET | `/dashboard/kpis` | `desde`,`hasta`,`maquina[]`,`operador[]`,`marca[]`,`presentacion[]`,`fragancia[]` | `{pallets_hoy, pacas_hoy, sacos_hoy, turnos_activos, eficiencia}` |
 | GET | `/dashboard/logs` | — | `[{hora:"HH:MM:SS", mensaje, tipo:"pallet"}]` · 15 más recientes, desc |
-| GET | `/dashboard/produccion_hora` | mismos filtros | `[{hora:"HH:00", pallets, detalle:[{maquina,operario,producto,pacas}]}]` |
+| GET | `/dashboard/produccion_hora` | mismos filtros + `agrupar` (opcional) | `[{hora, pallets, detalle:[{maquina,operario,producto,pacas}]}]`. Sin `agrupar` o con `hora`: un punto por hora del reloj, `hora:"HH:00"` — con rango de varios días **suma esa hora de todos los días**. Con `agrupar=dia`: un punto por fecha, `hora:"YYYY-MM-DD"`. Valor desconocido → se trata como `hora`, igual que `?tipo=` |
 | GET | `/dashboard/estado_operativo` | mismos filtros | `[{sesion_id, maquina, operador, producto, inicio_turno, tiempo_transcurrido, total_pacas, estado}]` |
 | GET | `/dashboard/top_produccion` | mismos filtros | `[{name, value}]` desc |
 | GET | `/dashboard/opciones_filtros` | `desde`,`hasta` | `{maquina[], operador[], marca[], presentacion[], fragancia[]}` |
@@ -380,7 +387,7 @@ heartbeat los recupera como respaldo. **No cambiar el transporte ni el formato.*
 | KPI `PRODUCCIÓN DE HOY` → `1.873` / `0` | `kpis.pacas_hoy` / `kpis.sacos_hoy` |
 | KPI `TURNOS ACTIVOS` → `5` | `kpis.turnos_activos` |
 | KPI `LÍNEAS CON TURNO HOY` → `7`, `5 activas · 2 finalizada(s)` | **Derivado** de `estado_operativo`: `length`, y conteo por `estado` |
-| `Producción por hora · pacas` | `produccion_hora[].hora` / `.pallets` (`.detalle` para el tooltip) |
+| `Producción por hora / por día · pacas` | `produccion_hora[].hora` / `.pallets` (`.detalle` para el tooltip). Toggle `HORA \| DÍA` en la cabecera de la tarjeta: **automático** — con rango de un solo día va por hora y «DÍA» sale deshabilitado; en cuanto el rango abarca varios días pasa a por día. La elección manual dura hasta el siguiente «Cargar» |
 | `Estado operativo · líneas` | `estado_operativo[]` completo |
 | `Estadísticas de producción` | `estadisticas?dim=…&rango=…` |
 | `Actividad en vivo` | `logs[]` |

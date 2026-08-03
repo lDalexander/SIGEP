@@ -1,5 +1,6 @@
 import {
   num, pct, duracion, antiguedad, fechaCorta, fechaISO, turnoActual, etiquetaTablet, plural,
+  fechaEje, fechaLegible,
 } from './format';
 
 describe('num — separador de miles es-EC', () => {
@@ -116,5 +117,22 @@ describe('plural', () => {
     [1063, '1.063 sesiones'],  // pluraliza y formatea a la vez
   ])('plural(%p) -> %p', (entrada, salida) => {
     expect(plural(entrada, 'sesión', 'sesiones')).toBe(salida);
+  });
+});
+
+describe('fechas ISO del eje por día', () => {
+  test('fechaEje formatea sin desfase de zona horaria', () => {
+    // new Date('2026-08-01') sería UTC y en Guayaquil (UTC-5) daría "31 jul".
+    expect(fechaEje('2026-08-01')).toBe('01 ago');
+    expect(fechaEje('2026-12-25')).toBe('25 dic');
+  });
+
+  test('fechaLegible antepone el día de la semana', () => {
+    expect(fechaLegible('2026-08-01')).toMatch(/^\S+ 01 ago$/);
+  });
+
+  test('un valor que no es fecha se devuelve tal cual, sin inventar', () => {
+    expect(fechaEje('08:00')).toBe('08:00');
+    expect(fechaEje(null)).toBe('—');
   });
 });
