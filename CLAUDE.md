@@ -107,6 +107,43 @@ sudo systemctl restart sigep && systemctl status sigep
 curl -s http://127.0.0.1:8000/api/dashboard/kpis
 ```
 
+### Cómo tocar el backend sin arriesgar la planta
+
+Procedimiento seguido en los cambios de 2026-08-03; conviene repetirlo:
+
+**1. Probar el código nuevo en paralelo, sin tocar el servicio.** `sigep.service` corre
+en el 8000; se levanta una instancia con el código nuevo en otro puerto y se comparan
+las respuestas byte a byte contra el servicio vivo, que aún tiene el código anterior:
+
+```bash
+cd api_produccion
+(set -a; . ./.env; set +a; ./venv/bin/uvicorn main:app --host 127.0.0.1 --port 8001)
+# en otra terminal, por cada endpoint tocado y SIN los parámetros nuevos:
+diff <(curl -s "http://127.0.0.1:8000/api/dashboard/kpis") \
+     <(curl -s "http://127.0.0.1:8001/api/dashboard/kpis")
+```
+
+Si el `diff` está vacío en todos los endpoints, **las tablets no necesitan
+actualización**: es la prueba de que el parámetro nuevo es de verdad opcional. Es como
+se validaron `?agrupar=`, `?tipo=` y `hora_desde`/`hora_hasta`.
+
+**2. Recargar sin cerrar el puerto.** `gunicorn` corre como `john` (`User=john` en el
+unit), así que no hace falta `sudo`: un `SIGHUP` al **master** arranca workers nuevos con
+el código nuevo y retira los viejos sin cerrar el socket del 8000.
+
+```bash
+kill -HUP $(systemctl show -p MainPID --value sigep)
+```
+
+Un `systemctl restart` también vale pero cierra el puerto 1–2 s y pide `sudo`. Con
+cualquiera de los dos **caducan las sesiones admin** (los tokens viven en memoria del
+proceso) y se cortan los WebSockets abiertos; el heartbeat de las tablets los recupera.
+Con turnos activos, preguntar antes de recargar.
+
+**3. Orden de despliegue: backend primero, frontend después.** Al revés habría un rato
+con una web que anuncia un filtro contra una API que aún ignora el parámetro — no falla,
+pero muestra datos sin filtrar como si estuvieran filtrados.
+
 ### Por qué no se ejecuta `npm run build` a mano
 
 `npm run build` **vacía su carpeta de destino nada más empezar**. Así se perdió el
