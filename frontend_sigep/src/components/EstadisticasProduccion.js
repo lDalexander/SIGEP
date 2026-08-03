@@ -12,26 +12,34 @@ const DIMENSIONES = [
   { value: 'marca_presentacion_fragancia', label: 'Marca+Pres.+Frag.',  resumen: 'por marca, presentación y fragancia' },
 ];
 
-/* Presets temporales que acepta el endpoint en `rango`. */
-const PERIODOS = [
-  { value: 'hoy',    label: 'Hoy' },
-  { value: 'semana', label: '7d' },
-  { value: 'mes',    label: '30d' },
-  { value: 'todo',   label: 'Todo' },
-];
-
 /**
- * «Estadísticas de producción» — ranking configurable por agrupación y período.
+ * «Estadísticas de producción» — ranking configurable por agrupación.
  *
- * Mantiene su propio período, independiente del rango global del dashboard: así
- * están las pestañas en las capturas.
+ * Ya no tiene presets temporales propios (Hoy / 7d / 30d / Todo): usa el rango de
+ * fechas y la franja horaria del filtro de la cabecera, igual que el resto del
+ * dashboard, para que todas las tarjetas hablen siempre del mismo período. El
+ * endpoint da precedencia a `desde`/`hasta` sobre su parámetro `rango`, así que basta
+ * con enviarlos.
+ *
+ * Ojo con el criterio del endpoint: el rango de fechas filtra por la hora de inicio de
+ * la sesión, mientras la franja horaria filtra por la hora del pallet. Con franja
+ * activa, quien no produjo nada dentro de ella desaparece del ranking.
  */
-export default function EstadisticasProduccion({ apiBase, intervalo }) {
+export default function EstadisticasProduccion({
+  apiBase, desde, hasta, horaDesde, horaHasta, periodo, intervalo,
+}) {
   const [dim, setDim] = useState('maquina');
-  const [rango, setRango] = useState('hoy');
 
   const { datos, cargando, error } = useApi(`${apiBase}/dashboard/estadisticas`, {
-    params: { dim, rango },
+    /* Las horas solo se envían si están puestas: sin ellas el endpoint responde como
+       siempre. `useApi` serializa los params, así que cambiar el rango recarga solo. */
+    params: {
+      dim,
+      desde,
+      hasta,
+      ...(horaDesde ? { hora_desde: horaDesde } : {}),
+      ...(horaHasta ? { hora_hasta: horaHasta } : {}),
+    },
     intervalo,
   });
 
@@ -43,9 +51,9 @@ export default function EstadisticasProduccion({ apiBase, intervalo }) {
     <Card
       titulo="Estadísticas de producción"
       meta={
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-3">
           <Tabs items={DIMENSIONES} value={dim} onChange={setDim} />
-          <Tabs items={PERIODOS} value={rango} onChange={setRango} />
+          <Label caja="normal" className="shrink-0">{periodo}</Label>
         </div>
       }
     >
@@ -61,7 +69,7 @@ export default function EstadisticasProduccion({ apiBase, intervalo }) {
       </div>
 
       {items.length === 0 ? (
-        <Estado cargando={cargando} error={error} vacio="Sin producción en el período" />
+        <Estado cargando={cargando} error={error} vacio={`Sin producción · ${periodo}`} />
       ) : (
         <ol className="space-y-4">
           {items.map((item, idx) => (

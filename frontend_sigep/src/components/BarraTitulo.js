@@ -7,7 +7,10 @@ import { turnoActual } from '../lib/format';
  * Barra de título del dashboard: sobre-título mono, H1, el turno en curso a la
  * derecha, y debajo la fila de rango de fechas y descargas.
  */
-export default function BarraTitulo({ desde, hasta, onChange, onCargar, onDescargar }) {
+export default function BarraTitulo({
+  desde, hasta, horaDesde, horaHasta,
+  onChange, onCargar, onLimpiarHoras, onDescargar,
+}) {
   const turno = turnoActual();
 
   return (
@@ -32,8 +35,11 @@ export default function BarraTitulo({ desde, hasta, onChange, onCargar, onDescar
           <FiltroFecha
             desde={desde}
             hasta={hasta}
+            horaDesde={horaDesde}
+            horaHasta={horaHasta}
             onChange={onChange}
             onCargar={onCargar}
+            onLimpiarHoras={onLimpiarHoras}
             onDescargar={onDescargar}
           />
         </div>

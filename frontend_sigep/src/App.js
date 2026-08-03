@@ -43,12 +43,17 @@ function App() {
     return () => window.removeEventListener('popstate', alVolver);
   }, []);
 
-  /* ── Rango de fechas ────────────────────────────────────
+  /* ── Rango de fechas y franja horaria ───────────────────
      `rango` son los inputs; `aplicado` es lo que se está consultando. Se separan
-     para que el dashboard no recargue con cada pulsación de tecla en la fecha. */
+     para que el dashboard no recargue con cada pulsación de tecla en la fecha.
+
+     `horaDesde`/`horaHasta` vacíos significan el día completo, que es el arranque por
+     defecto. Se permite que la de inicio sea mayor que la de fin: el backend lo lee
+     como franja que cruza medianoche (19:00 → 07:00 = el turno de noche entero). */
   const hoy = fechaISO();
-  const [rango, setRango] = useState({ desde: hoy, hasta: hoy });
-  const [aplicado, setAplicado] = useState({ desde: hoy, hasta: hoy });
+  const rangoInicial = { desde: hoy, hasta: hoy, horaDesde: '', horaHasta: '' };
+  const [rango, setRango] = useState(rangoInicial);
+  const [aplicado, setAplicado] = useState(rangoInicial);
 
   /* ── Agrupación del gráfico de producción ───────────────
      `null` = automático: por hora cuando se mira un solo día, por día en cuanto el
@@ -84,7 +89,14 @@ function App() {
    * visible en lugar de vaciarse.
    */
   const refrescar = useCallback(async () => {
-    const params = { desde: aplicado.desde, hasta: aplicado.hasta };
+    /* Las horas solo se añaden si el usuario puso alguna: sin ellas la petición es
+       exactamente la de antes de existir el filtro. */
+    const params = {
+      desde: aplicado.desde,
+      hasta: aplicado.hasta,
+      ...(aplicado.horaDesde ? { hora_desde: aplicado.horaDesde } : {}),
+      ...(aplicado.horaHasta ? { hora_hasta: aplicado.horaHasta } : {}),
+    };
     const opciones = { params, timeout: 8000 };
 
     const peticiones = [
@@ -134,8 +146,16 @@ function App() {
     setAplicado({ ...rango });
     setAgrupacionManual(null);   // el rango nuevo vuelve a decidir la agrupación
   };
+  /* Limpiar la franja se aplica de inmediato, sin pasar por «Cargar»: es volver a lo
+     que ya se estaba viendo, no una consulta nueva que haya que confirmar. */
+  const limpiarHoras = () => {
+    setRango((prev) => ({ ...prev, horaDesde: '', horaHasta: '' }));
+    setAplicado((prev) => ({ ...prev, horaDesde: '', horaHasta: '' }));
+  };
 
   const descargar = (ruta) => {
+    /* Los endpoints de reportes solo aceptan fechas; la franja horaria no se les manda
+       porque la ignorarían. El Excel sale con el día completo, y se avisa en la UI. */
     const qs = new URLSearchParams({ desde: aplicado.desde, hasta: aplicado.hasta });
     window.open(`${API_BASE}/reportes/${ruta}?${qs}`, '_blank', 'noopener');
   };
@@ -149,6 +169,18 @@ function App() {
     : aplicado.desde === aplicado.hasta
       ? aplicado.desde
       : `${aplicado.desde} → ${aplicado.hasta}`;
+
+  /* Las tarjetas de producción sí respetan la franja horaria, así que su metadato la
+     nombra. Checklists e insumos no —sus endpoints no la aceptan— y siguen con
+     `periodo` a secas, para no rotular un filtro que no se está aplicando. */
+  const franja = aplicado.horaDesde || aplicado.horaHasta
+    ? aplicado.horaDesde && aplicado.horaHasta
+      ? `${aplicado.horaDesde}→${aplicado.horaHasta}`
+      : aplicado.horaDesde
+        ? `desde ${aplicado.horaDesde}`
+        : `hasta ${aplicado.horaHasta}`
+    : null;
+  const periodoConHoras = franja ? `${periodo} · ${franja}` : periodo;
 
   /* Administración sustituye toda la página: lleva cabecera y ancho propios. */
   if (vista === 'admin') {
@@ -165,8 +197,11 @@ function App() {
             <BarraTitulo
               desde={rango.desde}
               hasta={rango.hasta}
+              horaDesde={rango.horaDesde}
+              horaHasta={rango.horaHasta}
               onChange={cambiarFecha}
               onCargar={cargarRango}
+              onLimpiarHoras={limpiarHoras}
               onDescargar={descargar}
             />
 
@@ -182,7 +217,7 @@ function App() {
               <div className="space-y-5 min-w-0">
                 <ProductionChart
                   datos={produccionHora}
-                  periodo={periodo}
+                  periodo={periodoConHoras}
                   agrupacion={agrupacion}
                   onAgrupacion={setAgrupacionManual}
                   diaHabilitado={rangoMultiDia}
@@ -191,11 +226,19 @@ function App() {
                 />
                 <OperationsTable
                   datos={operaciones}
-                  periodo={periodo}
+                  periodo={periodoConHoras}
                   cargando={cargando}
                   error={errores.operativo}
                 />
-                <EstadisticasProduccion apiBase={API_BASE} intervalo={POLL_INTERVAL} />
+                <EstadisticasProduccion
+                  apiBase={API_BASE}
+                  desde={aplicado.desde}
+                  hasta={aplicado.hasta}
+                  horaDesde={aplicado.horaDesde}
+                  horaHasta={aplicado.horaHasta}
+                  periodo={periodoConHoras}
+                  intervalo={POLL_INTERVAL}
+                />
               </div>
 
               <div className="space-y-5 min-w-0">
@@ -204,7 +247,7 @@ function App() {
                 <TabletsSyncPanel apiBase={API_BASE} intervalo={POLL_INTERVAL} />
                 <TopProductionChart
                   datos={topMarcas}
-                  periodo={periodo}
+                  periodo={periodoConHoras}
                   cargando={cargando}
                   error={errores.top}
                 />

@@ -12,15 +12,16 @@ industriales con sincronización offline-first.
 
 ## 0. Estado actual
 
-**Última sesión: 2026-07-31.** El frontend está reconstruido y **desplegado en producción**
+**Última sesión: 2026-08-03.** El frontend está reconstruido y **desplegado en producción**
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
-capturas de `referencia_ui/`. 65 tests en verde.
+capturas de `referencia_ui/`. 75 tests en verde.
 
 ### Punto de recuperación
 
 | | |
 |---|---|
 | Tag estable | `v1.0-frontend-reconstruido` (en GitHub) |
+| Tag previo al filtro de horas | `v1.1-pre-filtro-horas` (en GitHub) |
 | Build de esa versión | `~/RESPALDO_build_estable_v1.0` |
 | Builds rotados | `~/respaldos_build_sigep/` (últimos 10) |
 | BD previa al último `ALTER` | `backups/produccion_detg_pre_tipo_operario_*.sql.gz` |
@@ -31,8 +32,16 @@ git checkout v1.0-frontend-reconstruido     # volver al frontend estable
 
 ### Cambios de backend ya autorizados y aplicados
 
-Tras la reconstrucción se autorizaron **dos** excepciones a la regla de oro, ya en producción:
+Tras la reconstrucción se autorizaron **tres** excepciones a la regla de oro, ya en producción:
 
+- **Franja horaria en el dashboard** (2026-08-03). Los cinco endpoints con rango del
+  dashboard (`kpis`, `produccion_hora`, `estado_operativo`, `top_produccion`,
+  `estadisticas`) aceptan `hora_desde` / `hora_hasta` **opcionales**, formato `HH:MM`.
+  Sin ellos la respuesta es idéntica byte a byte a la anterior (verificado con `diff`
+  contra una instancia paralela del código viejo, 8 casos incluido `agrupar=dia`), así
+  que **las tablets no necesitan actualización**. Motivo: los turnos de la planta no
+  coinciden con el día natural — el de noche cruza medianoche — y el rango de fechas
+  solo no permitía aislarlos. Detalles de semántica en §3.
 - **Agrupación diaria del gráfico de producción** (2026-08-03).
   `GET /api/dashboard/produccion_hora` acepta `?agrupar=hora|dia` **opcional**. Sin el
   parámetro la respuesta es idéntica byte a byte a la anterior (verificado con `diff`),
@@ -167,11 +176,11 @@ frontend_sigep/
     ├── components/
     │   ├── Header.js            # cabecera: reloj, EN VIVO, Insumos, Admin
     │   ├── BarraTitulo.js       # sobre-título, H1, turno actual
-    │   ├── FiltroFecha.js       # rango desde/hasta + Cargar + 3 descargas
+    │   ├── FiltroFecha.js       # fechas + franja horaria + Cargar + 3 descargas
     │   ├── KPICards.js          # las 3 tarjetas KPI
     │   ├── ProductionChart.js   # producción por hora (área)
     │   ├── OperationsTable.js   # estado operativo · líneas
-    │   ├── EstadisticasProduccion.js  # ranking por agrupación y período
+    │   ├── EstadisticasProduccion.js  # ranking por agrupación (usa el rango global)
     │   ├── TerminalLog.js       # actividad en vivo
     │   ├── ChecklistMantenimiento.js  # tarjetas con anillo de progreso
     │   ├── TabletsSyncPanel.js  # chips de las 21 tablets
@@ -200,7 +209,7 @@ por `lib/format.js`. Colores nuevos van a `tailwind.config.js`, nunca sueltos en
 | `KPICards` | `/dashboard/kpis` + derivación de `/dashboard/estado_operativo` |
 | `ProductionChart` | `/dashboard/produccion_hora` (+`agrupar=dia` cuando el rango pasa de un día) |
 | `OperationsTable` | `/dashboard/estado_operativo` |
-| `EstadisticasProduccion` | `/dashboard/estadisticas` (fetch propio) |
+| `EstadisticasProduccion` | `/dashboard/estadisticas` (fetch propio, con el rango y la franja globales) |
 | `TerminalLog` | `/dashboard/logs` |
 | `ChecklistMantenimiento` | `/mantenimiento/checklist?limit=8` (fetch propio) |
 | `TabletsSyncPanel` | `/tablets/estado`, `/tablets/sincronizar/{id}` (fetch propio) |
@@ -261,8 +270,11 @@ npx eslint --ext .js src/
 ```
 
 - `src/lib/format.test.js` — formato es-EC, duraciones, turnos, antigüedad.
-- `src/App.test.js` — montaje del dashboard, tarjetas, tabla de detalle, y los dos
-  casos de fallo (endpoint aislado y API entera caída).
+- `src/App.test.js` — montaje del dashboard, tarjetas, tabla de detalle, los dos
+  casos de fallo (endpoint aislado y API entera caída), la agrupación hora/día, y la
+  franja horaria: que sin ella **no** viajen `hora_desde`/`hora_hasta`, que `19:00→07:00`
+  llegue a los cinco endpoints, que «Todo el día» la quite sin pulsar «Cargar», y que
+  Estadísticas mande `desde`/`hasta` en vez de `rango`.
 - `src/components/admin/AdminApp.test.js` — las cinco pestañas, incluido que
   «Eliminar» haga `PUT {activo:false}` y nunca `DELETE`.
 
@@ -295,13 +307,13 @@ así se evita CORS. El `App.js` heredado apunta a `http://150.36.200.252:8000/ap
 
 | Método | Ruta | Parámetros | Respuesta |
 |---|---|---|---|
-| GET | `/dashboard/kpis` | `desde`,`hasta`,`maquina[]`,`operador[]`,`marca[]`,`presentacion[]`,`fragancia[]` | `{pallets_hoy, pacas_hoy, sacos_hoy, turnos_activos, eficiencia}` |
+| GET | `/dashboard/kpis` | `desde`,`hasta`,`hora_desde`,`hora_hasta`,`maquina[]`,`operador[]`,`marca[]`,`presentacion[]`,`fragancia[]` | `{pallets_hoy, pacas_hoy, sacos_hoy, turnos_activos, eficiencia}` |
 | GET | `/dashboard/logs` | — | `[{hora:"HH:MM:SS", mensaje, tipo:"pallet"}]` · 15 más recientes, desc |
 | GET | `/dashboard/produccion_hora` | mismos filtros + `agrupar` (opcional) | `[{hora, pallets, detalle:[{maquina,operario,producto,pacas}]}]`. Sin `agrupar` o con `hora`: un punto por hora del reloj, `hora:"HH:00"` — con rango de varios días **suma esa hora de todos los días**. Con `agrupar=dia`: un punto por fecha, `hora:"YYYY-MM-DD"`. Valor desconocido → se trata como `hora`, igual que `?tipo=` |
 | GET | `/dashboard/estado_operativo` | mismos filtros | `[{sesion_id, maquina, operador, producto, inicio_turno, tiempo_transcurrido, total_pacas, estado}]` |
 | GET | `/dashboard/top_produccion` | mismos filtros | `[{name, value}]` desc |
 | GET | `/dashboard/opciones_filtros` | `desde`,`hasta` | `{maquina[], operador[], marca[], presentacion[], fragancia[]}` |
-| GET | `/dashboard/estadisticas` | `dim`, `rango`, `desde`, `hasta` | `{dim, rango, total_pacas, total_sesiones, items:[{etiqueta,pacas,sesiones,pct}]}` |
+| GET | `/dashboard/estadisticas` | `dim`, `rango`, `desde`, `hasta`, `hora_desde`, `hora_hasta` | `{dim, rango, total_pacas, total_sesiones, items:[{etiqueta,pacas,sesiones,pct}]}` |
 | GET | `/mantenimiento/checklist` | `limit` (def. 30) **o** `desde`,`hasta` | `[{id,maquina,operador,momento,codigo_turno,fecha_turno,fecha,hora,supervisor,comentarios,items:[{etiqueta,marcado}],total_items,items_ok,creado_en}]` |
 | GET | `/tablets/estado` | — | `[{device_id,nombre,maquina,pendientes,ultimo_heartbeat,ultima_sincronizacion,en_linea,segundos_desde_heartbeat}]` |
 | POST | `/tablets/sincronizar/{device_id}` | — | `{device_id, enviada, motivo}` |
@@ -318,6 +330,34 @@ así se evita CORS. El `App.js` heredado apunta a `http://150.36.200.252:8000/ap
 mandan sobre `rango`.
 
 Sin `desde`/`hasta`, todos los endpoints con rango equivalen **al día de hoy**.
+
+### Franja horaria (`hora_desde` / `hora_hasta`)
+
+Opcionales en los cinco endpoints con rango. Formato `HH:MM` (también valen `HH` y
+`HH:MM:SS`). **Inicio inclusivo, fin exclusivo**, igual que el fin de `_rango()`.
+
+- **Cruzan medianoche a propósito:** si `hora_desde` > `hora_hasta`, `19:00→07:00`
+  significa 19:00–23:59 **más** 00:00–06:59. Es la única forma de aislar el turno de
+  noche de la planta en una sola consulta.
+- Uno solo de los dos límites vale: `hora_desde=10:00` es «de las 10 en adelante».
+- Un valor no parseable, o los dos límites iguales, **se ignoran** (no dan 400), igual
+  que `?agrupar=` y `?tipo=`. Se comprobó que las franjas `06:00–17:30` y `19:00–07:00`
+  particionan exactamente el total del día (29 406 + 19 850 = 49 256).
+- **Qué columna filtra, por endpoint** (no es uniforme, y es deliberado):
+  - Producción (`produccion_hora`, `top_produccion`, y las pacas/sacos de `kpis`) →
+    `pallets.fecha_hora`, la hora en que se registró el pallet.
+  - Turnos (`estado_operativo`, y `turnos_activos` de `kpis`) →
+    `sesiones.inicio_turno`, la hora en que arrancó el turno. La fila representa una
+    sesión entera, así que `total_pacas` sigue siendo el total de la sesión aunque
+    parte quede fuera de la franja.
+  - `estadisticas` es **mixto**: el rango de **fechas** filtra por `inicio_turno`
+    (comportamiento histórico del endpoint) y la **franja horaria** por
+    `pallets.fecha_hora`, que es lo que responde a «quién produjo más en el turno de
+    noche». Consecuencia: con franja activa, quien no produjo nada dentro de ella
+    desaparece del ranking en vez de salir con 0 pacas — el `outerjoin` pasa a
+    comportarse como `join`.
+- **Los endpoints de `/reportes/` NO la aceptan.** Los Excel salen con el día completo;
+  la UI lo advierte en el propio filtro para que no se dé por hecho lo contrario.
 
 ### Administración (requieren cabecera `X-Admin-Token`)
 
@@ -383,13 +423,14 @@ heartbeat los recupera como respaldo. **No cambiar el transporte ni el formato.*
 | Reloj `12:21:31`, fecha `23 · Jul` | Cliente (`toLocaleTimeString('es-EC')`) |
 | `● EN VIVO` | Cliente: éxito del último polling |
 | `Turno actual DÍA · 07:00–19:00` | Cliente, replicando la regla de `services/turnos.py` |
-| Botones `↓ Producción` / `↓ Formularios` / `↓ Insumos` | `/reportes/excel`, `/reportes/formularios_excel`, `/reportes/insumos_excel` con `desde`/`hasta` |
+| Botones `↓ Producción` / `↓ Formularios` / `↓ Insumos` | `/reportes/excel`, `/reportes/formularios_excel`, `/reportes/insumos_excel` con `desde`/`hasta`. **No** se les manda la franja horaria: no la aceptan |
+| Fila `FRANJA HORARIA hh:mm → hh:mm` | Cliente: `hora_desde`/`hora_hasta` para los cinco endpoints con rango. Vacía = «día completo». Se aplica con el mismo botón «Cargar»; el botón «Todo el día» la quita al instante. Se permite `19:00 → 07:00` (cruza medianoche) |
 | KPI `PRODUCCIÓN DE HOY` → `1.873` / `0` | `kpis.pacas_hoy` / `kpis.sacos_hoy` |
 | KPI `TURNOS ACTIVOS` → `5` | `kpis.turnos_activos` |
 | KPI `LÍNEAS CON TURNO HOY` → `7`, `5 activas · 2 finalizada(s)` | **Derivado** de `estado_operativo`: `length`, y conteo por `estado` |
 | `Producción por hora / por día · pacas` | `produccion_hora[].hora` / `.pallets` (`.detalle` para el tooltip). Toggle `HORA \| DÍA` en la cabecera de la tarjeta: **automático** — con rango de un solo día va por hora y «DÍA» sale deshabilitado; en cuanto el rango abarca varios días pasa a por día. La elección manual dura hasta el siguiente «Cargar» |
 | `Estado operativo · líneas` | `estado_operativo[]` completo |
-| `Estadísticas de producción` | `estadisticas?dim=…&rango=…` |
+| `Estadísticas de producción` | `estadisticas?dim=…&desde=&hasta=`. Conserva los cuatro segmentadores de agrupación (`Máquina`, `Operario`, `Marca+Pres.`, `Marca+Pres.+Frag.`) pero **ya no tiene presets `Hoy/7d/30d/Todo`**: usa el rango y la franja de la cabecera, para que no contradiga al resto del dashboard |
 | `Actividad en vivo` | `logs[]` |
 | `Checklist de mantenimiento · 8 recientes` | `mantenimiento/checklist?limit=8` |
 | `Tablets · sincronización · 0/21` | `tablets/estado[]`; `en_linea` para el punto, `segundos_desde_heartbeat` para `31m`/`21d` |

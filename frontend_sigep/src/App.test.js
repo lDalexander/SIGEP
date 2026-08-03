@@ -234,3 +234,93 @@ test('un rango de varios días pasa el gráfico a por día y pide agrupar=dia', 
   fireEvent.click(screen.getByRole('tab', { name: 'HORA' }));
   expect(await screen.findByText('Producción por hora · pacas')).toBeInTheDocument();
 });
+
+/* ── Franja horaria ───────────────────────────────────────────────────────
+   Los turnos de la planta no coinciden con el día natural (el de noche cruza
+   medianoche), así que el rango de fechas se complementa con un rango de horas.
+   Los parámetros son opcionales en la API: sin franja no deben viajar. */
+
+/** Últimos params con los que se llamó a un endpoint del dashboard. */
+const paramsDe = (ruta) =>
+  axios.get.mock.calls.filter(([url]) => url.startsWith(`/api/dashboard/${ruta}`)).pop()[1].params;
+
+const ENDPOINTS_CON_FRANJA = ['kpis', 'produccion_hora', 'estado_operativo', 'top_produccion', 'estadisticas'];
+
+test('sin franja horaria no se envían hora_desde ni hora_hasta', async () => {
+  render(<App />);
+  await screen.findByText('2.272');
+
+  ENDPOINTS_CON_FRANJA.forEach((ruta) => {
+    expect(paramsDe(ruta)).not.toHaveProperty('hora_desde');
+    expect(paramsDe(ruta)).not.toHaveProperty('hora_hasta');
+  });
+  expect(screen.getByText('día completo')).toBeInTheDocument();
+});
+
+test('la franja del turno de noche se envía a los endpoints de producción', async () => {
+  render(<App />);
+  await screen.findByText('2.272');
+
+  // 19:00 → 07:00 cruza medianoche: se manda tal cual, el backend lo interpreta.
+  fireEvent.change(screen.getByLabelText('Hora desde'), { target: { value: '19:00' } });
+  fireEvent.change(screen.getByLabelText('Hora hasta'), { target: { value: '07:00' } });
+  fireEvent.click(screen.getByRole('button', { name: /cargar/i }));
+
+  await screen.findAllByText(/19:00→07:00/);
+
+  ENDPOINTS_CON_FRANJA.forEach((ruta) => {
+    expect(paramsDe(ruta)).toMatchObject({ hora_desde: '19:00', hora_hasta: '07:00' });
+  });
+
+  // Se dice en la UI que los Excel no la respetan, para no dar por hecho que sí.
+  expect(screen.getByText(/los Excel .* salen con el día completo/i)).toBeInTheDocument();
+});
+
+test('«Todo el día» quita la franja sin tener que volver a pulsar Cargar', async () => {
+  render(<App />);
+  await screen.findByText('2.272');
+
+  fireEvent.change(screen.getByLabelText('Hora desde'), { target: { value: '06:00' } });
+  fireEvent.click(screen.getByRole('button', { name: /cargar/i }));
+  await screen.findAllByText(/desde 06:00/);
+  expect(paramsDe('kpis')).toMatchObject({ hora_desde: '06:00' });
+
+  fireEvent.click(screen.getByRole('button', { name: /todo el día/i }));
+
+  await screen.findByText('día completo');
+  expect(paramsDe('kpis')).not.toHaveProperty('hora_desde');
+});
+
+/* ── Estadísticas de producción ───────────────────────────────────────────
+   Antes tenía sus propios presets (Hoy / 7d / 30d / Todo) y no miraba el rango
+   global, así que podía contradecir al resto del dashboard. */
+
+test('las estadísticas usan el rango global y ya no tienen presets propios', async () => {
+  render(<App />);
+  await screen.findByText(/1 sesión · 28\.2%/);
+
+  // El endpoint da precedencia a desde/hasta, así que `rango` sobra y no se manda.
+  expect(paramsDe('estadisticas')).toMatchObject({ dim: 'maquina', desde: expect.any(String), hasta: expect.any(String) });
+  expect(paramsDe('estadisticas')).not.toHaveProperty('rango');
+
+  ['Hoy', '7d', '30d', 'Todo'].forEach((etiqueta) => {
+    expect(screen.queryByRole('tab', { name: etiqueta })).not.toBeInTheDocument();
+  });
+
+  // Las agrupaciones, que son lo que se quería conservar, siguen ahí y funcionan.
+  fireEvent.click(screen.getByRole('tab', { name: 'Operario' }));
+  expect(await screen.findByText('por operario')).toBeInTheDocument();
+  expect(paramsDe('estadisticas')).toMatchObject({ dim: 'operario' });
+});
+
+test('el rango de fechas de la cabecera arrastra a las estadísticas', async () => {
+  render(<App />);
+  await screen.findByText(/1 sesión · 28\.2%/);
+
+  fireEvent.change(screen.getByLabelText('Fecha desde'), { target: { value: '2026-07-01' } });
+  fireEvent.change(screen.getByLabelText('Fecha hasta'), { target: { value: '2026-07-31' } });
+  fireEvent.click(screen.getByRole('button', { name: /cargar/i }));
+
+  await screen.findAllByText(/2026-07-01 → 2026-07-31/);
+  expect(paramsDe('estadisticas')).toMatchObject({ desde: '2026-07-01', hasta: '2026-07-31' });
+});
