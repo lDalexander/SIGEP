@@ -4,7 +4,7 @@ Proporciona KPIs, estado operativo y gráficas de producción para los superviso
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func, case, or_
+from sqlalchemy import func, case, or_, and_
 from datetime import datetime, timedelta
 from typing import List
 import pandas as pd
@@ -36,6 +36,58 @@ def _rango(desde, hasta):
     return datetime.combine(d, datetime.min.time()), datetime.combine(h, datetime.min.time()) + timedelta(days=1)
 
 
+def _parse_hora(valor):
+    """"HH:MM" | "HH:MM:SS" | "HH" -> minutos desde medianoche. None si no es usable.
+
+    Un valor no parseable se ignora en silencio en vez de devolver 400, igual que
+    `?agrupar=` y `?tipo=`: una URL mal copiada o un cliente viejo no debe dejar el
+    dashboard en blanco. Se acepta "24:00" como fin de día (1440)."""
+    if valor is None:
+        return None
+    txt = str(valor).strip()
+    if not txt:
+        return None
+    partes = txt.split(":")
+    try:
+        h = int(partes[0])
+        m = int(partes[1]) if len(partes) > 1 and partes[1] != "" else 0
+    except ValueError:
+        return None
+    if not (0 <= h <= 24 and 0 <= m <= 59):
+        return None
+    return min(h * 60 + m, 1440)
+
+
+def _filtro_horas(columna, hora_desde, hora_hasta):
+    """Condición SQL que limita `columna` a una franja horaria del día, o None.
+
+    `hora_desde` es inclusivo y `hora_hasta` exclusivo, igual que el fin de `_rango`.
+    Si `hora_desde` > `hora_hasta` la franja CRUZA MEDIANOCHE: 19:00→07:00 significa
+    19:00-23:59 más 00:00-06:59, que es como funciona el turno de noche de la planta.
+    Con ambos límites iguales (o ninguno) devuelve None y no se añade ningún WHERE, de
+    modo que sin los parámetros la consulta es exactamente la de siempre."""
+    ini = _parse_hora(hora_desde)
+    fin = _parse_hora(hora_hasta)
+    if ini is None and fin is None:
+        return None
+    if ini == fin:
+        return None
+    minutos = func.extract("hour", columna) * 60 + func.extract("minute", columna)
+    if fin is None:
+        return minutos >= ini
+    if ini is None:
+        return minutos < fin
+    if ini < fin:
+        return and_(minutos >= ini, minutos < fin)
+    return or_(minutos >= ini, minutos < fin)
+
+
+def _aplicar_horas(query, columna, hora_desde, hora_hasta):
+    """Aplica `_filtro_horas` a una query si hay algo que filtrar."""
+    cond = _filtro_horas(columna, hora_desde, hora_hasta)
+    return query.filter(cond) if cond is not None else query
+
+
 def _aplicar_filtros(query, maquina=None, operador=None, marca=None, presentacion=None, fragancia=None):
     """Aplica los segmentadores (multi-selección) sobre columnas de SesionTrabajoDB.
 
@@ -61,12 +113,23 @@ _FiltroMarca = Query(None)
 _FiltroPresentacion = Query(None)
 _FiltroFragancia = Query(None)
 
+# Franja horaria del día, opcional y compartida por todos los endpoints del dashboard.
+# Sin estos parámetros la respuesta es idéntica a la de antes de existir el filtro, así
+# que la app Android no necesita cambio alguno.
+_FiltroHoraDesde = Query(None)
+_FiltroHoraHasta = Query(None)
+
 @router.get("/kpis")
 def obtener_kpis(desde: str = Query(None), hasta: str = Query(None),
+                 hora_desde: str = _FiltroHoraDesde, hora_hasta: str = _FiltroHoraHasta,
                  maquina: List[str] = _FiltroMaquina, operador: List[str] = _FiltroOperador,
                  marca: List[str] = _FiltroMarca, presentacion: List[str] = _FiltroPresentacion,
                  fragancia: List[str] = _FiltroFragancia, db: Session = Depends(get_db)):
-    """KPIs (pacas/sacos/turnos activos) del rango seleccionado (default: hoy)."""
+    """KPIs (pacas/sacos/turnos activos) del rango seleccionado (default: hoy).
+
+    `hora_desde`/`hora_hasta` (opcionales, "HH:MM") recortan además a una franja del
+    día: las pacas/sacos por la hora del pallet y los turnos activos por su hora de
+    inicio. Ver `_filtro_horas` para el cruce de medianoche."""
     try:
         inicio, fin = _rango(desde, hasta)
         # Las presentaciones de 15/25 Kg NO son pacas, son sacos -> se cuentan aparte.
@@ -81,6 +144,7 @@ def obtener_kpis(desde: str = Query(None), hasta: str = Query(None),
             .filter(PalletDB.fecha_hora >= inicio, PalletDB.fecha_hora < fin)
         )
         q = _aplicar_filtros(q, maquina, operador, marca, presentacion, fragancia)
+        q = _aplicar_horas(q, PalletDB.fecha_hora, hora_desde, hora_hasta)
         fila = q.first()
         pacas_hoy = int(fila.pacas or 0) if fila else 0
         sacos_hoy = int(fila.sacos or 0) if fila else 0
@@ -90,6 +154,7 @@ def obtener_kpis(desde: str = Query(None), hasta: str = Query(None),
                     SesionTrabajoDB.inicio_turno >= inicio, SesionTrabajoDB.inicio_turno < fin)
         )
         q_turnos = _aplicar_filtros(q_turnos, maquina, operador, marca, presentacion, fragancia)
+        q_turnos = _aplicar_horas(q_turnos, SesionTrabajoDB.inicio_turno, hora_desde, hora_hasta)
         turnos_activos = q_turnos.scalar()
         return {
             "pallets_hoy": pacas_hoy + sacos_hoy,
@@ -128,6 +193,7 @@ def obtener_logs_recientes(db: Session = Depends(get_db)):
 @router.get("/produccion_hora")
 def obtener_produccion_hora(desde: str = Query(None), hasta: str = Query(None),
                             agrupar: str = Query(None),
+                            hora_desde: str = _FiltroHoraDesde, hora_hasta: str = _FiltroHoraHasta,
                             maquina: List[str] = _FiltroMaquina, operador: List[str] = _FiltroOperador,
                             marca: List[str] = _FiltroMarca, presentacion: List[str] = _FiltroPresentacion,
                             fragancia: List[str] = _FiltroFragancia, db: Session = Depends(get_db)):
@@ -142,7 +208,11 @@ def obtener_produccion_hora(desde: str = Query(None), hasta: str = Query(None),
         el rango — es el comportamiento histórico y el que consume la app Android.
       - "dia": un punto por fecha natural, etiqueta "YYYY-MM-DD".
     Un valor desconocido se trata como "hora", igual que `?tipo=` en /operadores: se
-    ignora en vez de romper al cliente."""
+    ignora en vez de romper al cliente.
+
+    `hora_desde`/`hora_hasta` (opcionales, "HH:MM") recortan a una franja del día por
+    la hora del pallet, para poder aislar un turno. Combinan con las dos agrupaciones:
+    con `agrupar=dia` cada punto es lo producido ese día DENTRO de la franja."""
     try:
         inicio, fin = _rango(desde, hasta)
         por_dia = (agrupar or "").strip().lower() == "dia"
@@ -161,6 +231,7 @@ def obtener_produccion_hora(desde: str = Query(None), hasta: str = Query(None),
             .filter(PalletDB.fecha_hora >= inicio, PalletDB.fecha_hora < fin)
         )
         q = _aplicar_filtros(q, maquina, operador, marca, presentacion, fragancia)
+        q = _aplicar_horas(q, PalletDB.fecha_hora, hora_desde, hora_hasta)
         filas = (
             q.group_by(hora_col, SesionTrabajoDB.maquina, SesionTrabajoDB.operador,
                        SesionTrabajoDB.marca, SesionTrabajoDB.presentacion, SesionTrabajoDB.fragancia)
@@ -193,16 +264,23 @@ def obtener_produccion_hora(desde: str = Query(None), hasta: str = Query(None),
 
 @router.get("/estado_operativo")
 def obtener_estado_operativo(desde: str = Query(None), hasta: str = Query(None),
+                             hora_desde: str = _FiltroHoraDesde, hora_hasta: str = _FiltroHoraHasta,
                              maquina: List[str] = _FiltroMaquina, operador: List[str] = _FiltroOperador,
                              marca: List[str] = _FiltroMarca, presentacion: List[str] = _FiltroPresentacion,
                              fragancia: List[str] = _FiltroFragancia, db: Session = Depends(get_db)):
-    """Estado de las máquinas y turnos del rango seleccionado (default: hoy)."""
+    """Estado de las máquinas y turnos del rango seleccionado (default: hoy).
+
+    `hora_desde`/`hora_hasta` (opcionales, "HH:MM") filtran por la HORA DE INICIO del
+    turno, no por la de los pallets: la fila representa una sesión entera, así que
+    `total_pacas` sigue siendo el total de la sesión aunque parte quede fuera de la
+    franja. Es el mismo criterio con el que ya se filtra por fecha aquí."""
     try:
         inicio, fin = _rango(desde, hasta)
         q = db.query(SesionTrabajoDB).filter(
             SesionTrabajoDB.inicio_turno >= inicio, SesionTrabajoDB.inicio_turno < fin
         )
         q = _aplicar_filtros(q, maquina, operador, marca, presentacion, fragancia)
+        q = _aplicar_horas(q, SesionTrabajoDB.inicio_turno, hora_desde, hora_hasta)
         sesiones = q.order_by(SesionTrabajoDB.inicio_turno.desc()).all()
         resultados = []
         for s in sesiones:
@@ -228,10 +306,13 @@ def obtener_estado_operativo(desde: str = Query(None), hasta: str = Query(None),
 
 @router.get("/top_produccion")
 def obtener_top_produccion(desde: str = Query(None), hasta: str = Query(None),
+                           hora_desde: str = _FiltroHoraDesde, hora_hasta: str = _FiltroHoraHasta,
                            maquina: List[str] = _FiltroMaquina, operador: List[str] = _FiltroOperador,
                            marca: List[str] = _FiltroMarca, presentacion: List[str] = _FiltroPresentacion,
                            fragancia: List[str] = _FiltroFragancia, db: Session = Depends(get_db)):
-    """Ranking de marcas más producidas en el rango seleccionado (default: hoy)."""
+    """Ranking de marcas más producidas en el rango seleccionado (default: hoy).
+
+    `hora_desde`/`hora_hasta` (opcionales, "HH:MM") recortan por la hora del pallet."""
     try:
         inicio, fin = _rango(desde, hasta)
         q = (
@@ -240,6 +321,7 @@ def obtener_top_produccion(desde: str = Query(None), hasta: str = Query(None),
             .filter(PalletDB.fecha_hora >= inicio, PalletDB.fecha_hora < fin)
         )
         q = _aplicar_filtros(q, maquina, operador, marca, presentacion, fragancia)
+        q = _aplicar_horas(q, PalletDB.fecha_hora, hora_desde, hora_hasta)
         resultados = (
             q.group_by(SesionTrabajoDB.marca)
              .order_by(func.sum(PalletDB.cantidad_pacas).desc())
@@ -283,6 +365,7 @@ def obtener_opciones_filtros(desde: str = Query(None), hasta: str = Query(None),
 @router.get("/estadisticas")
 def obtener_estadisticas(dim: str = "maquina", rango: str = "semana",
                          desde: str = Query(None), hasta: str = Query(None),
+                         hora_desde: str = _FiltroHoraDesde, hora_hasta: str = _FiltroHoraHasta,
                          db: Session = Depends(get_db)):
     """Estadisticas de produccion agregadas por dimension y rango temporal.
 
@@ -291,6 +374,15 @@ def obtener_estadisticas(dim: str = "maquina", rango: str = "semana",
     que el dashboard comparta el mismo rango global); si no, se usa el preset `rango`
     ("hoy" | "semana" | "mes" | "todo").
     Devuelve {dim, rango, total_pacas, total_sesiones, items:[{etiqueta,pacas,sesiones,pct}]}.
+
+    `hora_desde`/`hora_hasta` (opcionales, "HH:MM") recortan a una franja del día. Ojo
+    al criterio, que aquí es mixto a propósito: el rango de FECHAS filtra por
+    `inicio_turno` de la sesión (comportamiento histórico de este endpoint), mientras la
+    franja HORARIA filtra por `fecha_hora` del pallet, que es lo que responde a «quién
+    produjo más en el turno de noche». Como consecuencia, con franja activa las sesiones
+    que no produjeron nada dentro de ella desaparecen del ranking en lugar de aparecer
+    con 0 pacas: el `outerjoin` se comporta como un `join`. Sin los parámetros nada de
+    esto se activa y la consulta es la de siempre.
     """
     try:
         ahora = datetime.now()
@@ -340,6 +432,7 @@ def obtener_estadisticas(dim: str = "maquina", rango: str = "semana",
             q = q.filter(SesionTrabajoDB.inicio_turno >= desde_dt)
         if hasta_dt is not None:
             q = q.filter(SesionTrabajoDB.inicio_turno < hasta_dt)
+        q = _aplicar_horas(q, PalletDB.fecha_hora, hora_desde, hora_hasta)
         filas = q.group_by(etiqueta).order_by(suma.desc()).all()
 
         items = []
