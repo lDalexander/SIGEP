@@ -27,10 +27,16 @@ const DESCARGAS = [
  *   onCargar               : () => void   — aplica fechas y horas a todo el dashboard
  *   onLimpiarHoras         : () => void
  *   onDescargar            : (ruta) => void
+ *   descargas              : muestra los tres botones de Excel (la vista de paros no
+ *                            tiene reporte que descargar, así que los oculta)
+ *   avisoFranja            : reemplaza el texto de advertencia sobre el alcance de la
+ *                            franja; cada vista sabe a qué afecta la suya
  */
 export default function FiltroFecha({
   desde, hasta, horaDesde = '', horaHasta = '',
   onChange, onCargar, onLimpiarHoras, onDescargar,
+  descargas = true,
+  avisoFranja,
 }) {
   const hayFranja = Boolean(horaDesde || horaHasta);
 
@@ -61,14 +67,18 @@ export default function FiltroFecha({
           Cargar
         </Button>
 
-        <span aria-hidden="true" className="text-sig-dim px-1">·</span>
+        {descargas && (
+          <>
+            <span aria-hidden="true" className="text-sig-dim px-1">·</span>
 
-        {DESCARGAS.map((d) => (
-          <Button key={d.clave} onClick={() => onDescargar(d.ruta)}>
-            <Download size={13} />
-            {d.etiqueta}
-          </Button>
-        ))}
+            {DESCARGAS.map((d) => (
+              <Button key={d.clave} onClick={() => onDescargar(d.ruta)}>
+                <Download size={13} />
+                {d.etiqueta}
+              </Button>
+            ))}
+          </>
+        )}
       </div>
 
       {/* Fila 2 — franja de horas. Se aplica con el mismo botón «Cargar». */}
@@ -104,7 +114,8 @@ export default function FiltroFecha({
           se dice explícitamente en vez de dejar que se deduzca de las cifras. */}
       {hayFranja && (
         <Label caja="normal" className="text-sig-dim text-right">
-          la franja afecta a producción; los Excel y las tarjetas de checklists e insumos salen con el día completo
+          {avisoFranja ||
+            'la franja afecta a producción; los Excel y las tarjetas de checklists e insumos salen con el día completo'}
         </Label>
       )}
     </div>

@@ -14,11 +14,17 @@
  */
 const { createProxyMiddleware } = require('http-proxy-middleware');
 
+/* El backend vivo está en el 8000. `API_TARGET` permite apuntar a otro puerto sin
+   tocar este archivo, que es como se prueba la web contra una instancia paralela del
+   backend antes de recargar el servicio de la planta (ver CLAUDE.md §1):
+     API_TARGET=http://127.0.0.1:8001 npm start */
+const DESTINO = process.env.API_TARGET || 'http://127.0.0.1:8000';
+
 module.exports = function (app) {
   app.use(
     '/api',
     createProxyMiddleware({
-      target: 'http://127.0.0.1:8000',
+      target: DESTINO,
       changeOrigin: true,
       logLevel: 'warn',
       // Sin `ws: true` a propósito: http-proxy-middleware monta el listener de

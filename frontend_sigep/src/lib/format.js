@@ -34,6 +34,64 @@ export function duracion(minutos) {
 }
 
 /**
+ * Duración en SEGUNDOS -> "45s" / "12m 30s" / "1h 50m".
+ * Los paros llegan en segundos con decimales (`duracion_segundos`), y los cortos
+ * —un atasco de 20 s— tienen que poder leerse, así que por debajo de la hora se
+ * muestran los segundos.
+ */
+export function duracionSeg(segundos) {
+  // Mismo cuidado que en `duracion`: Number(null) es 0 y pintaría un paro de «0s».
+  if (segundos === null || segundos === undefined || segundos === '') return '—';
+  const bruto = Number(segundos);
+  if (!Number.isFinite(bruto) || bruto < 0) return '—';
+  const s = Math.round(bruto);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) {
+    const m = Math.floor(s / 60);
+    const resto = s % 60;
+    return resto ? `${m}m ${String(resto).padStart(2, '0')}s` : `${m}m`;
+  }
+  const h = Math.floor(s / 3600);
+  const m = Math.round((s % 3600) / 60);
+  // 1h 60m no existe: el redondeo al alza sube la hora.
+  return m === 60 ? `${h + 1}h 00m` : `${h}h ${String(m).padStart(2, '0')}m`;
+}
+
+/**
+ * "2026-08-04 19:22:39" -> "19:22" (o "19:22:39" con segundos).
+ * Se corta el texto en lugar de parsear a Date: el backend ya manda la hora local
+ * de la planta, y convertirla a Date y volver a formatearla solo añade riesgo de
+ * desplazarla una zona horaria.
+ */
+export function horaDeTexto(ts, conSegundos = false) {
+  const m = /(\d{2}):(\d{2})(?::(\d{2}))?/.exec(String(ts ?? ''));
+  if (!m) return '—';
+  return conSegundos && m[3] ? `${m[1]}:${m[2]}:${m[3]}` : `${m[1]}:${m[2]}`;
+}
+
+/** "2026-08-04 19:22:39" -> "04 ago" (usa el mismo formato que el eje del gráfico). */
+export function fechaDeTexto(ts) {
+  const m = /^(\d{4}-\d{2}-\d{2})/.exec(String(ts ?? '').trim());
+  return m ? fechaEje(m[1]) : '—';
+}
+
+/**
+ * "2026-08-04 19:22:39" -> Date en hora local, o null.
+ * Necesario para el cronómetro de los paros en curso; se construye componente a
+ * componente porque `new Date('2026-08-04 19:22:39')` no está garantizado por el
+ * estándar y en algunos motores se lee como UTC.
+ */
+export function fechaHoraDesdeTexto(ts) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/.exec(String(ts ?? '').trim());
+  if (!m) return null;
+  const d = new Date(
+    Number(m[1]), Number(m[2]) - 1, Number(m[3]),
+    Number(m[4]), Number(m[5]), Number(m[6] || 0)
+  );
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
  * Antigüedad de un contacto, en la escala corta de los chips de tablets:
  * "45s" / "31m" / "68m" / "5h" / "21d".
  */

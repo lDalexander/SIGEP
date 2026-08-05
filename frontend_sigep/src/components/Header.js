@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Package, Settings } from 'lucide-react';
+import { Package, Settings, OctagonPause } from 'lucide-react';
 import { Label, Button, Dot, Logo } from './ui';
 import { hora, fechaCorta } from '../lib/format';
 
@@ -7,13 +7,14 @@ import { hora, fechaCorta } from '../lib/format';
  * Cabecera del centro de control.
  *   izquierda : logo + SIGEP / CENTRO DE CONTROL
  *   centro    : reloj en vivo (HORA PLANTA · GYE) y fecha, separados por filetes
- *   derecha   : ● EN VIVO, Insumos, ⚙ Admin
+ *   derecha   : ● EN VIVO, Paros, Insumos, ⚙ Admin
  *
  * Props:
  *   enVivo    : true si el último refresco fue correcto
- *   onNavegar : (vista) => void  — 'insumos' | 'admin'
+ *   onNavegar : (vista) => void  — 'dashboard' | 'paros' | 'insumos' | 'admin'
+ *   vista     : vista activa, para resaltar su botón
  */
-export default function Header({ enVivo = true, onNavegar = () => {} }) {
+export default function Header({ enVivo = true, onNavegar = () => {}, vista = 'dashboard' }) {
   const [ahora, setAhora] = useState(() => new Date());
 
   // El reloj de la cabecera corre por su cuenta, sin depender del polling de datos.
@@ -64,7 +65,20 @@ export default function Header({ enVivo = true, onNavegar = () => {} }) {
 
           <span aria-hidden="true" className="h-9 w-px bg-sig-line" />
 
-          <Button onClick={() => onNavegar('insumos')}>
+          {/* El botón de la vista activa se marca con el borde ámbar, no con el
+              primario sólido: en la cabecera destacaría más que el reloj. */}
+          <Button
+            onClick={() => onNavegar('paros')}
+            className={vista === 'paros' ? 'border-sig-amber/60 text-sig-amber' : ''}
+          >
+            <OctagonPause size={14} className="text-sig-amber" />
+            Paros
+          </Button>
+
+          <Button
+            onClick={() => onNavegar('insumos')}
+            className={vista === 'insumos' ? 'border-sig-amber/60 text-sig-amber' : ''}
+          >
             <Package size={14} className="text-sig-amber" />
             Insumos
           </Button>

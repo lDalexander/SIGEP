@@ -4,12 +4,18 @@ import { Label } from './ui';
 import { turnoActual } from '../lib/format';
 
 /**
- * Barra de título del dashboard: sobre-título mono, H1, el turno en curso a la
- * derecha, y debajo la fila de rango de fechas y descargas.
+ * Barra de título: sobre-título mono, H1, el turno en curso a la derecha, y debajo la
+ * fila de rango de fechas y descargas.
+ *
+ * La comparten el dashboard y la vista de paros, que usan el mismo rango global; de
+ * ahí que el título y las descargas sean props (en paros no hay Excel que ofrecer).
  */
 export default function BarraTitulo({
   desde, hasta, horaDesde, horaHasta,
   onChange, onCargar, onLimpiarHoras, onDescargar,
+  titulo = 'Producción en tiempo real',
+  descargas = true,
+  avisoFranja,
 }) {
   const turno = turnoActual();
 
@@ -18,7 +24,7 @@ export default function BarraTitulo({
       <div>
         <Label className="block mb-2">Detcuador · Planta de llenado</Label>
         <h1 className="text-[34px] leading-none font-extrabold tracking-tight text-white">
-          Producción en tiempo real
+          {titulo}
         </h1>
       </div>
 
@@ -41,6 +47,8 @@ export default function BarraTitulo({
             onCargar={onCargar}
             onLimpiarHoras={onLimpiarHoras}
             onDescargar={onDescargar}
+            descargas={descargas}
+            avisoFranja={avisoFranja}
           />
         </div>
       </div>

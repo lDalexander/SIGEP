@@ -47,6 +47,55 @@ const RESPUESTAS = {
     rango: { desde: '2026-07-30', hasta: '2026-07-30' },
     kpis: { total_pedidos: 0 }, pedidos: [], entregas: [],
   },
+  '/api/dashboard/comentarios_turno': [
+    { id: 12, sesion_id: 368, maquina: 'Máquina 7', operador: 'CRISTHIAN CEDEÑO',
+      texto: 'Problemas con el sello del vertical', creado_en: '2026-07-29 20:58:08',
+      fecha: '2026-07-29', hora: '20:58:08' },
+  ],
+  '/api/dashboard/paros': {
+    kpis: {
+      total_paros: 3, en_curso: 1, sin_cierre: 1, segundos_total: 55800.0,
+      segundos_promedio: 18600.0, maquinas_paradas: 1, maquinas_produciendo: 1,
+    },
+    maquinas: [
+      { maquina: 'Máquina 7', tipo: 'SOLIDO', estado: 'PARO', sesion_id: 420,
+        operador: 'ANTHONY MERCADO', inicio_turno: '2026-08-05 07:20:59',
+        paro_actual: { id: 108, categoria: 'MANTENIMIENTO', comentario: 'cambio de teflón',
+          motivo: '[Mantenimiento] - cambio de teflón', inicio: '2026-08-05 10:00:00',
+          duracion_segundos: 600 },
+        paros: 2, segundos: 7200 },
+      { maquina: 'Máquina 9', tipo: 'SOLIDO', estado: 'PRODUCIENDO', sesion_id: 421,
+        operador: 'ROSENDO VALENZUELA', inicio_turno: '2026-08-05 07:05:00',
+        paro_actual: null, paros: 0, segundos: 0 },
+      { maquina: 'Máquina 16', tipo: 'SOLIDO', estado: 'SIN TURNO', sesion_id: null,
+        operador: '—', inicio_turno: null, paro_actual: null, paros: 1, segundos: 48654 },
+    ],
+    paros: [
+      { id: 108, sesion_id: 420, maquina: 'Máquina 7', operador: 'ANTHONY MERCADO',
+        producto: 'ULTREX · 1 KG · Floral', categoria: 'MANTENIMIENTO',
+        comentario: 'cambio de teflón', motivo: '[Mantenimiento] - cambio de teflón',
+        inicio: '2026-08-05 10:00:00', fin: null, fin_estimado: null, estado: 'EN CURSO',
+        en_curso: true, duracion_segundos: 600, duracion_estimada: false,
+        inicio_turno: '2026-08-05 07:20:59', fin_turno: null },
+      { id: 107, sesion_id: 419, maquina: 'Máquina 7', operador: 'PEDRO SARABIA',
+        producto: 'TORBELLINO · 1 KG · Floral', categoria: 'ALMUERZO', comentario: null,
+        motivo: 'ALMUERZO', inicio: '2026-08-05 12:00:00', fin: '2026-08-05 12:15:00',
+        fin_estimado: null, estado: 'CERRADO', en_curso: false, duracion_segundos: 900,
+        duracion_estimada: false, inicio_turno: '2026-08-05 07:20:59',
+        fin_turno: '2026-08-05 16:00:00' },
+      { id: 105, sesion_id: 416, maquina: 'Máquina 16', operador: 'ROLANDO MORAN',
+        producto: 'ULTREX · 1 KG · Floral', categoria: 'BODEGA', comentario: 'producto',
+        motivo: '[Bodega] - producto', inicio: '2026-08-04 19:22:39', fin: null,
+        fin_estimado: '2026-08-05 08:53:33', estado: 'SIN CIERRE', en_curso: false,
+        duracion_segundos: 48654, duracion_estimada: true,
+        inicio_turno: '2026-08-04 19:22:28', fin_turno: '2026-08-05 08:53:33' },
+    ],
+    por_categoria: [
+      { categoria: 'BODEGA', paros: 1, segundos: 48654 },
+      { categoria: 'ALMUERZO', paros: 1, segundos: 900 },
+      { categoria: 'MANTENIMIENTO', paros: 1, segundos: 600 },
+    ],
+  },
 };
 
 /* Los ítems llegan de la BD en caja mixta; la UI los pone en mayúsculas por CSS. */
@@ -69,6 +118,11 @@ const CHECKLIST_RECIENTES = [
 ];
 
 beforeEach(() => {
+  /* jsdom conserva la URL entre tests del mismo archivo, y la vista se decide por la
+     ruta: sin este reset, todo lo que corre después de un test que entra en /paros
+     arrancaría ya dentro de esa vista. */
+  window.history.pushState({}, '', '/');
+
   axios.get.mockImplementation((url, config) => {
     if (url.startsWith('/api/mantenimiento/checklist')) {
       // `limit` -> tarjetas recientes; `desde`/`hasta` -> tabla de detalle.
@@ -323,4 +377,128 @@ test('el rango de fechas de la cabecera arrastra a las estadísticas', async () 
 
   await screen.findAllByText(/2026-07-01 → 2026-07-31/);
   expect(paramsDe('estadisticas')).toMatchObject({ desde: '2026-07-01', hasta: '2026-07-31' });
+});
+
+/* ── Comentarios de turno ─────────────────────────────────────────────────
+   Las tablets los envían desde hace tiempo pero no había forma de leerlos. */
+
+test('el dashboard muestra los comentarios de turno de los operarios', async () => {
+  render(<App />);
+
+  expect(await screen.findByText('Problemas con el sello del vertical')).toBeInTheDocument();
+  expect(screen.getByText('29 jul · 20:58')).toBeInTheDocument();
+  expect(screen.getByText('CRISTHIAN CEDEÑO')).toBeInTheDocument();
+  // Son los últimos que han llegado, no los del rango: la tarjeta no manda fechas.
+  const llamada = axios.get.mock.calls.find(([url]) =>
+    url.startsWith('/api/dashboard/comentarios_turno'));
+  expect(llamada[1].params).not.toHaveProperty('desde');
+});
+
+/* ── Vista de paros (/paros) ──────────────────────────────────────────────
+   Un solo endpoint la alimenta. El estado de las máquinas es de AHORA y los
+   acumulados son del rango; los paros sin cerrar no se cuentan como en curso. */
+
+/** Entra en la vista de paros desde el dashboard y espera a que pinte. */
+async function irAParos() {
+  render(<App />);
+  await screen.findByText('2.272');
+  fireEvent.click(screen.getByRole('button', { name: /^paros$/i }));
+  expect(await screen.findByRole('heading', { name: /monitoreo de paros/i })).toBeInTheDocument();
+}
+
+test('la vista de paros resume las líneas detenidas y el tiempo perdido', async () => {
+  await irAParos();
+
+  // KPI en vivo: 1 máquina parada (en singular), 1 produciendo.
+  expect(await screen.findByText('línea detenida')).toBeInTheDocument();
+  expect(screen.getByText(/1 produciendo · en vivo/)).toBeInTheDocument();
+  // 55800 s -> "15h 30m"; promedio 18600 s -> "5h 10m".
+  expect(screen.getByText('15h 30m')).toBeInTheDocument();
+  expect(screen.getByText('5h 10m')).toBeInTheDocument();
+  // El recuento del rango distingue lo que sigue abierto de lo que quedó sin cerrar.
+  expect(screen.getByText(/1 en curso · 1 sin cierre/)).toBeInTheDocument();
+});
+
+test('el semáforo de máquinas separa PARO, PRODUCIENDO y SIN TURNO', async () => {
+  await irAParos();
+
+  expect(await screen.findByText('PARO')).toBeInTheDocument();
+  expect(screen.getByText('PRODUCIENDO')).toBeInTheDocument();
+  expect(screen.getByText('SIN TURNO')).toBeInTheDocument();
+
+  // La máquina parada muestra la categoría del paro y su comentario.
+  expect(screen.getAllByText('MANTENIMIENTO').length).toBeGreaterThan(0);
+  expect(screen.getAllByText('cambio de teflón').length).toBeGreaterThan(0);
+  expect(screen.getByText('desde 10:00')).toBeInTheDocument();
+  // La que no tiene turno lo dice en vez de fingir que produce.
+  expect(screen.getByText('sin turno abierto')).toBeInTheDocument();
+});
+
+test('cada paro se puede desplegar para ver el detalle y el motivo original', async () => {
+  await irAParos();
+
+  // Cada fila es un botón que se nombra por máquina, categoría, hora y estado.
+  const fila = await screen.findByRole('button', { name: /Máquina 7 · ALMUERZO · 12:00 · CERRADO/ });
+  // El paro de almuerzo no trae comentario: se muestra "—", no un texto inventado.
+  expect(within(fila).getByText('—')).toBeInTheDocument();
+  expect(within(fila).getByText('15m')).toBeInTheDocument();     // 900 s
+  expect(within(fila).getByText('12:15')).toBeInTheDocument();   // hora de fin
+
+  fireEvent.click(fila);
+
+  // Al desplegar aparece el motivo tal como lo mandó la tablet y la sesión.
+  expect(await screen.findByText('Motivo tal como lo envió la tablet')).toBeInTheDocument();
+  expect(screen.getByText('ALMUERZO', { selector: 'dd' })).toBeInTheDocument();
+  expect(screen.getByText('#419')).toBeInTheDocument();
+});
+
+test('un paro sin cerrar no se presenta como en curso y avisa de la estimación', async () => {
+  await irAParos();
+
+  const fila = await screen.findByRole('button', { name: /Máquina 16 · BODEGA · 19:22 · SIN CIERRE/ });
+  expect(within(fila).getByText('SIN CIERRE')).toBeInTheDocument();
+  // 48654 s -> "13h 31m", y se rotula como estimada, no como tiempo medido.
+  expect(within(fila).getByText('13h 31m')).toBeInTheDocument();
+  expect(within(fila).getByText('estimada')).toBeInTheDocument();
+
+  fireEvent.click(fila);
+  expect(await screen.findByText(/no cerró este paro/i)).toBeInTheDocument();
+  expect(screen.getByText(/hasta el cierre del turno · 08:53:33/)).toBeInTheDocument();
+});
+
+test('el ranking por categoría ordena por tiempo parado, no por número de paros', async () => {
+  await irAParos();
+
+  const tarjeta = await screen.findByRole('region', { name: 'Paros por categoría' });
+  const categorias = within(tarjeta).getAllByText(/^(BODEGA|ALMUERZO|MANTENIMIENTO)$/)
+    .map((el) => el.textContent);
+  expect(categorias).toEqual(['BODEGA', 'ALMUERZO', 'MANTENIMIENTO']);
+  expect(within(tarjeta).getByText(/13h 31m/)).toBeInTheDocument();
+});
+
+test('la vista de paros comparte el rango y la franja de la cabecera', async () => {
+  await irAParos();
+
+  // Sin franja no viajan las horas, igual que en el resto del dashboard.
+  expect(paramsDe('paros')).not.toHaveProperty('hora_desde');
+
+  fireEvent.change(screen.getByLabelText('Hora desde'), { target: { value: '19:00' } });
+  fireEvent.change(screen.getByLabelText('Hora hasta'), { target: { value: '07:00' } });
+  fireEvent.click(screen.getByRole('button', { name: /cargar/i }));
+
+  await screen.findAllByText(/19:00→07:00/);
+  expect(paramsDe('paros')).toMatchObject({ hora_desde: '19:00', hora_hasta: '07:00' });
+
+  // Aquí la advertencia es otra: la franja sí filtra los paros, por su hora de inicio.
+  expect(screen.getByText(/hora de inicio del paro/i)).toBeInTheDocument();
+  // Y no se ofrecen los Excel, que no existen para paros.
+  expect(screen.queryByRole('button', { name: /formularios/i })).not.toBeInTheDocument();
+});
+
+test('la vista de paros es una URL propia y el botón atrás vuelve al dashboard', async () => {
+  await irAParos();
+  expect(window.location.pathname).toBe('/paros');
+
+  window.history.back();
+  await screen.findByRole('heading', { name: /producción en tiempo real/i });
 });

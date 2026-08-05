@@ -12,9 +12,11 @@ import ChecklistMantenimiento from './components/ChecklistMantenimiento';
 import TabletsSyncPanel from './components/TabletsSyncPanel';
 import TopProductionChart from './components/TopProductionChart';
 import SolicitudesInsumos from './components/SolicitudesInsumos';
+import ComentariosTurno from './components/ComentariosTurno';
 import DetalleChecklist from './components/DetalleChecklist';
 import Footer from './components/Footer';
 import AdminApp from './components/admin/AdminApp';
+import ParosView from './components/paros/ParosView';
 import { Card, Label } from './components/ui';
 import { fechaISO } from './lib/format';
 
@@ -24,11 +26,19 @@ import { fechaISO } from './lib/format';
 const API_BASE = '/api';
 const POLL_INTERVAL = 15000;
 
+/* Vista según la URL. Sin react-router: la navegación es estado + History API, así que
+   la traducción ruta -> vista vive en un solo sitio y la usan el arranque y el botón
+   «atrás» del navegador. */
+function vistaDeRuta(ruta = window.location.pathname) {
+  if (ruta.startsWith('/admin')) return 'admin';
+  if (ruta.startsWith('/paros')) return 'paros';
+  if (ruta.startsWith('/insumos')) return 'insumos';
+  return 'dashboard';
+}
+
 function App() {
   /* ── Navegación ─────────────────────────────────────── */
-  const [vista, setVista] = useState(() =>
-    window.location.pathname.startsWith('/admin') ? 'admin' : 'dashboard'
-  );
+  const [vista, setVista] = useState(() => vistaDeRuta());
 
   const navegar = useCallback((destino) => {
     setVista(destino);
@@ -37,8 +47,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const alVolver = () =>
-      setVista(window.location.pathname.startsWith('/admin') ? 'admin' : 'dashboard');
+    const alVolver = () => setVista(vistaDeRuta());
     window.addEventListener('popstate', alVolver);
     return () => window.removeEventListener('popstate', alVolver);
   }, []);
@@ -77,6 +86,10 @@ function App() {
      marcar como caídas las tarjetas que sí recibieron datos. */
   const [errores, setErrores] = useState({});
   const [ultimoRefresco, setUltimoRefresco] = useState(null);
+  /* La vista de paros tiene su propio polling, así que reporta aquí su resultado: si no,
+     el «EN VIVO» de la cabecera y la hora del pie se quedarían congelados con lo último
+     que dijo el dashboard, que es justo lo que no hay que hacer con un indicador global. */
+  const [parosEnLinea, setParosEnLinea] = useState(true);
 
   const timerRef = useRef(null);
 
@@ -160,7 +173,13 @@ function App() {
     window.open(`${API_BASE}/reportes/${ruta}?${qs}`, '_blank', 'noopener');
   };
 
-  const sinFallos = Object.keys(errores).length === 0;
+  /* Cada refresco de la vista de paros actualiza el indicador global y la hora del pie. */
+  const reportarParos = useCallback((enLinea) => {
+    setParosEnLinea(enLinea);
+    if (enLinea) setUltimoRefresco(new Date());
+  }, []);
+
+  const sinFallos = vista === 'paros' ? parosEnLinea : Object.keys(errores).length === 0;
 
   /* Texto del metadato de las tarjetas: «hoy» cuando el rango es el día actual. */
   const esHoy = aplicado.desde === hoy && aplicado.hasta === hoy;
@@ -189,10 +208,42 @@ function App() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      <Header enVivo={sinFallos} onNavegar={navegar} />
+      <Header enVivo={sinFallos} onNavegar={navegar} vista={vista} />
 
       <main className="flex-1 mx-auto w-full max-w-[1400px] px-6">
-        {vista === 'dashboard' ? (
+        {vista === 'paros' && (
+          <>
+            {/* Mismo rango y misma franja que el dashboard: las dos vistas no pueden
+                contradecirse. Sin descargas — no hay Excel de paros (la hoja «Paros»
+                del reporte de producción se descarga desde el dashboard). */}
+            <BarraTitulo
+              desde={rango.desde}
+              hasta={rango.hasta}
+              horaDesde={rango.horaDesde}
+              horaHasta={rango.horaHasta}
+              onChange={cambiarFecha}
+              onCargar={cargarRango}
+              onLimpiarHoras={limpiarHoras}
+              onDescargar={descargar}
+              titulo="Monitoreo de paros"
+              descargas={false}
+              avisoFranja="la franja filtra por la hora de inicio del paro; el estado de las máquinas es siempre el de ahora"
+            />
+
+            <ParosView
+              apiBase={API_BASE}
+              desde={aplicado.desde}
+              hasta={aplicado.hasta}
+              horaDesde={aplicado.horaDesde}
+              horaHasta={aplicado.horaHasta}
+              periodo={periodoConHoras}
+              intervalo={POLL_INTERVAL}
+              onEstado={reportarParos}
+            />
+          </>
+        )}
+
+        {vista === 'dashboard' && (
           <>
             <BarraTitulo
               desde={rango.desde}
@@ -258,6 +309,7 @@ function App() {
                   esHoy={esHoy}
                   intervalo={POLL_INTERVAL}
                 />
+                <ComentariosTurno apiBase={API_BASE} intervalo={POLL_INTERVAL} />
               </div>
             </div>
 
@@ -272,10 +324,12 @@ function App() {
               />
             </div>
           </>
-        ) : (
-          /* La cabecera de las capturas lleva un botón «Insumos», pero no hay
-             ninguna captura de esa vista ni especificación de su contenido. El
-             dashboard ya muestra las solicitudes en su propia tarjeta. */
+        )}
+
+        {/* La cabecera de las capturas lleva un botón «Insumos», pero no hay ninguna
+            captura de esa vista ni especificación de su contenido. El dashboard ya
+            muestra las solicitudes en su propia tarjeta. */}
+        {vista === 'insumos' && (
           <div className="py-10">
             <Card titulo="Insumos">
               <Label caja="normal" className="block py-8 text-center text-sig-dim">

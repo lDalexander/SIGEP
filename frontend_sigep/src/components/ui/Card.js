@@ -20,7 +20,12 @@ export default function Card({
   children,
 }) {
   return (
-    <section className={`sig-card animate-fade-in overflow-hidden ${className}`}>
+    /* El título nombra la región: así cada tarjeta es localizable por su nombre
+       accesible, tanto para un lector de pantalla como para los tests. */
+    <section
+      aria-label={typeof titulo === 'string' ? titulo : undefined}
+      className={`sig-card animate-fade-in overflow-hidden ${className}`}
+    >
       {(titulo || meta) && (
         <header className="flex items-center justify-between gap-3 px-5 pt-4 pb-3">
           {titulo && (
