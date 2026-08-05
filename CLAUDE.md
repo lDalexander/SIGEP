@@ -12,9 +12,15 @@ industriales con sincronización offline-first.
 
 ## 0. Estado actual
 
-**Última sesión: 2026-08-03.** El frontend está reconstruido y **desplegado en producción**
+**Última sesión: 2026-08-05.** El frontend está reconstruido y **desplegado en producción**
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
-capturas de `referencia_ui/`. 75 tests en verde.
+capturas de `referencia_ui/`. 83 tests en verde.
+
+> ⚠️ **Lo de la sesión del 2026-08-05 (vista `/paros` + comentarios de turno) está
+> commiteado y probado, pero NO está en producción todavía.** El servicio del 8000 sigue
+> con el código anterior y el `build` servido por nginx tampoco lleva la vista nueva.
+> Falta, en este orden: recargar el backend (`kill -HUP`, ver §1) y luego `./deploy.sh`.
+> No se hizo en la sesión porque había tres turnos activos en planta.
 
 ### Punto de recuperación
 
@@ -22,17 +28,31 @@ capturas de `referencia_ui/`. 75 tests en verde.
 |---|---|
 | Tag estable | `v1.0-frontend-reconstruido` (en GitHub) |
 | Tag previo al filtro de horas | `v1.1-pre-filtro-horas` (en GitHub) |
-| Build de esa versión | `~/RESPALDO_build_estable_v1.0` |
+| Tag previo a la vista de paros | `v1.2-pre-paros` (en GitHub) |
+| Build de esa versión | `~/respaldos_build_sigep/build_pre-paros_2026-08-05_*` |
+| Build estable v1.0 | `~/RESPALDO_build_estable_v1.0` |
 | Builds rotados | `~/respaldos_build_sigep/` (últimos 10) |
 | BD previa al último `ALTER` | `backups/produccion_detg_pre_tipo_operario_*.sql.gz` |
 
 ```bash
 git checkout v1.0-frontend-reconstruido     # volver al frontend estable
+git checkout v1.2-pre-paros                 # volver a justo antes de la vista de paros
 ```
 
 ### Cambios de backend ya autorizados y aplicados
 
-Tras la reconstrucción se autorizaron **tres** excepciones a la regla de oro, ya en producción:
+Tras la reconstrucción se autorizaron **cuatro** excepciones a la regla de oro:
+
+- **Lectura de paros y de comentarios de turno** (2026-08-05, **en el repo, aún no
+  recargado en producción**). Dos **rutas nuevas** en `routers/dashboard.py`:
+  `GET /dashboard/paros` y `GET /dashboard/comentarios_turno`. Al ser rutas que no
+  existían, ninguna respuesta anterior cambia; se verificó igualmente en el 8001 que 15
+  endpoints (los cinco del dashboard con y sin rango, `agrupar=dia`, franja horaria,
+  `/operadores`, `/maquinas`, `/tablets/estado`, `/mantenimiento/checklist`) responden
+  idéntico byte a byte, así que **las tablets no necesitan actualización**. Motivo: los
+  paros los escriben las tablets desde siempre (`POST /api/paro/iniciar|finalizar`) pero
+  no había forma de leerlos salvo abriendo la hoja «Paros» del Excel de producción; los
+  comentarios de turno se guardaban sin que nada los leyera. Semántica en §3.
 
 - **Franja horaria en el dashboard** (2026-08-03). Los cinco endpoints con rango del
   dashboard (`kpis`, `produccion_hora`, `estado_operativo`, `top_produccion`,
@@ -57,19 +77,26 @@ Tras la reconstrucción se autorizaron **tres** excepciones a la regla de oro, y
 
 ### Pendiente
 
-1. **App Android** — para que el selector «Seleccione Operador» filtre de verdad, la app
+1. **Poner en producción la vista de paros** — backend primero (`kill -HUP`, §1), después
+   `./deploy.sh`. Ver el aviso del principio de esta sección.
+2. **App Android** — para que el selector «Seleccione Operador» filtre de verdad, la app
    debe pasar `?tipo=` con el tipo de su máquina. Instrucciones completas en
    `api_produccion/CAMBIO_ANDROID_tipo_operario.md`. **No corre prisa**: sin ese cambio
    todo sigue funcionando como antes.
-2. **Aún no hay máquinas de línea líquida** dadas de alta; las 6 registradas son `SOLIDO`.
-   Hasta que exista una, la clasificación de operarios no tiene efecto práctico.
-3. **Logo provisional** — `public/logo192.png` es el de Create React App. El de la cabecera
+3. **Paros sin cerrar** — el garbage collector de `tasks.py` cierra los turnos colgados a
+   las 13 h pero **no cierra los paros abiertos de esa sesión**, así que quedan con
+   `fin_paro` NULL para siempre (hay 1 de 78 así: el paro 105). La vista de paros los
+   distingue con el estado «SIN CIERRE» en vez de contarlos como paros en curso, pero el
+   arreglo de fondo está en el backend y **no se ha tocado** (haría falta autorización).
+4. **Máquinas de línea líquida** — ya hay dos dadas de alta (`Máquina 3` y `Maquina 12`),
+   sin producción registrada todavía. Total: 8 máquinas activas, una de ellas `PRUEBA`.
+5. **Logo provisional** — `public/logo192.png` es el de Create React App. El de la cabecera
    es un SVG hecho a partir de las capturas (`components/ui/Logo.js`); si aparece el
    original, se sustituye por un `<img>`.
-4. **Botón «Insumos» de la cabecera** — aparece en las capturas pero no hay ninguna captura
+6. **Botón «Insumos» de la cabecera** — aparece en las capturas pero no hay ninguna captura
    ni especificación de esa vista. Hoy muestra un aviso de «vista sin especificación de
    referencia». Falta decidir qué debe contener, o quitar el botón.
-5. **Filtrado multi-selección perdido** — la versión anterior tenía segmentadores por
+7. **Filtrado multi-selección perdido** — la versión anterior tenía segmentadores por
    máquina/operador/marca/presentación/fragancia. No aparecen en ninguna captura, así que
    se retiraron, pero el backend los sigue soportando en todos los endpoints del dashboard
    (`?maquina=A&maquina=B…`). Recuperables del commit `d5c0839`.
@@ -96,7 +123,8 @@ Convive un apache2 en el puerto 80. **No reconfigurar nginx, systemd ni apache.*
 
 ```bash
 # Desarrollo
-cd frontend_sigep && npm start          # dev server en el 3001
+cd frontend_sigep && npm start          # dev server en el 3001, /api -> 8000
+API_TARGET=http://127.0.0.1:8001 npm start   # ...contra una instancia paralela
 
 # Desplegar a producción — usar SIEMPRE el script, nunca `npm run build` a mano
 ./deploy.sh --revisar                   # comprueba sin tocar nada
@@ -192,8 +220,10 @@ Notas de configuración:
   carga el plugin v3. Es una dependencia huérfana; no romper nada tocándola.
 - El `@import` de Google Fonts en `index.css` está **después** de las directivas
   `@tailwind`. Funciona (PostCSS lo reubica) pero lo correcto es ponerlo primero.
-- **No hay `react-router`.** La navegación entre Dashboard y Admin se hace por estado
-  en `App.js` (`activeView`) + History API.
+- **No hay `react-router`.** La navegación entre Dashboard, Paros y Admin se hace por
+  estado en `App.js` (`vista`) + History API. La traducción ruta → vista está en
+  `vistaDeRuta()`, y la usan tanto el arranque como el botón «atrás». Rutas: `/`,
+  `/paros`, `/insumos`, `/admin`.
 
 ### Estructura
 
@@ -223,8 +253,16 @@ frontend_sigep/
     │   ├── TabletsSyncPanel.js  # chips de las 21 tablets
     │   ├── TopProductionChart.js # top marcas
     │   ├── SolicitudesInsumos.js # pedidos de insumo del rango
+    │   ├── ComentariosTurno.js  # comentarios libres de los operarios (8 recientes)
     │   ├── DetalleChecklist.js  # tabla a ancho completo, una columna por ítem
     │   ├── Footer.js
+    │   ├── paros/               # vista /paros
+    │   │   ├── ParosView.js     # un solo fetch alimenta la vista entera
+    │   │   ├── ParosKPIs.js     # paradas ahora · paros del rango · tiempo · promedio
+    │   │   ├── EstadoMaquinas.js # semáforo PARO / PRODUCIENDO / SIN TURNO
+    │   │   ├── TablaParos.js    # una fila por paro, desplegable con el detalle
+    │   │   ├── ParosPorCategoria.js # ranking por tiempo parado
+    │   │   └── Cronometro.js    # duración que sigue corriendo en los paros abiertos
     │   └── admin/               # vista /admin
     │       ├── AdminApp.js      # login, cabecera propia y las 5 pestañas
     │       ├── AdminLogin.js
@@ -252,7 +290,9 @@ por `lib/format.js`. Colores nuevos van a `tailwind.config.js`, nunca sueltos en
 | `TabletsSyncPanel` | `/tablets/estado`, `/tablets/sincronizar/{id}` (fetch propio) |
 | `TopProductionChart` | `/dashboard/top_produccion` |
 | `SolicitudesInsumos` | `/insumos/dashboard?desde&hasta` (fetch propio) |
+| `ComentariosTurno` | `/dashboard/comentarios_turno?limit=8` (fetch propio) |
 | `DetalleChecklist` | `/mantenimiento/checklist?desde&hasta` (fetch propio) |
+| `ParosView` (`/paros`) | `/dashboard/paros?desde&hasta&hora_desde&hora_hasta` (fetch propio; alimenta las cuatro tarjetas de la vista) |
 | `FiltroFecha` | `/reportes/excel`, `/reportes/formularios_excel`, `/reportes/insumos_excel` |
 
 `App.js` refresca los cinco endpoints del dashboard cada 15 s con `Promise.allSettled`:
@@ -311,7 +351,12 @@ npx eslint --ext .js src/
   casos de fallo (endpoint aislado y API entera caída), la agrupación hora/día, y la
   franja horaria: que sin ella **no** viajen `hora_desde`/`hora_hasta`, que `19:00→07:00`
   llegue a los cinco endpoints, que «Todo el día» la quite sin pulsar «Cargar», y que
-  Estadísticas mande `desde`/`hasta` en vez de `rango`.
+  Estadísticas mande `desde`/`hasta` en vez de `rango`. De la vista de paros: los tres
+  estados del semáforo, el desplegable con el motivo original, que un paro **sin cerrar
+  no se presenta como en curso** y avisa de que la duración es estimada, el orden del
+  ranking por tiempo, que la franja viaja a `/dashboard/paros` y que `/paros` es una URL
+  propia con botón «atrás». `beforeEach` **resetea la ruta**: jsdom la conserva entre
+  tests del mismo archivo y la vista se decide por el pathname.
 - `src/components/admin/AdminApp.test.js` — las cinco pestañas, incluido que
   «Eliminar» haga `PUT {activo:false}` y nunca `DELETE`.
 
@@ -351,6 +396,8 @@ así se evita CORS. El `App.js` heredado apunta a `http://150.36.200.252:8000/ap
 | GET | `/dashboard/top_produccion` | mismos filtros | `[{name, value}]` desc |
 | GET | `/dashboard/opciones_filtros` | `desde`,`hasta` | `{maquina[], operador[], marca[], presentacion[], fragancia[]}` |
 | GET | `/dashboard/estadisticas` | `dim`, `rango`, `desde`, `hasta`, `hora_desde`, `hora_hasta` | `{dim, rango, total_pacas, total_sesiones, items:[{etiqueta,pacas,sesiones,pct}]}` |
+| GET | `/dashboard/paros` | `desde`,`hasta`,`hora_desde`,`hora_hasta`,`maquina[]`,`operador[]` | `{kpis, maquinas[], paros[], por_categoria[]}` — ver «Paros» más abajo |
+| GET | `/dashboard/comentarios_turno` | `desde`,`hasta` **o** `limit` (def. 30, máx. 200) | `[{id,sesion_id,maquina,operador,texto,creado_en,fecha,hora}]` desc. Sin `desde`/`hasta` devuelve los últimos `limit` sin importar la fecha |
 | GET | `/mantenimiento/checklist` | `limit` (def. 30) **o** `desde`,`hasta` | `[{id,maquina,operador,momento,codigo_turno,fecha_turno,fecha,hora,supervisor,comentarios,items:[{etiqueta,marcado}],total_items,items_ok,creado_en}]` |
 | GET | `/tablets/estado` | — | `[{device_id,nombre,maquina,pendientes,ultimo_heartbeat,ultima_sincronizacion,en_linea,segundos_desde_heartbeat}]` |
 | POST | `/tablets/sincronizar/{device_id}` | — | `{device_id, enviada, motivo}` |
@@ -395,6 +442,51 @@ Opcionales en los cinco endpoints con rango. Formato `HH:MM` (también valen `HH
     comportarse como `join`.
 - **Los endpoints de `/reportes/` NO la aceptan.** Los Excel salen con el día completo;
   la UI lo advierte en el propio filtro para que no se dé por hecho lo contrario.
+- En `/dashboard/paros` filtra por `paros_maquina.inicio_paro`: un paro que empieza
+  dentro de la franja cuenta entero aunque termine fuera (mismo criterio que
+  `estado_operativo` con `inicio_turno`).
+
+### Paros (`GET /dashboard/paros`)
+
+Lo escriben las tablets con `POST /api/paro/iniciar` (`{sesion_id, motivo}`) y
+`POST /api/paro/finalizar`; **este endpoint solo lee** la tabla `paros_maquina`.
+El rango filtra por `inicio_paro`.
+
+Respuesta: `{kpis, maquinas, paros, por_categoria}`.
+
+- **`paros[]`** — del más reciente al más antiguo:
+  `{id, sesion_id, maquina, operador, producto, categoria, comentario, motivo, inicio,
+  fin, fin_estimado, estado, en_curso, duracion_segundos, duracion_estimada,
+  inicio_turno, fin_turno}`.
+- **`maquinas[]`** — semáforo, con **criterio mixto deliberado**: `estado`, `operador`,
+  `inicio_turno` y `paro_actual` son **de ahora** (la máquina está parada o no en este
+  instante, sea cual sea el rango), mientras `paros` y `segundos` son **del rango**.
+  Incluye las máquinas activas del catálogo más cualquiera que aparezca en los paros
+  del rango aunque esté dada de baja.
+- **`kpis`** — `{total_paros, en_curso, sin_cierre, segundos_total, segundos_promedio,
+  maquinas_paradas, maquinas_produciendo}`. `segundos_promedio` es `null` si ningún
+  paro del rango tiene duración conocida (no `0`, que sería un dato falso).
+- **`por_categoria[]`** — `{categoria, paros, segundos}` ordenado por tiempo parado.
+
+Dos reglas que **no son evidentes** y que se decidieron leyendo los datos reales:
+
+1. **El `motivo` trae la categoría dentro.** La tablet lo manda como
+   `"[Categoría] - comentario libre"` (`"[Mantenimiento] - cambio de teflón tubo
+   formador"`), así que `_desglosar_motivo()` lo parte en `categoria` (en mayúsculas) y
+   `comentario`. Cuando no hay corchetes —`"ALMUERZO"`, que la app envía tal cual— el
+   motivo entero **es** la categoría y `comentario` va `null`, no una cadena vacía ni
+   texto inventado. El `motivo` original se devuelve siempre íntegro.
+2. **`fin_paro IS NULL` no significa «parada ahora».** El `estado` se calcula cruzando
+   el paro con su sesión:
+   - `CERRADO` — tiene `fin_paro`; la duración es la registrada.
+   - `EN CURSO` — sin `fin_paro` y **con el turno abierto**: la máquina está parada
+     ahora y la duración corre contra el reloj.
+   - `SIN CIERRE` — sin `fin_paro` pero **con el turno ya cerrado**. Pasa de verdad: el
+     garbage collector de `tasks.py` cierra los turnos colgados a las 13 h sin cerrar
+     sus paros. La duración se **acota al fin del turno** y se marca con
+     `duracion_estimada: true` y `fin_estimado`, en vez de dejarla crecer sin fin (si no,
+     el paro 105 aparecería como un paro «en curso» de días). La UI lo dice explícitamente
+     en el desplegable de esa fila.
 
 ### Administración (requieren cabecera `X-Admin-Token`)
 
@@ -473,8 +565,30 @@ heartbeat los recupera como respaldo. **No cambiar el transporte ni el formato.*
 | `Tablets · sincronización · 0/21` | `tablets/estado[]`; `en_linea` para el punto, `segundos_desde_heartbeat` para `31m`/`21d` |
 | `Top marcas · hoy` | `top_produccion[].name` / `.value` |
 | `Solicitudes de insumos · últimas 24h` | `insumos/dashboard.pedidos[]` |
+| `Comentarios de turno · 8 recientes` | `dashboard/comentarios_turno?limit=8`. Como la tarjeta de checklists, **no** va atada al rango: son esporádicos (uno por turno como mucho) y con el rango puesto en hoy quedaría vacía casi siempre |
 | `Detalle de checklist de mantenimiento` | `mantenimiento/checklist?desde=&hasta=` — mismo criterio y orden que el Excel de formularios |
 | Footer `Actualizado 12:22:11` | Cliente: hora del último refresco |
+
+### Monitoreo de paros (`/paros`)
+
+Subpágina nueva (2026-08-05), sin captura de referencia: se diseñó sobre el mismo
+sistema visual del dashboard. Se entra por el botón `Paros` de la cabecera y tiene URL
+propia. **Comparte el rango y la franja de la cabecera con el dashboard** para que las
+dos vistas no puedan contradecirse; el botón «Cargar» es el mismo.
+
+| Elemento | Origen |
+|---|---|
+| KPI `MÁQUINAS PARADAS AHORA` | `paros.kpis.maquinas_paradas` / `maquinas_produciendo`. Es **en vivo**, no del rango |
+| KPI `PAROS REGISTRADOS` | `kpis.total_paros`, con `en_curso` y `sin_cierre` en el pie |
+| KPI `TIEMPO TOTAL PARADO` / `DURACIÓN PROMEDIO` | `kpis.segundos_total` / `segundos_promedio` |
+| `Estado de máquinas` | `paros.maquinas[]`. Una tarjeta por máquina; la que está en paro se resalta en ámbar y muestra categoría, comentario y un **cronómetro** |
+| `Paros del rango` | `paros.paros[]`. Fila desplegable: producto, horas exactas, turno, sesión, comentario del operario y el motivo tal como lo mandó la tablet |
+| `Paros por categoría` | `paros.por_categoria[]`. Ordenado por **tiempo parado**, no por número de paros: dos horas de mantenimiento pesan más que cinco atascos de un minuto |
+| Franja horaria | Se aplica a los paros por su **hora de inicio**; el filtro lo advierte. No hay descargas en esta vista (la hoja «Paros» va dentro del Excel de producción, que se descarga desde el dashboard) |
+
+El cronómetro de los paros abiertos cuenta desde `duracion_segundos` **más lo
+transcurrido desde la respuesta**, no restando `inicio` al reloj del navegador: un
+equipo con la hora mal puesta inventaría paros de horas o duraciones negativas.
 
 ### Administración (`/admin`)
 
@@ -566,5 +680,12 @@ números grandes en sans-serif bold.
 - Contraseñas de administrador en **texto plano** en la tabla `administradores`
   (`auth.py` compara con `==`; hay un `NOTA DE SEGURIDAD` en el código).
 - Tokens de sesión admin en memoria: se pierden al reiniciar el servicio.
+- El garbage collector de turnos (`tasks.py`) cierra las sesiones colgadas a las 13 h
+  pero **no cierra los paros abiertos de esas sesiones**, que quedan con `fin_paro` NULL
+  a perpetuidad. La vista de paros lo compensa en lectura («SIN CIERRE»), pero el
+  registro sigue incompleto.
+- La instancia paralela de pruebas (`uvicorn` en el 8001) **también arranca el garbage
+  collector** y escribe en la misma BD. No es peligroso —hace exactamente lo que el
+  servicio vivo ya hace cada hora— pero conviene saberlo antes de levantarla.
 - El `src/` del frontend no estaba versionado al día: solo 5 de los 10 componentes
   existían en git antes del checkpoint.
