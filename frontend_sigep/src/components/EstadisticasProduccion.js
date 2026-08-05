@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Card, Tabs, ProgressBar, Label, Estado } from './ui';
+import { Card, Tabs, ProgressBar, Label, Badge, Estado } from './ui';
 import { num, pct, plural } from '../lib/format';
 import useApi from '../lib/useApi';
 
@@ -24,9 +24,14 @@ const DIMENSIONES = [
  * Ojo con el criterio del endpoint: el rango de fechas filtra por la hora de inicio de
  * la sesión, mientras la franja horaria filtra por la hora del pallet. Con franja
  * activa, quien no produjo nada dentro de ella desaparece del ranking.
+ *
+ * `sinSegmentar` avisa de que hay segmentadores activos en el dashboard que **esta**
+ * tarjeta no está aplicando: `/dashboard/estadisticas` es el único de los endpoints
+ * con rango que no acepta `maquina`/`operador`/`marca`/`presentacion`/`fragancia`, y un
+ * ranking que ignora en silencio el filtro puesto arriba se leería como si lo aplicara.
  */
 export default function EstadisticasProduccion({
-  apiBase, desde, hasta, horaDesde, horaHasta, periodo, intervalo,
+  apiBase, desde, hasta, horaDesde, horaHasta, periodo, intervalo, sinSegmentar = false,
 }) {
   const [dim, setDim] = useState('maquina');
 
@@ -54,6 +59,9 @@ export default function EstadisticasProduccion({
         <div className="flex flex-wrap items-center gap-3">
           <Tabs items={DIMENSIONES} value={dim} onChange={setDim} />
           <Label caja="normal" className="shrink-0">{periodo}</Label>
+          {sinSegmentar && (
+            <Badge tono="amber">sin segmentar</Badge>
+          )}
         </div>
       }
     >

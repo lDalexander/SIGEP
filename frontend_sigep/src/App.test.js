@@ -1,4 +1,4 @@
-import { render, screen, within, fireEvent } from '@testing-library/react';
+import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import axios from 'axios';
 import App from './App';
 
@@ -38,6 +38,15 @@ const RESPUESTAS = {
   '/api/dashboard/estadisticas': {
     dim: 'maquina', rango: 'hoy', total_pacas: 1063, total_sesiones: 7,
     items: [{ etiqueta: 'Máquina 7', pacas: 300, sesiones: 1, pct: 28.2 }],
+  },
+  /* Valores que alimentan los segmentadores. Son los distintos del rango, no un
+     catálogo: por eso `Máquina 16` no está aunque exista en la planta. */
+  '/api/dashboard/opciones_filtros': {
+    maquina: ['Máquina 7', 'Máquina 9'],
+    operador: ['ALEX VALENZUELA', 'ANTHONY MERCADO', 'PEDRO SARABIA'],
+    marca: ['TORBELLINO', 'ULTREX'],
+    presentacion: ['1 KG', '15 KG'],
+    fragancia: ['Floral'],
   },
   '/api/insumos/dashboard': {
     rango: { desde: '2026-07-30', hasta: '2026-07-30' },
@@ -528,4 +537,174 @@ test('desde paros se vuelve al dashboard sin recargar, por el botón o por el lo
   fireEvent.click(screen.getByRole('button', { name: 'Ir al dashboard' }));
   expect(await screen.findByRole('heading', { name: /producción en tiempo real/i })).toBeInTheDocument();
   expect(window.location.pathname).toBe('/');
+});
+
+/* ── Segmentadores multi-selección ────────────────────────────────────────
+   Cinco dimensiones combinables que acotan el dashboard sin cambiar de período.
+   Los parámetros son opcionales en la API y viajan como claves repetidas, así que hay
+   que comprobar las dos cosas: que sin selección **no** viajan, y que con selección
+   llegan como lista a los cuatro endpoints que sí los aceptan. */
+
+const ENDPOINTS_SEGMENTABLES = ['kpis', 'produccion_hora', 'estado_operativo', 'top_produccion'];
+
+/** Marca un valor en el desplegable de una dimensión, abriéndolo si hace falta.
+    El panel se queda abierto tras seleccionar —es multi-selección—, así que marcar dos
+    valores de la misma dimensión no debe volver a pulsar el chip: lo cerraría. */
+async function segmentar(dimension, valor) {
+  const chip = screen.getByRole('button', { name: `Segmentar por ${dimension}` });
+  if (chip.getAttribute('aria-expanded') !== 'true') fireEvent.click(chip);
+  fireEvent.click(await screen.findByRole('button', { name: valor, pressed: false }));
+}
+
+test('sin segmentar, ningún endpoint recibe los parámetros de filtro', async () => {
+  render(<App />);
+  await screen.findByText('2.272');
+
+  ENDPOINTS_SEGMENTABLES.forEach((ruta) => {
+    ['maquina', 'operador', 'marca', 'presentacion', 'fragancia'].forEach((dim) => {
+      expect(paramsDe(ruta)).not.toHaveProperty(dim);
+    });
+  });
+  // Sin filtros la barra no ofrece «Limpiar»: no hay nada que limpiar.
+  expect(screen.queryByRole('button', { name: /limpiar/i })).not.toBeInTheDocument();
+});
+
+test('se pueden marcar dos operarios a la vez y llegan como lista', async () => {
+  render(<App />);
+  await screen.findByText('2.272');
+
+  await segmentar('Operario', 'ANTHONY MERCADO');
+  await segmentar('Operario', 'ALEX VALENZUELA');
+
+  await waitFor(() => {
+    ENDPOINTS_SEGMENTABLES.forEach((ruta) => {
+      expect(paramsDe(ruta)).toMatchObject({ operador: ['ANTHONY MERCADO', 'ALEX VALENZUELA'] });
+    });
+  });
+
+  // El contador del chip y el resumen de las tarjetas dicen cuántos hay.
+  expect(screen.getByRole('button', { name: 'Segmentar por Operario' })).toHaveTextContent('2');
+  expect(await screen.findAllByText(/2 operarios/)).not.toHaveLength(0);
+});
+
+test('un solo valor se nombra en el metadato en vez de contarse', async () => {
+  render(<App />);
+  await screen.findByText('2.272');
+
+  await segmentar('Máquina', 'Máquina 7');
+
+  await waitFor(() => expect(paramsDe('kpis')).toMatchObject({ maquina: ['Máquina 7'] }));
+  expect(await screen.findAllByText(/hoy · Máquina 7/)).not.toHaveLength(0);
+});
+
+test('las dimensiones se combinan entre sí en la misma petición', async () => {
+  render(<App />);
+  await screen.findByText('2.272');
+
+  await segmentar('Máquina', 'Máquina 9');
+  await segmentar('Marca', 'ULTREX');
+  await segmentar('Presentación', '15 KG');
+
+  await waitFor(() => {
+    expect(paramsDe('kpis')).toMatchObject({
+      maquina: ['Máquina 9'], marca: ['ULTREX'], presentacion: ['15 KG'],
+      // El período sigue viajando: segmentar acota el rango, no lo sustituye.
+      desde: expect.any(String), hasta: expect.any(String),
+    });
+  });
+});
+
+test('la segmentación se aplica al instante, sin pulsar «Cargar»', async () => {
+  render(<App />);
+  await screen.findByText('2.272');
+
+  const llamadasAntes = axios.get.mock.calls.length;
+  await segmentar('Marca', 'TORBELLINO');
+
+  await waitFor(() => expect(paramsDe('kpis')).toMatchObject({ marca: ['TORBELLINO'] }));
+  expect(axios.get.mock.calls.length).toBeGreaterThan(llamadasAntes);
+});
+
+test('«Todos» vacía una dimensión y su parámetro deja de viajar', async () => {
+  render(<App />);
+  await screen.findByText('2.272');
+
+  await segmentar('Marca', 'ULTREX');
+  await waitFor(() => expect(paramsDe('kpis')).toHaveProperty('marca'));
+
+  // El desplegable sigue abierto: «Todos» es volver a no filtrar por esa dimensión.
+  fireEvent.click(screen.getByRole('button', { name: /^todos$/i }));
+  await waitFor(() => expect(paramsDe('kpis')).not.toHaveProperty('marca'));
+});
+
+test('«Limpiar» quita todas las dimensiones de golpe', async () => {
+  render(<App />);
+  await screen.findByText('2.272');
+
+  await segmentar('Máquina', 'Máquina 7');
+  await segmentar('Fragancia', 'Floral');
+  await waitFor(() => expect(paramsDe('kpis')).toHaveProperty('fragancia'));
+
+  fireEvent.click(screen.getByRole('button', { name: /limpiar \(2\)/i }));
+
+  await waitFor(() => expect(paramsDe('kpis')).not.toHaveProperty('maquina'));
+  expect(paramsDe('kpis')).not.toHaveProperty('fragancia');
+});
+
+test('cada valor activo tiene su chip para quitarlo sin abrir el desplegable', async () => {
+  render(<App />);
+  await screen.findByText('2.272');
+
+  await segmentar('Operario', 'PEDRO SARABIA');
+  await waitFor(() => expect(paramsDe('kpis')).toHaveProperty('operador'));
+
+  fireEvent.click(screen.getByRole('button', { name: 'Quitar Operario PEDRO SARABIA' }));
+  await waitFor(() => expect(paramsDe('kpis')).not.toHaveProperty('operador'));
+});
+
+/* `/dashboard/estadisticas` es el único endpoint con rango que NO acepta los filtros.
+   Un ranking que los ignorara en silencio se leería como si los aplicara. */
+test('las estadísticas avisan de que no están segmentadas y no reciben los filtros', async () => {
+  render(<App />);
+  await screen.findByText('2.272');
+
+  expect(screen.queryByText('sin segmentar')).not.toBeInTheDocument();
+
+  await segmentar('Máquina', 'Máquina 7');
+
+  expect(await screen.findByText('sin segmentar')).toBeInTheDocument();
+  expect(paramsDe('estadisticas')).not.toHaveProperty('maquina');
+});
+
+/* Al cambiar el rango, un valor puede dejar de existir en las opciones nuevas. El
+   filtro se sigue aplicando, así que tiene que seguir visible y quitable: si
+   desapareciera del menú quedaría actuando sin que nada lo delate. */
+test('un valor filtrado que ya no está en el rango sigue visible y se puede quitar', async () => {
+  axios.get.mockImplementation((url, config) => {
+    if (url.startsWith('/api/mantenimiento/checklist')) {
+      return Promise.resolve({ data: CHECKLIST_RECIENTES });
+    }
+    // Con el rango cambiado, `Máquina 7` ya no produjo nada.
+    if (url.startsWith('/api/dashboard/opciones_filtros') && config?.params?.desde === '2026-07-01') {
+      return Promise.resolve({ data: { ...RESPUESTAS['/api/dashboard/opciones_filtros'], maquina: ['Máquina 9'] } });
+    }
+    const clave = Object.keys(RESPUESTAS).find((k) => url.startsWith(k));
+    return clave
+      ? Promise.resolve({ data: RESPUESTAS[clave] })
+      : Promise.reject(new Error(`sin mock para ${url}`));
+  });
+
+  render(<App />);
+  await screen.findByText('2.272');
+
+  await segmentar('Máquina', 'Máquina 7');
+  await waitFor(() => expect(paramsDe('kpis')).toMatchObject({ maquina: ['Máquina 7'] }));
+
+  fireEvent.change(screen.getByLabelText('Fecha desde'), { target: { value: '2026-07-01' } });
+  fireEvent.click(screen.getByRole('button', { name: /cargar/i }));
+
+  // El filtro no se resetea solo, y su chip sigue ahí para poder retirarlo.
+  await waitFor(() => expect(paramsDe('kpis')).toMatchObject({ desde: '2026-07-01', maquina: ['Máquina 7'] }));
+  fireEvent.click(screen.getByRole('button', { name: 'Quitar Máquina Máquina 7' }));
+  await waitFor(() => expect(paramsDe('kpis')).not.toHaveProperty('maquina'));
 });

@@ -3,6 +3,7 @@ import axios from 'axios';
 
 import Header from './components/Header';
 import BarraTitulo from './components/BarraTitulo';
+import Segmentadores from './components/Segmentadores';
 import KPICards from './components/KPICards';
 import ProductionChart from './components/ProductionChart';
 import OperationsTable from './components/OperationsTable';
@@ -18,12 +19,28 @@ import AdminApp from './components/admin/AdminApp';
 import ParosView from './components/paros/ParosView';
 import { Card, Label } from './components/ui';
 import { fechaISO } from './lib/format';
+import useApi from './lib/useApi';
+import {
+  SIN_FILTROS, paramsDeFiltros, serializarParams, contarFiltros, resumenFiltros,
+} from './lib/filtros';
 
 /* Ruta relativa: en producción la resuelve el proxy de nginx (`/api/` ->
    127.0.0.1:8000) y en desarrollo la clave "proxy" de package.json. Así no hay
    CORS ni IPs incrustadas en el bundle. */
 const API_BASE = '/api';
 const POLL_INTERVAL = 15000;
+/* Los valores de los segmentadores solo cambian cuando arranca o acaba un turno, así
+   que no necesitan el ritmo del dashboard; con un minuto un operario nuevo aparece en
+   el menú sin recargar la página y sin repetir cinco DISTINCT cada 15 segundos. */
+const OPCIONES_INTERVAL = 60000;
+
+/* Qué tarjetas segmenta de verdad la barra de filtros. `estadisticas` no acepta los
+   parámetros de segmentación, y `logs`, checklists, insumos y comentarios no aceptan
+   ninguno: se dice explícitamente en la UI en vez de dejar que se deduzca de las
+   cifras, que es como se leería un filtro por aplicado sin estarlo. */
+const ALCANCE_SEGMENTACION =
+  'segmenta KPI, producción, estado operativo y top de marcas; estadísticas, actividad, '
+  + 'checklists, insumos y comentarios salen sin segmentar';
 
 /* Vista según la URL. Sin react-router: la navegación es estado + History API, así que
    la traducción ruta -> vista vive en un solo sitio y la usan el arranque y el botón
@@ -73,6 +90,26 @@ function App() {
   const rangoMultiDia = aplicado.desde !== aplicado.hasta;
   const agrupacion = rangoMultiDia ? (agrupacionManual ?? 'dia') : 'hora';
 
+  /* ── Segmentación multi-selección ───────────────────────
+     A diferencia del rango, los segmentadores **no** pasan por «Cargar»: se aplican al
+     seleccionarlos, porque acotan lo que ya se está viendo en vez de pedir un período
+     distinto. Ninguna dimensión seleccionada = todas, y entonces la petición sale sin
+     esos parámetros, exactamente como antes de existir el filtro.
+
+     Los valores del menú se piden con el rango aplicado, así que solo se ofrece lo que
+     de verdad produjo en él; no se resetean al cambiar de rango — un filtro puesto a
+     mano no debe desaparecer solo, y `Segmentadores` sigue mostrando los que quedan
+     fuera del rango nuevo para que se puedan quitar. */
+  const [filtros, setFiltros] = useState(() => ({ ...SIN_FILTROS }));
+
+  const { datos: opcionesFiltros, cargando: cargandoOpciones, error: errorOpciones } = useApi(
+    `${API_BASE}/dashboard/opciones_filtros`,
+    {
+      params: { desde: aplicado.desde, hasta: aplicado.hasta },
+      intervalo: vista === 'dashboard' ? OPCIONES_INTERVAL : 0,
+    },
+  );
+
   /* ── Datos ──────────────────────────────────────────── */
   const [kpis, setKpis] = useState(null);
   const [logs, setLogs] = useState([]);
@@ -108,8 +145,14 @@ function App() {
       hasta: aplicado.hasta,
       ...(aplicado.horaDesde ? { hora_desde: aplicado.horaDesde } : {}),
       ...(aplicado.horaHasta ? { hora_hasta: aplicado.horaHasta } : {}),
+      ...paramsDeFiltros(filtros),
     };
-    const opciones = { params, timeout: 8000 };
+    /* `serializarParams` en vez del serializador de axios: este manda las listas como
+       claves repetidas (`maquina=A&maquina=B`), que es lo que FastAPI lee como
+       `List[str]`; axios las mandaría como `maquina[]=A`, un parámetro que el backend
+       no conoce, así que ignoraría el filtro y devolvería los datos sin segmentar
+       como si estuvieran segmentados. */
+    const opciones = { params, timeout: 8000, paramsSerializer: { serialize: serializarParams } };
 
     const peticiones = [
       ['kpis',        () => axios.get(`${API_BASE}/dashboard/kpis`, opciones),            setKpis],
@@ -142,7 +185,7 @@ function App() {
        haya respondido, si no se quedaría congelada por un solo endpoint caído. */
     if (resultados.some((r) => r.status === 'fulfilled')) setUltimoRefresco(new Date());
     setCargando(false);
-  }, [aplicado, agrupacion]);
+  }, [aplicado, agrupacion, filtros]);
 
   useEffect(() => {
     if (vista !== 'dashboard') return undefined;
@@ -164,6 +207,14 @@ function App() {
     setRango((prev) => ({ ...prev, horaDesde: '', horaHasta: '' }));
     setAplicado((prev) => ({ ...prev, horaDesde: '', horaHasta: '' }));
   };
+
+  /* Los segmentadores se aplican solos: se combinan entre dimensiones (una máquina Y
+     dos operarios) y dentro de cada una en OR, que es como los lee el backend con su
+     `IN (...)`. Lista vacía = sin filtrar por esa dimensión. */
+  const cambiarFiltro = useCallback((dim, valores) => {
+    setFiltros((prev) => ({ ...prev, [dim]: valores }));
+  }, []);
+  const limpiarFiltros = useCallback(() => setFiltros({ ...SIN_FILTROS }), []);
 
   const descargar = (ruta) => {
     /* Los endpoints de reportes solo aceptan fechas; la franja horaria no se les manda
@@ -199,6 +250,13 @@ function App() {
         : `hasta ${aplicado.horaHasta}`
     : null;
   const periodoConHoras = franja ? `${periodo} · ${franja}` : periodo;
+
+  /* Las tarjetas que sí se segmentan nombran la segmentación en su metadato; las que no
+     la aceptan se quedan con `periodoConHoras`, para no rotular un filtro que no se
+     está aplicando. */
+  const segmentacion = resumenFiltros(filtros);
+  const periodoSegmentado = segmentacion ? `${periodoConHoras} · ${segmentacion}` : periodoConHoras;
+  const haySegmentacion = contarFiltros(filtros) > 0;
 
   /* Administración sustituye toda la página: lleva cabecera y ancho propios. */
   if (vista === 'admin') {
@@ -255,6 +313,19 @@ function App() {
               onDescargar={descargar}
             />
 
+            {/* Debajo del título: acota todo el dashboard sin cambiar de período. */}
+            <div className="mb-5">
+              <Segmentadores
+                opciones={opcionesFiltros}
+                filtros={filtros}
+                onChange={cambiarFiltro}
+                onLimpiar={limpiarFiltros}
+                cargando={cargandoOpciones}
+                error={errorOpciones}
+                alcance={ALCANCE_SEGMENTACION}
+              />
+            </div>
+
             <KPICards
               kpis={kpis}
               operaciones={operaciones}
@@ -267,7 +338,7 @@ function App() {
               <div className="space-y-5 min-w-0">
                 <ProductionChart
                   datos={produccionHora}
-                  periodo={periodoConHoras}
+                  periodo={periodoSegmentado}
                   agrupacion={agrupacion}
                   onAgrupacion={setAgrupacionManual}
                   diaHabilitado={rangoMultiDia}
@@ -276,7 +347,7 @@ function App() {
                 />
                 <OperationsTable
                   datos={operaciones}
-                  periodo={periodoConHoras}
+                  periodo={periodoSegmentado}
                   cargando={cargando}
                   error={errores.operativo}
                 />
@@ -288,6 +359,7 @@ function App() {
                   horaHasta={aplicado.horaHasta}
                   periodo={periodoConHoras}
                   intervalo={POLL_INTERVAL}
+                  sinSegmentar={haySegmentacion}
                 />
                 <ComentariosTurno apiBase={API_BASE} intervalo={POLL_INTERVAL} />
               </div>
@@ -297,7 +369,7 @@ function App() {
                 <ChecklistMantenimiento apiBase={API_BASE} intervalo={POLL_INTERVAL} />
                 <TopProductionChart
                   datos={topMarcas}
-                  periodo={periodoConHoras}
+                  periodo={periodoSegmentado}
                   cargando={cargando}
                   error={errores.top}
                 />
