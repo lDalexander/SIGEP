@@ -502,3 +502,19 @@ test('la vista de paros es una URL propia y el botón atrás vuelve al dashboard
   window.history.back();
   await screen.findByRole('heading', { name: /producción en tiempo real/i });
 });
+
+test('desde paros se vuelve al dashboard sin recargar, por el botón o por el logo', async () => {
+  await irAParos();
+
+  // Botón explícito de la cabecera.
+  fireEvent.click(screen.getByRole('button', { name: /^dashboard$/i }));
+  expect(await screen.findByRole('heading', { name: /producción en tiempo real/i })).toBeInTheDocument();
+  expect(window.location.pathname).toBe('/');
+
+  // Y la marca también lleva de vuelta, que es donde todo el mundo pulsa primero.
+  fireEvent.click(screen.getByRole('button', { name: /^paros$/i }));
+  await screen.findByRole('heading', { name: /monitoreo de paros/i });
+  fireEvent.click(screen.getByRole('button', { name: 'Ir al dashboard' }));
+  expect(await screen.findByRole('heading', { name: /producción en tiempo real/i })).toBeInTheDocument();
+  expect(window.location.pathname).toBe('/');
+});
