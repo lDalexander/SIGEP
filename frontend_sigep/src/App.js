@@ -312,8 +312,16 @@ function App() {
               onDescargar={descargar}
             />
 
-            {/* Debajo del título: acota todo el dashboard sin cambiar de período. */}
-            <div className="mb-5">
+            {/* Debajo del título: acota todo el dashboard sin cambiar de período.
+
+                `relative z-40` no es decorativo y no se puede quitar: los desplegables
+                son paneles flotantes que tienen que taparse las tarjetas de abajo, y las
+                KPI llevan `relative` + `animate-fade-in`. Ese transform les crea un
+                contexto de apilamiento propio, así que al venir después en el DOM se
+                pintan encima del panel por mucho z-index que este lleve dentro de la
+                barra. Elevando el contexto de la barra entera, el orden vuelve a ser el
+                que se espera. */}
+            <div className="relative z-40 mb-5">
               <Segmentadores
                 opciones={opcionesFiltros}
                 filtros={filtros}
