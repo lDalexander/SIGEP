@@ -16,13 +16,21 @@ industriales con sincronización offline-first.
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
 capturas de `referencia_ui/`. 112 tests en verde.
 
-Los **segmentadores multi-selección** del dashboard (2026-08-05) están **en el repo, sin
-desplegar todavía**. Semántica en §2 y §4. Falta:
+Los **segmentadores multi-selección** del dashboard con **menús encadenados** (2026-08-05)
+**ya están en producción**. Semántica en §2 y §4. Cómo se desplegó, por si sirve de patrón:
 
-- `kill -HUP` al master de `sigep` para que entren los filtros de `/dashboard/estadisticas`
-  (§0 «Cambios de backend»). **Con turnos activos, preguntar antes.**
-- `./deploy.sh` después, nunca antes: al revés habría un rato con una web que anuncia un
-  filtro contra una API que aún lo ignora.
+1. Backend primero, con `kill -HUP` al master (el puerto no se cerró, el master conservó el
+   PID 1924092 y el worker viejo se retiró). Se aprovechó una ventana con **0 turnos
+   activos**, así que ninguna sesión se vio afectada.
+2. Se comprobó después que los KPIs y las 8 sesiones del día seguían idénticos byte a byte
+   al snapshot previo, y que el log del servicio no traía ningún error.
+3. `./deploy.sh` para el frontend (`main.83ba9a91.js`), nunca al revés.
+4. Verificado por el proxy de nginx en el 3000: `/`, `/paros`, `/admin` a 200, y los dos
+   endpoints nuevos respondiendo segmentados.
+
+Las tablets **quedaron a 0 en línea justo tras el HUP** (corta los WebSockets, es lo
+esperado) y las recupera el heartbeat; conviene mirar `/api/tablets/estado` un rato
+después de cualquier recarga para confirmar que han vuelto.
 
 La vista `/paros` y la tarjeta de comentarios de turno (2026-08-05) **ya están en
 producción**: backend recargado con `kill -HUP` (el puerto no se cerró, el master
@@ -41,6 +49,7 @@ heartbeat, sin errores en el log del servicio.
 | Tag previo a los filtros de estadísticas | `v1.4-pre-filtros-estadisticas` (en GitHub) |
 | Tag previo a los menús encadenados | `v1.5-pre-opciones-encadenadas` (en GitHub) |
 | Build de esa versión | `~/respaldos_build_sigep/build_pre-paros_2026-08-05_*` |
+| Build previo a los segmentadores | `~/respaldos_build_sigep/build_2026-08-05_165753` |
 | Build estable v1.0 | `~/RESPALDO_build_estable_v1.0` |
 | Builds rotados | `~/respaldos_build_sigep/` (últimos 10) |
 | BD previa al último `ALTER` | `backups/produccion_detg_pre_tipo_operario_*.sql.gz` |
@@ -59,7 +68,7 @@ falta tag, y la prohibición de «limpiar» el árbol con `checkout`/`reset`/`cl
 
 Tras la reconstrucción se autorizaron **cinco** excepciones a la regla de oro:
 
-- **Segmentación del dashboard** (2026-08-05, **en el repo, sin recargar el servicio**).
+- **Segmentación del dashboard** (2026-08-05, **en producción**).
   Dos endpoints tocados, en los dos añadiendo **solo parámetros opcionales**:
 
   - `GET /dashboard/estadisticas` acepta `maquina`/`operador`/`marca`/`presentacion`/
