@@ -9,7 +9,6 @@ import OperationsTable from './components/OperationsTable';
 import EstadisticasProduccion from './components/EstadisticasProduccion';
 import TerminalLog from './components/TerminalLog';
 import ChecklistMantenimiento from './components/ChecklistMantenimiento';
-import TabletsSyncPanel from './components/TabletsSyncPanel';
 import TopProductionChart from './components/TopProductionChart';
 import SolicitudesInsumos from './components/SolicitudesInsumos';
 import ComentariosTurno from './components/ComentariosTurno';
@@ -290,12 +289,12 @@ function App() {
                   periodo={periodoConHoras}
                   intervalo={POLL_INTERVAL}
                 />
+                <ComentariosTurno apiBase={API_BASE} intervalo={POLL_INTERVAL} />
               </div>
 
               <div className="space-y-5 min-w-0">
                 <TerminalLog logs={logs} cargando={cargando} error={errores.logs} />
                 <ChecklistMantenimiento apiBase={API_BASE} intervalo={POLL_INTERVAL} />
-                <TabletsSyncPanel apiBase={API_BASE} intervalo={POLL_INTERVAL} />
                 <TopProductionChart
                   datos={topMarcas}
                   periodo={periodoConHoras}
@@ -309,7 +308,6 @@ function App() {
                   esHoy={esHoy}
                   intervalo={POLL_INTERVAL}
                 />
-                <ComentariosTurno apiBase={API_BASE} intervalo={POLL_INTERVAL} />
               </div>
             </div>
 

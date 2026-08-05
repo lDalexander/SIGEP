@@ -39,10 +39,6 @@ const RESPUESTAS = {
     dim: 'maquina', rango: 'hoy', total_pacas: 1063, total_sesiones: 7,
     items: [{ etiqueta: 'Máquina 7', pacas: 300, sesiones: 1, pct: 28.2 }],
   },
-  '/api/tablets/estado': [
-    { device_id: 'eb48b8b9-c17e-4acb', nombre: 'JONATHAN VICUÑA', maquina: 'Máquina 16',
-      pendientes: 0, en_linea: false, segundos_desde_heartbeat: 1860 },
-  ],
   '/api/insumos/dashboard': {
     rango: { desde: '2026-07-30', hasta: '2026-07-30' },
     kpis: { total_pedidos: 0 }, pedidos: [], entregas: [],
@@ -161,11 +157,14 @@ test('el ranking de estadísticas muestra porcentaje con un decimal', async () =
   expect(await screen.findByText(/1 sesión · 28\.2%/)).toBeInTheDocument();
 });
 
-test('las tablets muestran su antigüedad de contacto', async () => {
+/* El panel «Tablets · sincronización» se retiró del dashboard el 2026-08-05: no se
+   entendía y no servía para operar. Los endpoints /tablets/* siguen en la API. */
+test('el dashboard ya no pide el estado de las tablets', async () => {
   render(<App />);
-  // 1860 s -> "31m"
-  expect(await screen.findByText('31m')).toBeInTheDocument();
-  expect(screen.getByText('0/1 en línea')).toBeInTheDocument();
+  await screen.findByText('2.272');
+
+  expect(axios.get.mock.calls.some(([url]) => url.startsWith('/api/tablets'))).toBe(false);
+  expect(screen.queryByText(/sincronización/i)).not.toBeInTheDocument();
 });
 
 test('las tarjetas de checklist muestran el anillo, el momento y el supervisor', async () => {
@@ -392,6 +391,18 @@ test('el dashboard muestra los comentarios de turno de los operarios', async () 
   const llamada = axios.get.mock.calls.find(([url]) =>
     url.startsWith('/api/dashboard/comentarios_turno'));
   expect(llamada[1].params).not.toHaveProperty('desde');
+});
+
+test('los comentarios van en la columna izquierda, tras las estadísticas', async () => {
+  render(<App />);
+  await screen.findByText('Problemas con el sello del vertical');
+
+  /* Las tarjetas aparecen en el DOM en orden: primero la columna izquierda completa y
+     después la derecha, así que basta comprobar que Comentarios va justo detrás de
+     Estadísticas y no al final, entre las de la derecha. */
+  const titulos = screen.getAllByRole('region').map((r) => r.getAttribute('aria-label'));
+  expect(titulos.indexOf('Comentarios de turno')).toBe(titulos.indexOf('Estadísticas de producción') + 1);
+  expect(titulos.indexOf('Comentarios de turno')).toBeLessThan(titulos.indexOf('Actividad en vivo'));
 });
 
 /* ── Vista de paros (/paros) ──────────────────────────────────────────────

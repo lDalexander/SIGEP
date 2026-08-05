@@ -249,7 +249,6 @@ frontend_sigep/
     │   ├── EstadisticasProduccion.js  # ranking por agrupación (usa el rango global)
     │   ├── TerminalLog.js       # actividad en vivo
     │   ├── ChecklistMantenimiento.js  # tarjetas con anillo de progreso
-    │   ├── TabletsSyncPanel.js  # chips de las 21 tablets
     │   ├── TopProductionChart.js # top marcas
     │   ├── SolicitudesInsumos.js # pedidos de insumo del rango
     │   ├── ComentariosTurno.js  # comentarios libres de los operarios (8 recientes)
@@ -286,7 +285,6 @@ por `lib/format.js`. Colores nuevos van a `tailwind.config.js`, nunca sueltos en
 | `EstadisticasProduccion` | `/dashboard/estadisticas` (fetch propio, con el rango y la franja globales) |
 | `TerminalLog` | `/dashboard/logs` |
 | `ChecklistMantenimiento` | `/mantenimiento/checklist?limit=8` (fetch propio) |
-| `TabletsSyncPanel` | `/tablets/estado`, `/tablets/sincronizar/{id}` (fetch propio) |
 | `TopProductionChart` | `/dashboard/top_produccion` |
 | `SolicitudesInsumos` | `/insumos/dashboard?desde&hasta` (fetch propio) |
 | `ComentariosTurno` | `/dashboard/comentarios_turno?limit=8` (fetch propio) |
@@ -561,10 +559,9 @@ heartbeat los recupera como respaldo. **No cambiar el transporte ni el formato.*
 | `Estadísticas de producción` | `estadisticas?dim=…&desde=&hasta=`. Conserva los cuatro segmentadores de agrupación (`Máquina`, `Operario`, `Marca+Pres.`, `Marca+Pres.+Frag.`) pero **ya no tiene presets `Hoy/7d/30d/Todo`**: usa el rango y la franja de la cabecera, para que no contradiga al resto del dashboard |
 | `Actividad en vivo` | `logs[]` |
 | `Checklist de mantenimiento · 8 recientes` | `mantenimiento/checklist?limit=8` |
-| `Tablets · sincronización · 0/21` | `tablets/estado[]`; `en_linea` para el punto, `segundos_desde_heartbeat` para `31m`/`21d` |
 | `Top marcas · hoy` | `top_produccion[].name` / `.value` |
 | `Solicitudes de insumos · últimas 24h` | `insumos/dashboard.pedidos[]` |
-| `Comentarios de turno · 8 recientes` | `dashboard/comentarios_turno?limit=8`. Como la tarjeta de checklists, **no** va atada al rango: son esporádicos (uno por turno como mucho) y con el rango puesto en hoy quedaría vacía casi siempre |
+| `Comentarios de turno · 8 recientes` | `dashboard/comentarios_turno?limit=8`. Va en la **columna izquierda, debajo de Estadísticas**. Como la tarjeta de checklists, **no** va atada al rango: son esporádicos (uno por turno como mucho) y con el rango puesto en hoy quedaría vacía casi siempre |
 | `Detalle de checklist de mantenimiento` | `mantenimiento/checklist?desde=&hasta=` — mismo criterio y orden que el Excel de formularios |
 | Footer `Actualizado 12:22:11` | Cliente: hora del último refresco |
 
@@ -599,6 +596,16 @@ equipo con la hora mal puesta inventaría paros de horas o duraciones negativas.
 | Checklists | `GET /admin/checklists`, `PUT /admin/checklists/{id}` |
 | Jerarquía | `GET /admin/maquina_productos`, `GET /admin/catalogos`, `POST`/`PUT`/`DELETE /admin/maquina_productos`, `POST`/`PUT /admin/maquinas`, `POST /admin/marcas`, `POST /admin/presentaciones` |
 | Mensajes | `GET /admin/sesiones_activas`, `POST /admin/mensajes/masivo` |
+
+### Retirado del dashboard
+
+- **`Tablets · sincronización`** — panel de chips con las 21 tablets (`/tablets/estado`,
+  `/tablets/sincronizar/{id}`). **Retirado el 2026-08-05 a petición del responsable**:
+  no se entendía y no servía para operar. Los endpoints `/tablets/*` **siguen en la API**
+  y las tablets los usan; solo desapareció la tarjeta. El componente
+  `components/TabletsSyncPanel.js` es recuperable del commit `ef07cb3` (o del tag
+  `v1.2-pre-paros`), y `lib/format.js` conserva `etiquetaTablet()` y `antiguedad()`, con
+  sus tests, por si vuelve.
 
 ### Sin endpoint propio (resuelto de otra forma)
 
