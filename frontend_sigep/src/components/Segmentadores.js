@@ -73,10 +73,14 @@ export default function Segmentadores({
         {DIMENSIONES.map(({ key, label }) => {
           const seleccionados = filtros?.[key] || [];
           const disponibles = opciones?.[key] || [];
-          /* Un valor seleccionado que ya no aparece en el rango nuevo se sigue
-             mostrando: el filtro se está aplicando de verdad y hay que poder verlo
-             y quitarlo, no dejarlo actuando desde un menú donde no figura. */
-          const valores = [...disponibles, ...seleccionados.filter((v) => !disponibles.includes(v))];
+          /* Un valor seleccionado que ya no aparece en las opciones se sigue mostrando,
+             al final y atenuado: el filtro se está aplicando de verdad y hay que poder
+             verlo y quitarlo, no dejarlo actuando desde un menú donde no figura. Pasa al
+             cambiar de rango y también al combinar dimensiones — si filtras por un
+             operario, las máquinas donde no trabajó dejan de tener datos aunque sigan
+             marcadas, y entonces esa parte de la selección no está aportando nada. */
+          const huerfanos = seleccionados.filter((v) => !disponibles.includes(v));
+          const valores = [...disponibles, ...huerfanos];
           const activo = seleccionados.length > 0;
           const estaAbierta = abierta === key;
 
@@ -147,14 +151,22 @@ export default function Segmentadores({
                     ) : (
                       visibles.map((valor) => {
                         const marcado = seleccionados.includes(valor);
+                        const huerfano = huerfanos.includes(valor);
                         return (
                           <button
                             key={valor}
                             type="button"
                             onClick={() => alternarValor(key, valor)}
                             aria-pressed={marcado}
-                            className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left
-                                       text-[13px] transition-colors hover:bg-white/[0.04]"
+                            /* `title` y no texto dentro del botón: el texto entraría en el
+                               nombre accesible y el valor dejaría de poder buscarse por su
+                               nombre a secas. */
+                            title={huerfano
+                              ? 'Sigue filtrando, pero no hay producción con este valor en el resto del filtro'
+                              : undefined}
+                            className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left
+                                       text-[13px] transition-colors hover:bg-white/[0.04]
+                                       ${huerfano ? 'opacity-50' : ''}`}
                           >
                             <span
                               aria-hidden="true"

@@ -102,10 +102,21 @@ function App() {
      fuera del rango nuevo para que se puedan quitar. */
   const [filtros, setFiltros] = useState(() => ({ ...SIN_FILTROS }));
 
+  /* Los menús están **encadenados**: se piden con el rango, la franja y los demás
+     filtros, así que marcar «Máquina 7B» deja en Operario solo a quienes trabajaron ahí.
+     El backend excluye de cada dimensión su propio filtro, de modo que la lista de
+     máquinas sigue completa y se pueden seguir sumando máquinas a la selección. */
   const { datos: opcionesFiltros, cargando: cargandoOpciones, error: errorOpciones } = useApi(
     `${API_BASE}/dashboard/opciones_filtros`,
     {
-      params: { desde: aplicado.desde, hasta: aplicado.hasta },
+      params: {
+        desde: aplicado.desde,
+        hasta: aplicado.hasta,
+        ...(aplicado.horaDesde ? { hora_desde: aplicado.horaDesde } : {}),
+        ...(aplicado.horaHasta ? { hora_hasta: aplicado.horaHasta } : {}),
+        ...paramsDeFiltros(filtros),
+      },
+      serializar: serializarParams,
       intervalo: vista === 'dashboard' ? OPCIONES_INTERVAL : 0,
     },
   );

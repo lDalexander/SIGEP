@@ -14,7 +14,7 @@ industriales con sincronización offline-first.
 
 **Última sesión: 2026-08-05.** El frontend está reconstruido y **desplegado en producción**
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
-capturas de `referencia_ui/`. 110 tests en verde.
+capturas de `referencia_ui/`. 112 tests en verde.
 
 Los **segmentadores multi-selección** del dashboard (2026-08-05) están **en el repo, sin
 desplegar todavía**. Semántica en §2 y §4. Falta:
@@ -39,6 +39,7 @@ heartbeat, sin errores en el log del servicio.
 | Tag previo a la vista de paros | `v1.2-pre-paros` (en GitHub) |
 | Tag previo a los segmentadores | `v1.3-pre-segmentadores` (en GitHub) |
 | Tag previo a los filtros de estadísticas | `v1.4-pre-filtros-estadisticas` (en GitHub) |
+| Tag previo a los menús encadenados | `v1.5-pre-opciones-encadenadas` (en GitHub) |
 | Build de esa versión | `~/respaldos_build_sigep/build_pre-paros_2026-08-05_*` |
 | Build estable v1.0 | `~/RESPALDO_build_estable_v1.0` |
 | Builds rotados | `~/respaldos_build_sigep/` (últimos 10) |
@@ -58,17 +59,30 @@ falta tag, y la prohibición de «limpiar» el árbol con `checkout`/`reset`/`cl
 
 Tras la reconstrucción se autorizaron **cinco** excepciones a la regla de oro:
 
-- **Segmentación en las estadísticas** (2026-08-05, **en el repo, sin recargar el
-  servicio**). `GET /dashboard/estadisticas` acepta `maquina`/`operador`/`marca`/
-  `presentacion`/`fragancia` **opcionales y repetibles**, los mismos que ya tenían los
-  otros cuatro endpoints con rango; se aplican con `_aplicar_filtros()`, que ya existía.
-  Son dos líneas: la firma y la llamada. Sin los parámetros la respuesta es idéntica byte
-  a byte (verificado con `diff` 8000 vs 8001 en **28 casos**: las 4 `dim` con y sin rango,
-  los 4 presets de `rango`, la franja de noche, el `dim` inválido que sigue dando 400, y
-  los otros 14 endpoints del dashboard, mantenimiento, tablets, operadores, máquinas e
-  insumos), así que **las tablets no necesitan actualización**. Motivo: era el único
-  endpoint con rango que no podía segmentarse, y su tarjeta contradecía al resto del
-  dashboard en cuanto se ponía un filtro.
+- **Segmentación del dashboard** (2026-08-05, **en el repo, sin recargar el servicio**).
+  Dos endpoints tocados, en los dos añadiendo **solo parámetros opcionales**:
+
+  - `GET /dashboard/estadisticas` acepta `maquina`/`operador`/`marca`/`presentacion`/
+    `fragancia` **repetibles**, los mismos que ya tenían los otros cuatro endpoints con
+    rango; se aplican con `_aplicar_filtros()`, que ya existía. Son dos líneas: la firma y
+    la llamada. Motivo: era el único endpoint con rango que no podía segmentarse, y su
+    tarjeta contradecía al resto del dashboard en cuanto se ponía un filtro.
+  - `GET /dashboard/opciones_filtros` acepta esos cinco más `hora_desde`/`hora_hasta`,
+    para **encadenar** los menús: con `maquina=Máquina 7B` la lista de `operador` pasa a
+    ser solo la de quienes trabajaron ahí. Motivo: ofrecía la plantilla entera y el
+    catálogo entero, así que la mayoría de combinaciones daban cero. **La regla que no es
+    evidente** está en el docstring: a cada dimensión se le aplican los filtros de *las
+    otras*, nunca el suyo; si se aplicara el propio, al marcar «Máquina 7B» la lista de
+    máquinas se reduciría a `["Máquina 7B"]` y la multi-selección quedaría inservible en
+    cuanto se marca el primer valor.
+
+  Sin los parámetros nuevos las respuestas son idénticas byte a byte, verificado con
+  `diff` 8000 vs 8001 en **47 casos** entre las dos tandas: las 4 `dim` con y sin rango,
+  los 4 presets de `rango`, la franja de noche, el `dim` inválido que sigue dando 400, las
+  6 formas de llamar a `opciones_filtros` (sin nada, rango de un día, de varios, solo
+  `desde`, solo `hasta`, rango vacío en el futuro) y el resto de endpoints del dashboard,
+  mantenimiento, tablets, operadores, máquinas e insumos. **Las tablets no necesitan
+  actualización.**
 
 - **Lectura de paros y de comentarios de turno** (2026-08-05, **en producción**). Dos
   **rutas nuevas** en `routers/dashboard.py`:
@@ -311,7 +325,7 @@ por `lib/format.js`. Colores nuevos van a `tailwind.config.js`, nunca sueltos en
 
 | Componente | Endpoint |
 |---|---|
-| `Segmentadores` | `/dashboard/opciones_filtros?desde&hasta` (fetch propio, refresco cada 60 s) |
+| `Segmentadores` | `/dashboard/opciones_filtros` con el rango, la franja y los demás filtros — menús encadenados (fetch propio, refresco cada 60 s) |
 | `KPICards` | `/dashboard/kpis` + derivación de `/dashboard/estado_operativo` |
 | `ProductionChart` | `/dashboard/produccion_hora` (+`agrupar=dia` cuando el rango pasa de un día) |
 | `OperationsTable` | `/dashboard/estado_operativo` |
@@ -349,11 +363,17 @@ cinco endpoints con rango; el quinto (`estadisticas`) se añadió el 2026-08-05 
   conoce, lo ignora y devuelve el total sin filtrar — comprobado contra el 8000, que
   con `maquina[]=Máquina 7` responde las 2832 pacas del día entero. La web mostraría
   datos sin segmentar como si estuvieran segmentados.
-- **Los valores del menú son los del rango** (`/dashboard/opciones_filtros?desde&hasta`),
-  no un catálogo: solo se ofrece lo que produjo en él. Los filtros **no se resetean** al
-  cambiar de rango, y un valor seleccionado que ya no aparece en el rango nuevo **se sigue
-  mostrando** (marcado, al final de la lista) porque se sigue aplicando: si desapareciera
-  del menú quedaría filtrando sin que nada lo delate.
+- **Los menús están encadenados y responden al rango, a la franja y entre sí.** Se piden
+  con todo el filtro global, así que solo ofrecen lo que existe de verdad: cambiar la fecha
+  cambia las listas, y marcar `Máquina 7B` deja en Operario solo a quienes trabajaron ahí.
+  A cada dimensión el backend le aplica los filtros de *las otras* y no el suyo, por lo que
+  la lista de máquinas sigue completa y se pueden seguir sumando máquinas a la selección.
+- Los filtros **no se resetean** al cambiar de rango, y un valor seleccionado que deja de
+  aparecer en las opciones **se sigue mostrando**, al final de la lista, marcado y
+  atenuado, con un `title` que explica que no aporta nada. Pasa al cambiar de rango y al
+  combinar dimensiones (si filtras por un operario, las máquinas donde no trabajó se
+  quedan sin datos aunque sigan marcadas). Se sigue aplicando: si desapareciera del menú
+  quedaría filtrando sin que nada lo delate.
 - **Alcance**: segmentan los **cinco** endpoints con rango — `kpis`, `produccion_hora`,
   `estado_operativo`, `top_produccion` y `estadisticas`. **No** logs, checklists, insumos,
   comentarios ni los Excel, cuyos endpoints no aceptan los parámetros. La barra lo dice
@@ -437,8 +457,10 @@ npx eslint --ext .js src/
   viaja, dos operarios a la vez como lista, la combinación de tres dimensiones, que se
   aplican sin pulsar «Cargar», «Todos» y «Limpiar», los chips de quitar, que Estadísticas
   recibe los filtros y que no le queda ningún control propio, la tabla entera de
-  agrupación automática, y que un valor fuera del rango nuevo sigue visible y
-  quitable. `beforeEach` **resetea la ruta**: jsdom la conserva entre tests del mismo
+  agrupación automática, que un valor fuera del rango nuevo sigue visible y quitable, y
+  el encadenamiento: que las opciones se piden con el rango, la franja y los demás
+  filtros, que marcar una máquina acota la lista de operarios, y que **no** acota la de
+  máquinas. `beforeEach` **resetea la ruta**: jsdom la conserva entre tests del mismo
   archivo y la vista se decide por el pathname.
 - `src/components/admin/AdminApp.test.js` — las cinco pestañas, incluido que
   «Eliminar» haga `PUT {activo:false}` y nunca `DELETE`.
@@ -479,7 +501,7 @@ así se evita CORS. El `App.js` heredado apunta a `http://150.36.200.252:8000/ap
 | GET | `/dashboard/produccion_hora` | mismos filtros + `agrupar` (opcional) | `[{hora, pallets, detalle:[{maquina,operario,producto,pacas}]}]`. Sin `agrupar` o con `hora`: un punto por hora del reloj, `hora:"HH:00"` — con rango de varios días **suma esa hora de todos los días**. Con `agrupar=dia`: un punto por fecha, `hora:"YYYY-MM-DD"`. Valor desconocido → se trata como `hora`, igual que `?tipo=` |
 | GET | `/dashboard/estado_operativo` | mismos filtros | `[{sesion_id, maquina, operador, producto, inicio_turno, tiempo_transcurrido, total_pacas, estado}]` |
 | GET | `/dashboard/top_produccion` | mismos filtros | `[{name, value}]` desc |
-| GET | `/dashboard/opciones_filtros` | `desde`,`hasta` | `{maquina[], operador[], marca[], presentacion[], fragancia[]}` |
+| GET | `/dashboard/opciones_filtros` | `desde`,`hasta`,`hora_desde`,`hora_hasta`,`maquina[]`,`operador[]`,`marca[]`,`presentacion[]`,`fragancia[]` | `{maquina[], operador[], marca[], presentacion[], fragancia[]}`. Sin `desde`/`hasta` es el catálogo histórico completo. Los filtros **encadenan** los menús, y a cada dimensión se le aplican los de *las otras*, **nunca el suyo** (si no, marcar un valor vaciaría su propia lista). La franja recorta por `inicio_turno` |
 | GET | `/dashboard/estadisticas` | `dim`, `rango`, `desde`, `hasta`, `hora_desde`, `hora_hasta`, `maquina[]`, `operador[]`, `marca[]`, `presentacion[]`, `fragancia[]` | `{dim, rango, total_pacas, total_sesiones, items:[{etiqueta,pacas,sesiones,pct}]}`. Los cinco filtros se añadieron el 2026-08-05 (§0); un `dim` desconocido sigue dando **400** |
 | GET | `/dashboard/paros` | `desde`,`hasta`,`hora_desde`,`hora_hasta`,`maquina[]`,`operador[]` | `{kpis, maquinas[], paros[], por_categoria[]}` — ver «Paros» más abajo |
 | GET | `/dashboard/comentarios_turno` | `desde`,`hasta` **o** `limit` (def. 30, máx. 200) | `[{id,sesion_id,maquina,operador,texto,creado_en,fecha,hora}]` desc. Sin `desde`/`hasta` devuelve los últimos `limit` sin importar la fecha |

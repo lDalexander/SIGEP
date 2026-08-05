@@ -335,29 +335,56 @@ def obtener_top_produccion(desde: str = Query(None), hasta: str = Query(None),
 
 
 @router.get("/opciones_filtros")
-def obtener_opciones_filtros(desde: str = Query(None), hasta: str = Query(None), db: Session = Depends(get_db)):
+def obtener_opciones_filtros(desde: str = Query(None), hasta: str = Query(None),
+                             hora_desde: str = _FiltroHoraDesde, hora_hasta: str = _FiltroHoraHasta,
+                             maquina: List[str] = _FiltroMaquina, operador: List[str] = _FiltroOperador,
+                             marca: List[str] = _FiltroMarca, presentacion: List[str] = _FiltroPresentacion,
+                             fragancia: List[str] = _FiltroFragancia,
+                             db: Session = Depends(get_db)):
     """Valores distintos disponibles por dimensión, para llenar los segmentadores.
 
     Si se envían desde/hasta se limita a las sesiones de ese rango; si no, devuelve
     el catálogo completo (todas las sesiones históricas) para que los menús nunca
-    aparezcan vacíos aunque hoy no haya producción."""
+    aparezcan vacíos aunque hoy no haya producción.
+
+    `hora_desde`/`hora_hasta` (opcionales) recortan por `inicio_turno`, el mismo criterio
+    con el que este endpoint aplica el rango de fechas y el que usa `estado_operativo`.
+
+    Los cinco parámetros de segmentación (opcionales, repetibles) **encadenan** los menús:
+    con `maquina=Máquina 7B` la lista de `operador` pasa a ser solo la de quienes
+    trabajaron en esa máquina.
+
+    La regla que no es evidente: para cada dimensión se aplican los filtros de **las
+    otras**, nunca el suyo propio. Si se aplicara el propio, al marcar «Máquina 7B» la
+    lista de máquinas se reduciría a `["Máquina 7B"]` y ya no se podría añadir la 9 — la
+    multi-selección quedaría inservible en cuanto se marca el primer valor. Excluyendo la
+    propia dimensión, cada menú responde a «qué más puedo elegir aquí dado el resto del
+    filtro», que es lo que se espera al combinarlos.
+
+    Sin ninguno de estos parámetros la respuesta es la de siempre, byte a byte."""
     try:
         base = db.query(SesionTrabajoDB)
         if desde or hasta:
             inicio, fin = _rango(desde, hasta)
             base = base.filter(SesionTrabajoDB.inicio_turno >= inicio,
                                SesionTrabajoDB.inicio_turno < fin)
+        base = _aplicar_horas(base, SesionTrabajoDB.inicio_turno, hora_desde, hora_hasta)
 
-        def distintos(col):
-            filas = base.with_entities(col).distinct().all()
+        seleccion = {"maquina": maquina, "operador": operador, "marca": marca,
+                     "presentacion": presentacion, "fragancia": fragancia}
+
+        def distintos(clave, col):
+            otros = {k: v for k, v in seleccion.items() if k != clave}
+            q = _aplicar_filtros(base, **otros)
+            filas = q.with_entities(col).distinct().all()
             return sorted({r[0] for r in filas if r[0] not in (None, "")})
 
         return {
-            "maquina": distintos(SesionTrabajoDB.maquina),
-            "operador": distintos(SesionTrabajoDB.operador),
-            "marca": distintos(SesionTrabajoDB.marca),
-            "presentacion": distintos(SesionTrabajoDB.presentacion),
-            "fragancia": distintos(SesionTrabajoDB.fragancia),
+            "maquina": distintos("maquina", SesionTrabajoDB.maquina),
+            "operador": distintos("operador", SesionTrabajoDB.operador),
+            "marca": distintos("marca", SesionTrabajoDB.marca),
+            "presentacion": distintos("presentacion", SesionTrabajoDB.presentacion),
+            "fragancia": distintos("fragancia", SesionTrabajoDB.fragancia),
         }
     except Exception as e:
         logger.error(f"Error en /dashboard/opciones_filtros: {e}")

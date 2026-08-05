@@ -39,8 +39,8 @@ const RESPUESTAS = {
     dim: 'maquina', rango: 'hoy', total_pacas: 1063, total_sesiones: 7,
     items: [{ etiqueta: 'Máquina 7', pacas: 300, sesiones: 1, pct: 28.2 }],
   },
-  /* Valores que alimentan los segmentadores. Son los distintos del rango, no un
-     catálogo: por eso `Máquina 16` no está aunque exista en la planta. */
+  /* Valores que alimentan los segmentadores. Son los distintos del rango y de los demás
+     filtros, no un catálogo: por eso `Máquina 16` no está aunque exista en la planta. */
   '/api/dashboard/opciones_filtros': {
     maquina: ['Máquina 7', 'Máquina 9'],
     operador: ['ALEX VALENZUELA', 'ANTHONY MERCADO', 'PEDRO SARABIA'],
@@ -741,6 +741,74 @@ test('al limpiar los filtros la agrupación vuelve a máquina', async () => {
   fireEvent.click(screen.getByRole('button', { name: /limpiar \(1\)/i }));
   await waitFor(() => expect(paramsDe('estadisticas')).toMatchObject({ dim: 'maquina' }));
   expect(paramsDe('estadisticas')).not.toHaveProperty('maquina');
+});
+
+/* ── Menús encadenados ────────────────────────────────────────────────────
+   Los valores de cada desplegable son los que existen con el rango, la franja y **los
+   demás** filtros aplicados: marcar la 7B deja en Operario solo a quien trabajó ahí. */
+
+const OPCIONES = RESPUESTAS['/api/dashboard/opciones_filtros'];
+
+test('las opciones de los menús se piden con el rango, la franja y los demás filtros', async () => {
+  render(<App />);
+  await screen.findByText('2.272');
+
+  // Sin nada seleccionado solo viaja el rango: la petición es la de antes del cambio.
+  expect(paramsDe('opciones_filtros')).toMatchObject({ desde: expect.any(String), hasta: expect.any(String) });
+  expect(paramsDe('opciones_filtros')).not.toHaveProperty('maquina');
+  expect(paramsDe('opciones_filtros')).not.toHaveProperty('hora_desde');
+
+  await segmentar('Máquina', 'Máquina 7');
+  await waitFor(() => expect(paramsDe('opciones_filtros')).toMatchObject({ maquina: ['Máquina 7'] }));
+
+  // Y la franja también acota los menús, para no ofrecer a quien no trabajó en ella.
+  fireEvent.change(screen.getByLabelText('Hora desde'), { target: { value: '19:00' } });
+  fireEvent.change(screen.getByLabelText('Hora hasta'), { target: { value: '07:00' } });
+  fireEvent.click(screen.getByRole('button', { name: /cargar/i }));
+
+  await waitFor(() => {
+    expect(paramsDe('opciones_filtros')).toMatchObject({ hora_desde: '19:00', hora_hasta: '07:00' });
+  });
+});
+
+test('marcar una máquina acota la lista de operarios a los que trabajaron en ella', async () => {
+  axios.get.mockImplementation((url, config) => {
+    if (url.startsWith('/api/mantenimiento/checklist')) {
+      return Promise.resolve({ data: CHECKLIST_RECIENTES });
+    }
+    if (url.startsWith('/api/dashboard/opciones_filtros')) {
+      /* Como el backend: filtrando por Máquina 7 solo queda su operario, pero la lista
+         de máquinas sigue completa — su propio filtro no se aplica a sí mismo. */
+      return Promise.resolve({
+        data: config?.params?.maquina?.includes('Máquina 7')
+          ? { ...OPCIONES, operador: ['ANTHONY MERCADO'] }
+          : OPCIONES,
+      });
+    }
+    const clave = Object.keys(RESPUESTAS).find((k) => url.startsWith(k));
+    return clave
+      ? Promise.resolve({ data: RESPUESTAS[clave] })
+      : Promise.reject(new Error(`sin mock para ${url}`));
+  });
+
+  render(<App />);
+  await screen.findByText('2.272');
+
+  // De partida, los tres operarios del rango.
+  fireEvent.click(screen.getByRole('button', { name: 'Segmentar por Operario' }));
+  expect(await screen.findByRole('button', { name: 'ALEX VALENZUELA' })).toBeInTheDocument();
+
+  await segmentar('Máquina', 'Máquina 7');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Segmentar por Operario' }));
+  await waitFor(() => {
+    expect(screen.queryByRole('button', { name: 'ALEX VALENZUELA' })).not.toBeInTheDocument();
+  });
+  expect(screen.getByRole('button', { name: 'ANTHONY MERCADO' })).toBeInTheDocument();
+
+  // La lista de máquinas NO se acota a sí misma: hay que poder seguir sumando máquinas.
+  fireEvent.click(screen.getByRole('button', { name: 'Segmentar por Máquina' }));
+  expect(await screen.findByRole('button', { name: 'Máquina 9', pressed: false })).toBeInTheDocument();
 });
 
 /* Al cambiar el rango, un valor puede dejar de existir en las opciones nuevas. El
