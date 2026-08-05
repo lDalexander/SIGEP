@@ -16,11 +16,11 @@ industriales con sincronización offline-first.
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
 capturas de `referencia_ui/`. 83 tests en verde.
 
-> ⚠️ **Lo de la sesión del 2026-08-05 (vista `/paros` + comentarios de turno) está
-> commiteado y probado, pero NO está en producción todavía.** El servicio del 8000 sigue
-> con el código anterior y el `build` servido por nginx tampoco lleva la vista nueva.
-> Falta, en este orden: recargar el backend (`kill -HUP`, ver §1) y luego `./deploy.sh`.
-> No se hizo en la sesión porque había tres turnos activos en planta.
+La vista `/paros` y la tarjeta de comentarios de turno (2026-08-05) **ya están en
+producción**: backend recargado con `kill -HUP` (el puerto no se cerró, el master
+conservó el PID) y frontend desplegado con `./deploy.sh`. Se comprobó después que los
+4 turnos activos seguían abiertos, las pacas del día intactas y las tablets reportando
+heartbeat, sin errores en el log del servicio.
 
 ### Punto de recuperación
 
@@ -43,8 +43,8 @@ git checkout v1.2-pre-paros                 # volver a justo antes de la vista d
 
 Tras la reconstrucción se autorizaron **cuatro** excepciones a la regla de oro:
 
-- **Lectura de paros y de comentarios de turno** (2026-08-05, **en el repo, aún no
-  recargado en producción**). Dos **rutas nuevas** en `routers/dashboard.py`:
+- **Lectura de paros y de comentarios de turno** (2026-08-05, **en producción**). Dos
+  **rutas nuevas** en `routers/dashboard.py`:
   `GET /dashboard/paros` y `GET /dashboard/comentarios_turno`. Al ser rutas que no
   existían, ninguna respuesta anterior cambia; se verificó igualmente en el 8001 que 15
   endpoints (los cinco del dashboard con y sin rango, `agrupar=dia`, franja horaria,
@@ -77,26 +77,24 @@ Tras la reconstrucción se autorizaron **cuatro** excepciones a la regla de oro:
 
 ### Pendiente
 
-1. **Poner en producción la vista de paros** — backend primero (`kill -HUP`, §1), después
-   `./deploy.sh`. Ver el aviso del principio de esta sección.
-2. **App Android** — para que el selector «Seleccione Operador» filtre de verdad, la app
+1. **App Android** — para que el selector «Seleccione Operador» filtre de verdad, la app
    debe pasar `?tipo=` con el tipo de su máquina. Instrucciones completas en
    `api_produccion/CAMBIO_ANDROID_tipo_operario.md`. **No corre prisa**: sin ese cambio
    todo sigue funcionando como antes.
-3. **Paros sin cerrar** — el garbage collector de `tasks.py` cierra los turnos colgados a
+2. **Paros sin cerrar** — el garbage collector de `tasks.py` cierra los turnos colgados a
    las 13 h pero **no cierra los paros abiertos de esa sesión**, así que quedan con
    `fin_paro` NULL para siempre (hay 1 de 78 así: el paro 105). La vista de paros los
    distingue con el estado «SIN CIERRE» en vez de contarlos como paros en curso, pero el
    arreglo de fondo está en el backend y **no se ha tocado** (haría falta autorización).
-4. **Máquinas de línea líquida** — ya hay dos dadas de alta (`Máquina 3` y `Maquina 12`),
+3. **Máquinas de línea líquida** — ya hay dos dadas de alta (`Máquina 3` y `Maquina 12`),
    sin producción registrada todavía. Total: 8 máquinas activas, una de ellas `PRUEBA`.
-5. **Logo provisional** — `public/logo192.png` es el de Create React App. El de la cabecera
+4. **Logo provisional** — `public/logo192.png` es el de Create React App. El de la cabecera
    es un SVG hecho a partir de las capturas (`components/ui/Logo.js`); si aparece el
    original, se sustituye por un `<img>`.
-6. **Botón «Insumos» de la cabecera** — aparece en las capturas pero no hay ninguna captura
+5. **Botón «Insumos» de la cabecera** — aparece en las capturas pero no hay ninguna captura
    ni especificación de esa vista. Hoy muestra un aviso de «vista sin especificación de
    referencia». Falta decidir qué debe contener, o quitar el botón.
-7. **Filtrado multi-selección perdido** — la versión anterior tenía segmentadores por
+6. **Filtrado multi-selección perdido** — la versión anterior tenía segmentadores por
    máquina/operador/marca/presentación/fragancia. No aparecen en ninguna captura, así que
    se retiraron, pero el backend los sigue soportando en todos los endpoints del dashboard
    (`?maquina=A&maquina=B…`). Recuperables del commit `d5c0839`.
@@ -241,7 +239,8 @@ frontend_sigep/
     │   ├── format.js            # es-EC, duraciones, turno, antigüedad, etiqueta de tablet
     │   └── useApi.js            # GET con polling; conserva el último dato bueno
     ├── components/
-    │   ├── Header.js            # cabecera: reloj, EN VIVO, Insumos, Admin
+    │   ├── Header.js            # cabecera: reloj, EN VIVO, Dashboard, Paros, Insumos, Admin
+    │   │                        # (la marca también vuelve al dashboard)
     │   ├── BarraTitulo.js       # sobre-título, H1, turno actual
     │   ├── FiltroFecha.js       # fechas + franja horaria + Cargar + 3 descargas
     │   ├── KPICards.js          # las 3 tarjetas KPI
