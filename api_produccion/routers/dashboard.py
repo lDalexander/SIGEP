@@ -7,12 +7,13 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, case, or_, and_
 from datetime import datetime, timedelta
 from typing import List
+import re
 import pandas as pd
 from io import BytesIO
 from fastapi.responses import StreamingResponse
 
 from database import get_db, logger
-from models import PalletDB, SesionTrabajoDB
+from models import PalletDB, SesionTrabajoDB, ParoMaquinaDB, MaquinaDB, ComentarioTurnoDB
 
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
@@ -458,3 +459,248 @@ def obtener_estadisticas(dim: str = "maquina", rango: str = "semana",
     except Exception as e:
         logger.error(f"Error en /dashboard/estadisticas: {e}")
         raise HTTPException(status_code=500, detail="Error al obtener estadisticas")
+
+
+# ---------------------------------------------------------------------------
+# Paros de máquina y comentarios de turno
+#
+# Rutas NUEVAS (no modifican ninguna respuesta existente), añadidas para la vista
+# de monitoreo de paros de la web. Los datos ya los escribían las tablets vía
+# POST /api/paro/iniciar y /api/paro/finalizar; hasta ahora solo se podían leer
+# dentro de la hoja "Paros" del Excel de producción.
+# ---------------------------------------------------------------------------
+
+# La tablet manda el motivo como "[Categoría] - comentario libre".
+_RE_MOTIVO = re.compile(r"^\[(?P<cat>[^\]]{1,60})\]\s*[-–—:]?\s*(?P<txt>.*)$", re.S)
+
+
+def _desglosar_motivo(motivo):
+    """"[Bodega] - sacar palet" -> ("BODEGA", "sacar palet").
+
+    Cuando no hay corchetes el motivo entero ES la categoría y no hay comentario: es el
+    caso de "ALMUERZO", que la app envía tal cual. No se inventa texto — sin comentario
+    libre se devuelve None y la UI muestra "—"."""
+    txt = (motivo or "").strip()
+    if not txt:
+        return "SIN MOTIVO", None
+    m = _RE_MOTIVO.match(txt)
+    if m:
+        cat = m.group("cat").strip().upper()
+        com = m.group("txt").strip()
+        return (cat or "SIN MOTIVO"), (com or None)
+    return txt.upper(), None
+
+
+def _estado_paro(paro, sesion, ahora):
+    """(estado, fin_efectivo, estimada) de un paro. Ver la nota de "SIN CIERRE".
+
+    - "CERRADO":    tiene `fin_paro`; la duración es la registrada.
+    - "EN CURSO":   sin `fin_paro` y con el turno todavía abierto -> la máquina está
+                    parada AHORA y la duración corre contra el reloj.
+    - "SIN CIERRE": sin `fin_paro` pero con el turno ya cerrado. Ocurre de verdad: el
+                    garbage collector de `tasks.py` cierra los turnos colgados a las 13h
+                    sin cerrar sus paros (así quedó el paro 105). No se puede afirmar
+                    que la máquina siga parada, así que la duración se acota al fin del
+                    turno y se marca como estimada en vez de dejarla crecer sin fin."""
+    if paro.fin_paro:
+        return "CERRADO", paro.fin_paro, False
+    if sesion is not None and sesion.fin_turno is None:
+        return "EN CURSO", ahora, False
+    fin_turno = sesion.fin_turno if sesion is not None else None
+    return "SIN CIERRE", fin_turno, True
+
+
+def _dur_segundos(paro, fin_efectivo):
+    """Duración en segundos, o None si no hay con qué calcularla (nunca un 0 falso)."""
+    if paro.fin_paro and paro.duracion_segundos is not None:
+        return round(float(paro.duracion_segundos), 1)
+    if paro.inicio_paro and fin_efectivo:
+        return round(max(0.0, (fin_efectivo - paro.inicio_paro).total_seconds()), 1)
+    return None
+
+
+def _fmt(dt):
+    return dt.strftime("%Y-%m-%d %H:%M:%S") if dt else None
+
+
+@router.get("/paros")
+def obtener_paros(desde: str = Query(None), hasta: str = Query(None),
+                  hora_desde: str = _FiltroHoraDesde, hora_hasta: str = _FiltroHoraHasta,
+                  maquina: List[str] = _FiltroMaquina, operador: List[str] = _FiltroOperador,
+                  db: Session = Depends(get_db)):
+    """Paros de máquina del rango (default: hoy) + estado EN VIVO de cada máquina.
+
+    Devuelve `{kpis, maquinas, paros, por_categoria}`:
+
+    - `paros`: un renglón por paro cuyo `inicio_paro` cae en el rango, del más reciente
+      al más antiguo, con categoría y comentario desglosados del motivo, duración y
+      estado (`CERRADO` | `EN CURSO` | `SIN CIERRE`, ver `_estado_paro`).
+    - `maquinas`: semáforo por máquina. Ojo al criterio mixto, deliberado: `estado`,
+      `operador` y `paro_actual` son de AHORA (la máquina está parada o no en este
+      instante, sea cual sea el rango consultado), mientras `paros` y `segundos` son los
+      acumulados DEL RANGO. Incluye las máquinas activas del catálogo y, además,
+      cualquier máquina que aparezca en los paros del rango aunque ya esté dada de baja.
+    - `kpis`: totales del rango, más las máquinas paradas/produciendo ahora mismo.
+
+    `hora_desde`/`hora_hasta` (opcionales, "HH:MM") recortan por la hora de INICIO del
+    paro, igual que `estado_operativo` lo hace por la de inicio del turno; un paro que
+    empieza dentro de la franja cuenta entero aunque termine fuera. Cruzan medianoche
+    (ver `_filtro_horas`)."""
+    try:
+        inicio, fin = _rango(desde, hasta)
+        ahora = datetime.now()
+
+        q = (
+            db.query(ParoMaquinaDB, SesionTrabajoDB)
+            .outerjoin(SesionTrabajoDB, SesionTrabajoDB.id == ParoMaquinaDB.session_id)
+            .filter(ParoMaquinaDB.inicio_paro >= inicio, ParoMaquinaDB.inicio_paro < fin)
+        )
+        q = _aplicar_filtros(q, maquina, operador)
+        q = _aplicar_horas(q, ParoMaquinaDB.inicio_paro, hora_desde, hora_hasta)
+        filas = q.order_by(ParoMaquinaDB.inicio_paro.desc()).all()
+
+        paros = []
+        # Acumulados del rango por máquina y por categoría.
+        acum_maq = {}
+        acum_cat = {}
+        for p, s in filas:
+            estado, fin_efectivo, estimada = _estado_paro(p, s, ahora)
+            dur = _dur_segundos(p, fin_efectivo)
+            categoria, comentario = _desglosar_motivo(p.motivo)
+            nombre_maq = (s.maquina if s is not None else None) or "—"
+            producto = " · ".join([x for x in [
+                s.marca if s is not None else None,
+                s.presentacion if s is not None else None,
+                s.fragancia if s is not None else None,
+            ] if x]) or "—"
+            paros.append({
+                "id": p.id,
+                "sesion_id": p.session_id,
+                "maquina": nombre_maq,
+                "operador": (s.operador if s is not None else None) or "—",
+                "producto": producto,
+                "categoria": categoria,
+                "comentario": comentario,
+                "motivo": p.motivo or "",
+                "inicio": _fmt(p.inicio_paro),
+                "fin": _fmt(p.fin_paro),
+                "fin_estimado": _fmt(fin_efectivo) if estimada else None,
+                "estado": estado,
+                "en_curso": estado == "EN CURSO",
+                "duracion_segundos": dur,
+                "duracion_estimada": estimada,
+                "inicio_turno": _fmt(s.inicio_turno) if s is not None else None,
+                "fin_turno": _fmt(s.fin_turno) if s is not None else None,
+            })
+            a = acum_maq.setdefault(nombre_maq, {"paros": 0, "segundos": 0.0})
+            a["paros"] += 1
+            a["segundos"] += dur or 0.0
+            c = acum_cat.setdefault(categoria, {"paros": 0, "segundos": 0.0})
+            c["paros"] += 1
+            c["segundos"] += dur or 0.0
+
+        # --- Semáforo en vivo: turno abierto y paro abierto de cada máquina ---
+        sesiones_abiertas = {}
+        for s in db.query(SesionTrabajoDB).filter(SesionTrabajoDB.fin_turno.is_(None)).all():
+            # Si una máquina tuviera dos turnos abiertos (no debería), gana el más reciente.
+            previa = sesiones_abiertas.get(s.maquina)
+            if previa is None or (s.inicio_turno and previa.inicio_turno and s.inicio_turno > previa.inicio_turno):
+                sesiones_abiertas[s.maquina] = s
+        paros_abiertos = {}
+        if sesiones_abiertas:
+            ids = [s.id for s in sesiones_abiertas.values()]
+            for p in (db.query(ParoMaquinaDB)
+                        .filter(ParoMaquinaDB.session_id.in_(ids), ParoMaquinaDB.fin_paro.is_(None))
+                        .order_by(ParoMaquinaDB.inicio_paro.desc()).all()):
+                paros_abiertos.setdefault(p.session_id, p)
+
+        nombres = {m.nombre for m in db.query(MaquinaDB).filter(MaquinaDB.activa == True).all()}  # noqa: E712
+        tipos = {m.nombre: m.tipo for m in db.query(MaquinaDB).all()}
+        nombres |= {k for k in acum_maq.keys() if k != "—"}
+        nombres |= set(sesiones_abiertas.keys()) - {None}
+        if maquina:
+            nombres &= set(maquina)
+
+        maquinas = []
+        for nombre in sorted(nombres):
+            s = sesiones_abiertas.get(nombre)
+            p_act = paros_abiertos.get(s.id) if s is not None else None
+            if p_act is not None:
+                cat, com = _desglosar_motivo(p_act.motivo)
+                paro_actual = {
+                    "id": p_act.id,
+                    "categoria": cat,
+                    "comentario": com,
+                    "motivo": p_act.motivo or "",
+                    "inicio": _fmt(p_act.inicio_paro),
+                    "duracion_segundos": _dur_segundos(p_act, ahora),
+                }
+            else:
+                paro_actual = None
+            acum = acum_maq.get(nombre, {"paros": 0, "segundos": 0.0})
+            maquinas.append({
+                "maquina": nombre,
+                "tipo": tipos.get(nombre),
+                "estado": "PARO" if paro_actual else ("PRODUCIENDO" if s is not None else "SIN TURNO"),
+                "sesion_id": s.id if s is not None else None,
+                "operador": (s.operador if s is not None else None) or "—",
+                "inicio_turno": _fmt(s.inicio_turno) if s is not None else None,
+                "paro_actual": paro_actual,
+                "paros": acum["paros"],
+                "segundos": round(acum["segundos"], 1),
+            })
+
+        conocidas = [p["duracion_segundos"] for p in paros if p["duracion_segundos"] is not None]
+        total_seg = round(sum(conocidas), 1)
+        return {
+            "kpis": {
+                "total_paros": len(paros),
+                "en_curso": sum(1 for p in paros if p["estado"] == "EN CURSO"),
+                "sin_cierre": sum(1 for p in paros if p["estado"] == "SIN CIERRE"),
+                "segundos_total": total_seg,
+                "segundos_promedio": round(total_seg / len(conocidas), 1) if conocidas else None,
+                "maquinas_paradas": sum(1 for m in maquinas if m["estado"] == "PARO"),
+                "maquinas_produciendo": sum(1 for m in maquinas if m["estado"] == "PRODUCIENDO"),
+            },
+            "maquinas": maquinas,
+            "paros": paros,
+            "por_categoria": sorted(
+                [{"categoria": k, "paros": v["paros"], "segundos": round(v["segundos"], 1)}
+                 for k, v in acum_cat.items()],
+                key=lambda x: x["segundos"], reverse=True,
+            ),
+        }
+    except Exception as e:
+        logger.error(f"Error en /dashboard/paros: {e}")
+        raise HTTPException(status_code=500, detail="Error al obtener paros")
+
+
+@router.get("/comentarios_turno")
+def obtener_comentarios_turno(desde: str = Query(None), hasta: str = Query(None),
+                              limit: int = Query(30), db: Session = Depends(get_db)):
+    """Comentarios libres que los operarios escriben desde la tablet, del más reciente.
+
+    Mismo criterio que `/mantenimiento/checklist`: con `desde`/`hasta` devuelve los del
+    rango; sin ellos, los `limit` últimos (default 30) sin importar la fecha, para que la
+    tarjeta del dashboard nunca salga vacía si hoy no hubo comentarios. `limit` se aplica
+    también al rango como tope de seguridad."""
+    try:
+        lim = max(1, min(int(limit or 30), 200))
+        q = db.query(ComentarioTurnoDB)
+        if desde or hasta:
+            inicio, fin = _rango(desde, hasta)
+            q = q.filter(ComentarioTurnoDB.creado_en >= inicio, ComentarioTurnoDB.creado_en < fin)
+        filas = q.order_by(ComentarioTurnoDB.creado_en.desc()).limit(lim).all()
+        return [{
+            "id": c.id,
+            "sesion_id": c.session_id,
+            "maquina": c.maquina or "—",
+            "operador": c.operador or "—",
+            "texto": c.texto or "",
+            "creado_en": _fmt(c.creado_en),
+            "fecha": c.creado_en.strftime("%Y-%m-%d") if c.creado_en else None,
+            "hora": c.creado_en.strftime("%H:%M:%S") if c.creado_en else None,
+        } for c in filas]
+    except Exception as e:
+        logger.error(f"Error en /dashboard/comentarios_turno: {e}")
+        raise HTTPException(status_code=500, detail="Error al obtener comentarios de turno")
