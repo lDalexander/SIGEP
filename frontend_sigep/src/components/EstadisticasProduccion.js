@@ -1,69 +1,69 @@
-import React, { useState } from 'react';
-import { Card, Tabs, ProgressBar, Label, Badge, Estado } from './ui';
+import React from 'react';
+import { Card, ProgressBar, Label, Estado } from './ui';
 import { num, pct, plural } from '../lib/format';
 import useApi from '../lib/useApi';
+import { dimAutomatica, paramsDeFiltros, serializarParams } from '../lib/filtros';
 
-/* Agrupaciones que acepta /dashboard/estadisticas en `dim`. `resumen` es cómo se
-   nombra la agrupación en la línea de totales («por máquina»). */
-const DIMENSIONES = [
-  { value: 'maquina',                      label: 'Máquina',            resumen: 'por máquina' },
-  { value: 'operario',                     label: 'Operario',           resumen: 'por operario' },
-  { value: 'marca_presentacion',           label: 'Marca+Pres.',        resumen: 'por marca y presentación' },
-  { value: 'marca_presentacion_fragancia', label: 'Marca+Pres.+Frag.',  resumen: 'por marca, presentación y fragancia' },
-];
+/* Cómo se nombra cada agrupación en la línea de totales («por máquina»). Las claves son
+   los valores que acepta `dim` en /dashboard/estadisticas. */
+const RESUMEN_DIM = {
+  maquina: 'por máquina',
+  operario: 'por operario',
+  marca_presentacion: 'por marca y presentación',
+  marca_presentacion_fragancia: 'por marca, presentación y fragancia',
+};
 
 /**
- * «Estadísticas de producción» — ranking configurable por agrupación.
+ * «Estadísticas de producción» — ranking del período, segmentado como el resto del
+ * dashboard.
  *
- * Ya no tiene presets temporales propios (Hoy / 7d / 30d / Todo): usa el rango de
- * fechas y la franja horaria del filtro de la cabecera, igual que el resto del
- * dashboard, para que todas las tarjetas hablen siempre del mismo período. El
- * endpoint da precedencia a `desde`/`hasta` sobre su parámetro `rango`, así que basta
- * con enviarlos.
+ * No tiene controles propios, ni temporales ni de agrupación:
  *
- * Ojo con el criterio del endpoint: el rango de fechas filtra por la hora de inicio de
- * la sesión, mientras la franja horaria filtra por la hora del pallet. Con franja
- * activa, quien no produjo nada dentro de ella desaparece del ranking.
+ * - El **período** es el rango de fechas y la franja horaria de la cabecera, para que
+ *   todas las tarjetas hablen siempre del mismo. El endpoint da precedencia a
+ *   `desde`/`hasta` sobre su parámetro `rango`, así que basta con enviarlos.
+ * - Los **filtros** son los segmentadores de arriba. `/dashboard/estadisticas` los
+ *   acepta desde 2026-08-05; antes era el único endpoint con rango que no podía
+ *   segmentarse y la tarjeta lo avisaba con un badge.
+ * - La **agrupación** se deduce de lo segmentado (`dimAutomatica`), en vez de tener un
+ *   selector con los mismos nombres que los segmentadores a dos dedos de distancia.
  *
- * `sinSegmentar` avisa de que hay segmentadores activos en el dashboard que **esta**
- * tarjeta no está aplicando: `/dashboard/estadisticas` es el único de los endpoints
- * con rango que no acepta `maquina`/`operador`/`marca`/`presentacion`/`fragancia`, y un
- * ranking que ignora en silencio el filtro puesto arriba se leería como si lo aplicara.
+ * Ojo con el criterio del endpoint, que es mixto y **de antes** de este cambio: el rango
+ * de fechas filtra por la hora de inicio de la sesión, mientras la franja horaria filtra
+ * por la hora del pallet. De ahí que su total no coincida con el KPI de producción, que
+ * cuenta por hora del pallet: no es el filtro, es qué se considera «del día».
  */
 export default function EstadisticasProduccion({
-  apiBase, desde, hasta, horaDesde, horaHasta, periodo, intervalo, sinSegmentar = false,
+  apiBase, desde, hasta, horaDesde, horaHasta, periodo, intervalo, filtros,
 }) {
-  const [dim, setDim] = useState('maquina');
+  const dim = dimAutomatica(filtros);
 
   const { datos, cargando, error } = useApi(`${apiBase}/dashboard/estadisticas`, {
-    /* Las horas solo se envían si están puestas: sin ellas el endpoint responde como
-       siempre. `useApi` serializa los params, así que cambiar el rango recarga solo. */
+    /* Las horas y los filtros solo se envían si están puestos: sin ellos el endpoint
+       responde como siempre. `useApi` compara los params por valor, así que cambiar el
+       rango o un segmentador recarga la tarjeta sola. */
     params: {
       dim,
       desde,
       hasta,
       ...(horaDesde ? { hora_desde: horaDesde } : {}),
       ...(horaHasta ? { hora_hasta: horaHasta } : {}),
+      ...paramsDeFiltros(filtros),
     },
+    /* Los filtros son listas: sin este serializador viajarían como `maquina[]=A`, que el
+       backend ignora — el ranking saldría sin segmentar aparentando estarlo. */
+    serializar: serializarParams,
     intervalo,
   });
 
   const items = datos?.items || [];
   const maximo = items.length > 0 ? Math.max(...items.map((i) => i.pacas)) : 0;
-  const etiquetaDim = DIMENSIONES.find((d) => d.value === dim)?.resumen || '';
+  const etiquetaDim = RESUMEN_DIM[dim] || '';
 
   return (
     <Card
       titulo="Estadísticas de producción"
-      meta={
-        <div className="flex flex-wrap items-center gap-3">
-          <Tabs items={DIMENSIONES} value={dim} onChange={setDim} />
-          <Label caja="normal" className="shrink-0">{periodo}</Label>
-          {sinSegmentar && (
-            <Badge tono="amber">sin segmentar</Badge>
-          )}
-        </div>
-      }
+      meta={<Label caja="normal" className="shrink-0">{periodo}</Label>}
     >
       {/* Línea de totales */}
       <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1 pb-4">

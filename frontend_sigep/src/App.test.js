@@ -357,7 +357,7 @@ test('«Todo el día» quita la franja sin tener que volver a pulsar Cargar', as
    Antes tenía sus propios presets (Hoy / 7d / 30d / Todo) y no miraba el rango
    global, así que podía contradecir al resto del dashboard. */
 
-test('las estadísticas usan el rango global y ya no tienen presets propios', async () => {
+test('las estadísticas no tienen ningún control propio: ni presets ni agrupaciones', async () => {
   render(<App />);
   await screen.findByText(/1 sesión · 28\.2%/);
 
@@ -365,14 +365,16 @@ test('las estadísticas usan el rango global y ya no tienen presets propios', as
   expect(paramsDe('estadisticas')).toMatchObject({ dim: 'maquina', desde: expect.any(String), hasta: expect.any(String) });
   expect(paramsDe('estadisticas')).not.toHaveProperty('rango');
 
+  // Ni los presets temporales de la versión vieja...
   ['Hoy', '7d', '30d', 'Todo'].forEach((etiqueta) => {
     expect(screen.queryByRole('tab', { name: etiqueta })).not.toBeInTheDocument();
   });
-
-  // Las agrupaciones, que son lo que se quería conservar, siguen ahí y funcionan.
-  fireEvent.click(screen.getByRole('tab', { name: 'Operario' }));
-  expect(await screen.findByText('por operario')).toBeInTheDocument();
-  expect(paramsDe('estadisticas')).toMatchObject({ dim: 'operario' });
+  // ...ni los tabs de agrupación, que duplicaban los nombres de los segmentadores.
+  ['Máquina', 'Operario', 'Marca+Pres.', 'Marca+Pres.+Frag.'].forEach((etiqueta) => {
+    expect(screen.queryByRole('tab', { name: etiqueta })).not.toBeInTheDocument();
+  });
+  // Sin segmentar, la agrupación por defecto es por máquina.
+  expect(screen.getByText('por máquina')).toBeInTheDocument();
 });
 
 test('el rango de fechas de la cabecera arrastra a las estadísticas', async () => {
@@ -545,7 +547,9 @@ test('desde paros se vuelve al dashboard sin recargar, por el botón o por el lo
    que comprobar las dos cosas: que sin selección **no** viajan, y que con selección
    llegan como lista a los cuatro endpoints que sí los aceptan. */
 
-const ENDPOINTS_SEGMENTABLES = ['kpis', 'produccion_hora', 'estado_operativo', 'top_produccion'];
+const ENDPOINTS_SEGMENTABLES = [
+  'kpis', 'produccion_hora', 'estado_operativo', 'top_produccion', 'estadisticas',
+];
 
 /** Marca un valor en el desplegable de una dimensión, abriéndolo si hace falta.
     El panel se queda abierto tras seleccionar —es multi-selección—, así que marcar dos
@@ -662,17 +666,80 @@ test('cada valor activo tiene su chip para quitarlo sin abrir el desplegable', a
   await waitFor(() => expect(paramsDe('kpis')).not.toHaveProperty('operador'));
 });
 
-/* `/dashboard/estadisticas` es el único endpoint con rango que NO acepta los filtros.
-   Un ranking que los ignorara en silencio se leería como si los aplicara. */
-test('las estadísticas avisan de que no están segmentadas y no reciben los filtros', async () => {
+/* Las estadísticas también se segmentan (parámetros añadidos al endpoint el 2026-08-05)
+   y su agrupación se deduce de lo segmentado, ya que la tarjeta no tiene selector. */
+test('las estadísticas reciben los filtros como el resto del dashboard', async () => {
   render(<App />);
   await screen.findByText('2.272');
 
+  await segmentar('Marca', 'ULTREX');
+  await segmentar('Marca', 'TORBELLINO');
+
+  await waitFor(() => {
+    expect(paramsDe('estadisticas')).toMatchObject({ marca: ['ULTREX', 'TORBELLINO'] });
+  });
+  // Ya no hay nada que avisar: la tarjeta sí aplica la segmentación.
   expect(screen.queryByText('sin segmentar')).not.toBeInTheDocument();
+});
+
+test('segmentar por máquina agrupa las estadísticas por operario', async () => {
+  render(<App />);
+  await screen.findByText('2.272');
 
   await segmentar('Máquina', 'Máquina 7');
 
-  expect(await screen.findByText('sin segmentar')).toBeInTheDocument();
+  // Filtrada la máquina, lo que queda por saber es QUIÉN produjo en ella.
+  await waitFor(() => {
+    expect(paramsDe('estadisticas')).toMatchObject({ dim: 'operario', maquina: ['Máquina 7'] });
+  });
+  expect(await screen.findByText('por operario')).toBeInTheDocument();
+});
+
+test('segmentar por operario agrupa las estadísticas por marca y presentación', async () => {
+  render(<App />);
+  await screen.findByText('2.272');
+
+  await segmentar('Operario', 'ANTHONY MERCADO');
+
+  // Filtrado el operario, lo que queda por saber es QUÉ producía.
+  await waitFor(() => {
+    expect(paramsDe('estadisticas')).toMatchObject({ dim: 'marca_presentacion' });
+  });
+  expect(await screen.findByText('por marca y presentación')).toBeInTheDocument();
+});
+
+test('con máquina y operario a la vez manda el operario', async () => {
+  render(<App />);
+  await screen.findByText('2.272');
+
+  await segmentar('Máquina', 'Máquina 7');
+  await waitFor(() => expect(paramsDe('estadisticas')).toMatchObject({ dim: 'operario' }));
+
+  await segmentar('Operario', 'ANTHONY MERCADO');
+
+  // Con los dos fijados, lo único que queda por desglosar es el producto.
+  await waitFor(() => expect(paramsDe('estadisticas')).toMatchObject({ dim: 'marca_presentacion' }));
+});
+
+test('segmentar solo por marca deja la agrupación por máquina', async () => {
+  render(<App />);
+  await screen.findByText('2.272');
+
+  await segmentar('Fragancia', 'Floral');
+
+  await waitFor(() => expect(paramsDe('estadisticas')).toMatchObject({ fragancia: ['Floral'] }));
+  expect(paramsDe('estadisticas')).toMatchObject({ dim: 'maquina' });
+});
+
+test('al limpiar los filtros la agrupación vuelve a máquina', async () => {
+  render(<App />);
+  await screen.findByText('2.272');
+
+  await segmentar('Máquina', 'Máquina 9');
+  await waitFor(() => expect(paramsDe('estadisticas')).toMatchObject({ dim: 'operario' }));
+
+  fireEvent.click(screen.getByRole('button', { name: /limpiar \(1\)/i }));
+  await waitFor(() => expect(paramsDe('estadisticas')).toMatchObject({ dim: 'maquina' }));
   expect(paramsDe('estadisticas')).not.toHaveProperty('maquina');
 });
 

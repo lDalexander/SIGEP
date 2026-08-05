@@ -21,7 +21,7 @@ import { Card, Label } from './components/ui';
 import { fechaISO } from './lib/format';
 import useApi from './lib/useApi';
 import {
-  SIN_FILTROS, paramsDeFiltros, serializarParams, contarFiltros, resumenFiltros,
+  SIN_FILTROS, paramsDeFiltros, serializarParams, resumenFiltros,
 } from './lib/filtros';
 
 /* Ruta relativa: en producción la resuelve el proxy de nginx (`/api/` ->
@@ -34,13 +34,13 @@ const POLL_INTERVAL = 15000;
    el menú sin recargar la página y sin repetir cinco DISTINCT cada 15 segundos. */
 const OPCIONES_INTERVAL = 60000;
 
-/* Qué tarjetas segmenta de verdad la barra de filtros. `estadisticas` no acepta los
-   parámetros de segmentación, y `logs`, checklists, insumos y comentarios no aceptan
-   ninguno: se dice explícitamente en la UI en vez de dejar que se deduzca de las
-   cifras, que es como se leería un filtro por aplicado sin estarlo. */
+/* Qué tarjetas segmenta de verdad la barra de filtros: las cinco cuyos endpoints aceptan
+   los parámetros. `logs`, checklists, insumos, comentarios y los Excel no los aceptan, y
+   se dice explícitamente en la UI en vez de dejar que se deduzca de las cifras, que es
+   como se leería un filtro por aplicado sin estarlo. */
 const ALCANCE_SEGMENTACION =
-  'segmenta KPI, producción, estado operativo y top de marcas; estadísticas, actividad, '
-  + 'checklists, insumos y comentarios salen sin segmentar';
+  'segmenta KPI, producción, estado operativo, estadísticas y top de marcas; actividad, '
+  + 'checklists, insumos, comentarios y los Excel salen sin segmentar';
 
 /* Vista según la URL. Sin react-router: la navegación es estado + History API, así que
    la traducción ruta -> vista vive en un solo sitio y la usan el arranque y el botón
@@ -256,7 +256,6 @@ function App() {
      está aplicando. */
   const segmentacion = resumenFiltros(filtros);
   const periodoSegmentado = segmentacion ? `${periodoConHoras} · ${segmentacion}` : periodoConHoras;
-  const haySegmentacion = contarFiltros(filtros) > 0;
 
   /* Administración sustituye toda la página: lleva cabecera y ancho propios. */
   if (vista === 'admin') {
@@ -357,9 +356,9 @@ function App() {
                   hasta={aplicado.hasta}
                   horaDesde={aplicado.horaDesde}
                   horaHasta={aplicado.horaHasta}
-                  periodo={periodoConHoras}
+                  periodo={periodoSegmentado}
                   intervalo={POLL_INTERVAL}
-                  sinSegmentar={haySegmentacion}
+                  filtros={filtros}
                 />
                 <ComentariosTurno apiBase={API_BASE} intervalo={POLL_INTERVAL} />
               </div>

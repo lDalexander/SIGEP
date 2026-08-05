@@ -67,6 +67,27 @@ export function serializarParams(params) {
 }
 
 /**
+ * Agrupación del ranking de «Estadísticas de producción» deducida de lo segmentado.
+ *
+ * La tarjeta ya no tiene selector propio de agrupación: tener dos controles con los
+ * mismos nombres («Máquina», «Operario») a dos dedos de distancia, uno para filtrar y
+ * otro para agrupar, era la parte confusa. Ahora la agrupación responde a la pregunta
+ * que deja abierta el filtro: si acotas máquinas, lo que falta saber es **quién**
+ * produjo en ellas; si acotas operarios, **qué** producían.
+ *
+ * El orden de las reglas es la precedencia, y al filtrar por máquina Y operario gana
+ * el operario: con los dos ya fijados, lo único que queda por desglosar es el producto.
+ *
+ * Devuelve un valor de `dim` de `/dashboard/estadisticas`; nunca uno inventado, porque
+ * el endpoint responde 400 a los que no conoce.
+ */
+export function dimAutomatica(filtros) {
+  if (filtros?.operador?.length > 0) return 'marca_presentacion';
+  if (filtros?.maquina?.length > 0) return 'operario';
+  return 'maquina';
+}
+
+/**
  * Resumen legible de la segmentación activa, para el metadato de las tarjetas.
  * `null` cuando no hay nada seleccionado — el llamador decide qué poner en su lugar.
  */

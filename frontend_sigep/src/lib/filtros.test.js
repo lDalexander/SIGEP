@@ -1,5 +1,6 @@
 import {
-  DIMENSIONES, SIN_FILTROS, contarFiltros, paramsDeFiltros, serializarParams, resumenFiltros,
+  DIMENSIONES, SIN_FILTROS, contarFiltros, paramsDeFiltros, serializarParams,
+  resumenFiltros, dimAutomatica,
 } from './filtros';
 
 /* Estas cinco claves son a la vez el query-param del backend y la clave que devuelve
@@ -47,6 +48,26 @@ test('los valores con espacios y acentos se codifican para la URL', () => {
 test('los valores vacíos o nulos no ensucian la query', () => {
   expect(serializarParams({ desde: '2026-08-05', hora_desde: '', hora_hasta: null, maquina: [] }))
     .toBe('desde=2026-08-05');
+});
+
+/* La agrupación del ranking responde a lo que el filtro deja abierto: acotada la
+   máquina, falta saber quién; acotado el operario, falta saber qué. */
+test('la agrupación automática responde a lo que se ha segmentado', () => {
+  expect(dimAutomatica(SIN_FILTROS)).toBe('maquina');
+  expect(dimAutomatica({ ...SIN_FILTROS, maquina: ['Máquina 7'] })).toBe('operario');
+  expect(dimAutomatica({ ...SIN_FILTROS, operador: ['A'] })).toBe('marca_presentacion');
+  // Marca, presentación y fragancia no cambian la agrupación: siguen siendo máquinas.
+  expect(dimAutomatica({ ...SIN_FILTROS, marca: ['ULTREX'] })).toBe('maquina');
+  expect(dimAutomatica({ ...SIN_FILTROS, fragancia: ['Floral'] })).toBe('maquina');
+  // Con máquina y operario manda el operario: lo que queda es el producto.
+  expect(dimAutomatica({ ...SIN_FILTROS, maquina: ['Máquina 7'], operador: ['A'] }))
+    .toBe('marca_presentacion');
+});
+
+test('la agrupación automática nunca devuelve un `dim` que el endpoint rechace', () => {
+  const validos = ['maquina', 'operario', 'marca_presentacion', 'marca_presentacion_fragancia'];
+  expect(validos).toContain(dimAutomatica(undefined));
+  expect(validos).toContain(dimAutomatica({}));
 });
 
 /* Con un solo valor se nombra («Máquina 7» dice más que «1 máquina»); con varios se

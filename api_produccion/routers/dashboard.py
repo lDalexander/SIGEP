@@ -367,6 +367,9 @@ def obtener_opciones_filtros(desde: str = Query(None), hasta: str = Query(None),
 def obtener_estadisticas(dim: str = "maquina", rango: str = "semana",
                          desde: str = Query(None), hasta: str = Query(None),
                          hora_desde: str = _FiltroHoraDesde, hora_hasta: str = _FiltroHoraHasta,
+                         maquina: List[str] = _FiltroMaquina, operador: List[str] = _FiltroOperador,
+                         marca: List[str] = _FiltroMarca, presentacion: List[str] = _FiltroPresentacion,
+                         fragancia: List[str] = _FiltroFragancia,
                          db: Session = Depends(get_db)):
     """Estadisticas de produccion agregadas por dimension y rango temporal.
 
@@ -375,6 +378,12 @@ def obtener_estadisticas(dim: str = "maquina", rango: str = "semana",
     que el dashboard comparta el mismo rango global); si no, se usa el preset `rango`
     ("hoy" | "semana" | "mes" | "todo").
     Devuelve {dim, rango, total_pacas, total_sesiones, items:[{etiqueta,pacas,sesiones,pct}]}.
+
+    `maquina`/`operador`/`marca`/`presentacion`/`fragancia` (opcionales, repetibles) son
+    los mismos filtros que ya aceptaban `kpis`, `produccion_hora`, `estado_operativo` y
+    `top_produccion`, con la misma semántica: OR dentro de cada dimensión (`IN`), AND
+    entre dimensiones. Se añadieron para que la web pueda segmentar este ranking igual
+    que el resto del dashboard; sin ellos la consulta es exactamente la de antes.
 
     `hora_desde`/`hora_hasta` (opcionales, "HH:MM") recortan a una franja del día. Ojo
     al criterio, que aquí es mixto a propósito: el rango de FECHAS filtra por
@@ -434,6 +443,7 @@ def obtener_estadisticas(dim: str = "maquina", rango: str = "semana",
         if hasta_dt is not None:
             q = q.filter(SesionTrabajoDB.inicio_turno < hasta_dt)
         q = _aplicar_horas(q, PalletDB.fecha_hora, hora_desde, hora_hasta)
+        q = _aplicar_filtros(q, maquina, operador, marca, presentacion, fragancia)
         filas = q.group_by(etiqueta).order_by(suma.desc()).all()
 
         items = []
