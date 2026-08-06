@@ -15,15 +15,17 @@ export default function Card({
   titulo,
   meta,
   sinPad = false,
+  etiqueta,
   className = '',
   bodyClassName = '',
   children,
 }) {
   return (
     /* El título nombra la región: así cada tarjeta es localizable por su nombre
-       accesible, tanto para un lector de pantalla como para los tests. */
+       accesible, tanto para un lector de pantalla como para los tests. `etiqueta`
+       es para las tarjetas que dibujan su propia cabecera y no pasan `titulo`. */
     <section
-      aria-label={typeof titulo === 'string' ? titulo : undefined}
+      aria-label={etiqueta || (typeof titulo === 'string' ? titulo : undefined)}
       className={`sig-card animate-fade-in overflow-hidden ${className}`}
     >
       {(titulo || meta) && (

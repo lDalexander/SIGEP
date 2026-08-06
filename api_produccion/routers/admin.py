@@ -18,7 +18,7 @@ import os
 import secrets
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Header, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Header, Query
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -42,8 +42,17 @@ from models import (
     EstadoTabletDB,
     PedidoBodegaDB,
     EntregaProactivaDB,
+    ParoMaquinaDB,
+    ComentarioTurnoDB,
+    ReporteAppDB,
 )
 from routers.tablets import enviar_payload_ws, UMBRAL_OFFLINE_SEGUNDOS
+# Los estados de pedido se importan de `operaciones` en vez de repetirlos aquí: el
+# cierre manual de un turno tiene que dejar los pedidos exactamente igual que el
+# cierre desde la tablet, y si allí cambian, aquí cambian solos.
+from routers.operaciones import ESTADOS_PEDIDO_ACTIVO, ESTADO_PEDIDO_CIERRE_TURNO
+from services import seguridad
+from ws_manager import manager
 
 router = APIRouter(prefix="/api/admin", tags=["Administración"])
 
@@ -60,22 +69,77 @@ class AuthIn(BaseModel):
 
 
 def require_admin(x_admin_token: str = Header(default=None)):
-    """Dependencia: exige un token admin válido en la cabecera X-Admin-Token."""
+    """Dependencia: exige un token admin válido en la cabecera X-Admin-Token.
+
+    Solo autentica. Para exigir además un nivel concreto, ver `require_nivel`.
+    """
     if not x_admin_token or x_admin_token not in _TOKENS:
         raise HTTPException(status_code=401, detail="Sesión admin requerida o expirada")
     return _TOKENS[x_admin_token]
 
 
+# ----------------------------------------------------------------------------
+# Niveles de acceso (2026-08-06)
+# ----------------------------------------------------------------------------
+# `administradores.nivel_acceso` existía desde siempre pero NO controlaba nada: bastaba
+# un token válido para poder hacer cualquier cosa. Aquí se le da efecto.
+#
+# El control vive en el BACKEND a propósito. La web oculta lo que no corresponde, pero
+# esconder un botón no es un permiso: con el token en la mano, cualquiera puede llamar
+# al endpoint a mano.
+#
+# Los tres niveles operativos son los que ya existen en la tabla (SUPERADMIN,
+# ADMINPLANTA, ADMINBODEGA, más ADMIN por compatibilidad); CONSULTA es nuevo y es de
+# solo lectura. Ojo: `GET /api/admin/supervisores` (que alimenta el selector de
+# supervisor de las tablets) filtra por los niveles operativos, así que un usuario
+# CONSULTA no aparece ahí — es lo que se quiere.
+
+NIVEL_SUPERADMIN = "SUPERADMIN"
+NIVEL_CONSULTA = "CONSULTA"
+NIVELES_OPERATIVOS = {NIVEL_SUPERADMIN, "ADMIN", "ADMINPLANTA", "ADMINBODEGA"}
+NIVELES_VALIDOS = NIVELES_OPERATIVOS | {NIVEL_CONSULTA}
+
+
+def require_nivel(*permitidos):
+    """Fabrica una dependencia que exige uno de esos niveles. 403 si no lo tiene."""
+    def dependencia(ctx=Depends(require_admin)):
+        if ctx.get("nivel") not in permitidos:
+            raise HTTPException(
+                status_code=403,
+                detail="Tu nivel de acceso no permite esta acción",
+            )
+        return ctx
+    return dependencia
+
+
+# Escribir (corregir sesiones, operarios, jerarquía, mensajes, cerrar turnos).
+require_operativo = require_nivel(*NIVELES_OPERATIVOS)
+# Acciones irreversibles o de administración del propio sistema.
+require_superadmin = require_nivel(NIVEL_SUPERADMIN)
+
+
 @router.post("/auth")
 def admin_auth(datos: AuthIn, db: Session = Depends(get_db)):
-    """Valida credenciales admin y emite un token de sesión."""
+    """Valida credenciales admin y emite un token de sesión.
+
+    La contraseña se comprueba con `services.seguridad`, que acepta tanto el hash
+    PBKDF2 como el texto plano heredado; en el segundo caso la reescribe hasheada
+    aquí mismo, así que la tabla se migra sola conforme cada admin entra.
+    """
     admin = (
         db.query(AdministradorDB)
         .filter(AdministradorDB.username == datos.nombre, AdministradorDB.activo == True)
         .first()
     )
-    if not admin or admin.password != datos.pin:
+    correcta, necesita_rehash = (False, False)
+    if admin:
+        correcta, necesita_rehash = seguridad.verificar(datos.pin, admin.password)
+    if not admin or not correcta:
         raise HTTPException(status_code=401, detail="Usuario o contraseña incorrectos")
+    if necesita_rehash:
+        admin.password = seguridad.hashear(datos.pin)
+        db.commit()
+        logger.info(f"Contraseña de {admin.username} migrada a hash en el login")
     token = secrets.token_urlsafe(32)
     _TOKENS[token] = {"username": admin.username, "nivel": admin.nivel_acceso}
     logger.info(f"Admin login: {admin.username} ({admin.nivel_acceso})")
@@ -113,7 +177,7 @@ def listar_operadores(tipo: str = Query(None), db: Session = Depends(get_db), ct
 
 
 @router.post("/operadores")
-def crear_operador(datos: OperadorIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def crear_operador(datos: OperadorIn, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
     nombre = (datos.nombre or "").strip()
     if not nombre:
         raise HTTPException(status_code=400, detail="El nombre es obligatorio")
@@ -137,7 +201,7 @@ def crear_operador(datos: OperadorIn, db: Session = Depends(get_db), ctx=Depends
 
 
 @router.put("/operadores/{operador_id}")
-def actualizar_operador(operador_id: int, datos: OperadorUpdate, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def actualizar_operador(operador_id: int, datos: OperadorUpdate, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
     op = db.query(OperadorDB).filter(OperadorDB.id == operador_id).first()
     if not op:
         raise HTTPException(status_code=404, detail="Operario no encontrado")
@@ -159,7 +223,7 @@ def actualizar_operador(operador_id: int, datos: OperadorUpdate, db: Session = D
 
 
 @router.delete("/operadores/{operador_id}")
-def eliminar_operador(operador_id: int, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def eliminar_operador(operador_id: int, db: Session = Depends(get_db), ctx=Depends(require_superadmin)):
     op = db.query(OperadorDB).filter(OperadorDB.id == operador_id).first()
     if not op:
         raise HTTPException(status_code=404, detail="Operario no encontrado")
@@ -226,7 +290,7 @@ def listar_sesiones(desde: str = Query(None), hasta: str = Query(None), db: Sess
 
 
 @router.put("/sesiones/{sesion_id}")
-def actualizar_sesion(sesion_id: int, datos: SesionUpdate, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def actualizar_sesion(sesion_id: int, datos: SesionUpdate, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
     s = db.query(SesionTrabajoDB).filter(SesionTrabajoDB.id == sesion_id).first()
     if not s:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
@@ -240,6 +304,137 @@ def actualizar_sesion(sesion_id: int, datos: SesionUpdate, db: Session = Depends
             "presentacion": s.presentacion, "fragancia": s.fragancia}
 
 
+# ----------------------------------------------------------------------------
+# Cerrar un turno a mano / eliminar una sesión  (2026-08-06)
+# ----------------------------------------------------------------------------
+# Pasa a menudo que un grupo se va sin pulsar «finalizar» en la tablet, y el turno
+# queda abierto: `iniciar_turno` rechaza al grupo siguiente con «Esta máquina ya
+# tiene un turno activo». Hasta ahora la única salida era esperar al garbage
+# collector de `tasks.py`, que cierra a las 13 h.
+
+@router.post("/sesiones/{sesion_id}/cerrar")
+def cerrar_sesion(sesion_id: int, background_tasks: BackgroundTasks,
+                  db: Session = Depends(get_db), ctx=Depends(require_operativo)):
+    """Cierra un turno que quedó abierto, dejando constancia de quién lo hizo.
+
+    Hace lo MISMO que el `POST /api/finalizar_turno` que usa la tablet
+    (`operaciones.py`), y por eso el código es paralelo: si solo se pusiera
+    `fin_turno`, quedarían detrás un paro abierto que crecería sin fin y pedidos de
+    insumo que ningún operario va a confirmar ya.
+
+      1. cierra el paro abierto, si lo hay —esto además evita el «SIN CIERRE» que
+         deja el garbage collector, que sí olvida los paros—;
+      2. cierra los pedidos de insumo vivos y avisa al insumista por WebSocket, para
+         que desaparezcan de su bandeja al instante;
+      3. fija `fin_turno` y `duracion_minutos`;
+      4. escribe en `observaciones` quién lo cerró, en el mismo campo y con el mismo
+         criterio que el GC («CERRADO AUTOMATICAMENTE POR EL SISTEMA», tasks.py).
+
+    OJO con la tablet: `registrar_pallet` no comprueba `fin_turno`, así que si la
+    tablet de esa máquina sigue trabajando seguirá mandando pallets a una sesión ya
+    cerrada, y su botón de finalizar recibirá un 400. Es una acción pensada para
+    turnos huérfanos; la web lo advierte antes de confirmar.
+    """
+    sesion = db.query(SesionTrabajoDB).filter(SesionTrabajoDB.id == sesion_id).first()
+    if not sesion:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+    if sesion.fin_turno is not None:
+        raise HTTPException(status_code=400, detail="Ese turno ya está finalizado")
+
+    ahora = datetime.now()
+    usuario = ctx.get("username") or "admin"
+
+    paro_activo = db.query(ParoMaquinaDB).filter(
+        ParoMaquinaDB.session_id == sesion_id,
+        ParoMaquinaDB.fin_paro.is_(None),
+    ).first()
+    if paro_activo:
+        paro_activo.fin_paro = ahora
+        paro_activo.duracion_segundos = round(
+            (ahora - paro_activo.inicio_paro).total_seconds(), 2
+        )
+
+    pedidos_activos = db.query(PedidoBodegaDB).filter(
+        PedidoBodegaDB.session_id == sesion_id,
+        PedidoBodegaDB.estado.in_(ESTADOS_PEDIDO_ACTIVO),
+    ).all()
+    for p in pedidos_activos:
+        p.estado = ESTADO_PEDIDO_CIERRE_TURNO
+
+    sesion.fin_turno = ahora
+    sesion.duracion_minutos = (ahora - sesion.inicio_turno).total_seconds() / 60
+    # String(255): el nombre de usuario es corto, pero se recorta por si acaso.
+    sesion.observaciones = f"CERRADO MANUALMENTE POR: {usuario}"[:255]
+    db.commit()
+
+    # Mismo evento y mismo mecanismo que finalizar_turno: la app ya sabe manejarlo y
+    # quita el pedido de la bandeja del insumista. Va en background porque un
+    # WebSocket caído no puede tumbar el cierre del turno, que es lo importante; el
+    # refresco periódico de la bandeja es el respaldo.
+    for p in pedidos_activos:
+        background_tasks.add_task(
+            manager.broadcast_to_tipo,
+            (p.categoria or "EMPAQUE").upper(),
+            {"evento": "pedido_aceptado", "solicitud_id": p.id},
+        )
+
+    logger.info(
+        f"Turno cerrado manualmente: sesión {sesion_id} ({sesion.maquina} · "
+        f"{sesion.operador}) por {usuario} — {round(sesion.duracion_minutos, 1)} min, "
+        f"{len(pedidos_activos)} pedido(s) cerrado(s), "
+        f"paro abierto: {'sí' if paro_activo else 'no'}"
+    )
+    return {
+        "id": sesion.id,
+        "estado": "Finalizado",
+        "fin": sesion.fin_turno.strftime("%H:%M"),
+        "duracion_minutos": round(sesion.duracion_minutos, 2),
+        "observaciones": sesion.observaciones,
+        "paro_cerrado": bool(paro_activo),
+        "pedidos_cerrados": len(pedidos_activos),
+    }
+
+
+@router.delete("/sesiones/{sesion_id}")
+def eliminar_sesion(sesion_id: int, db: Session = Depends(get_db), ctx=Depends(require_superadmin)):
+    """Borra una sesión y TODO lo que cuelga de ella. Irreversible, solo SUPERADMIN.
+
+    Se borra en cascada a propósito. Dejar solo la fila de la sesión sería peor que
+    no borrar: los pallets se cuentan en el dashboard por `pallets.fecha_hora`, sin
+    pasar por la sesión, así que seguirían sumando en los KPIs y en los Excel
+    mientras el turno del que salieron ya no existiría.
+
+    Se devuelve el recuento de lo borrado por tabla para que quede en el log y en la
+    respuesta: es la única traza que queda.
+    """
+    sesion = db.query(SesionTrabajoDB).filter(SesionTrabajoDB.id == sesion_id).first()
+    if not sesion:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+
+    resumen = {
+        "maquina": sesion.maquina,
+        "operador": sesion.operador,
+        "inicio": sesion.inicio_turno.strftime("%Y-%m-%d %H:%M") if sesion.inicio_turno else "",
+    }
+    borrado = {
+        "pallets": db.query(PalletDB).filter(PalletDB.session_id == sesion_id).delete(synchronize_session=False),
+        "paros": db.query(ParoMaquinaDB).filter(ParoMaquinaDB.session_id == sesion_id).delete(synchronize_session=False),
+        "pedidos": db.query(PedidoBodegaDB).filter(PedidoBodegaDB.session_id == sesion_id).delete(synchronize_session=False),
+        "comentarios": db.query(ComentarioTurnoDB).filter(ComentarioTurnoDB.session_id == sesion_id).delete(synchronize_session=False),
+        "reportes": db.query(ReporteAppDB).filter(ReporteAppDB.session_id == sesion_id).delete(synchronize_session=False),
+        "mensajes": db.query(MensajeTabletDB).filter(MensajeTabletDB.sesion_id == sesion_id).delete(synchronize_session=False),
+    }
+    db.delete(sesion)
+    db.commit()
+
+    logger.warning(
+        f"SESIÓN ELIMINADA: #{sesion_id} ({resumen['maquina']} · {resumen['operador']} · "
+        f"{resumen['inicio']}) por {ctx.get('username')} — "
+        + ", ".join(f"{k}: {v}" for k, v in borrado.items())
+    )
+    return {"eliminada": sesion_id, "sesion": resumen, "borrado": borrado}
+
+
 @router.get("/sesiones/{sesion_id}/pallets")
 def listar_pallets(sesion_id: int, db: Session = Depends(get_db), ctx=Depends(require_admin)):
     pallets = db.query(PalletDB).filter(PalletDB.session_id == sesion_id).order_by(PalletDB.id.asc()).all()
@@ -248,7 +443,7 @@ def listar_pallets(sesion_id: int, db: Session = Depends(get_db), ctx=Depends(re
 
 
 @router.put("/pallets/{pallet_id}")
-def actualizar_pallet(pallet_id: int, datos: PalletUpdate, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def actualizar_pallet(pallet_id: int, datos: PalletUpdate, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
     if datos.cantidad_pacas < 0:
         raise HTTPException(status_code=400, detail="La cantidad no puede ser negativa")
     p = db.query(PalletDB).filter(PalletDB.id == pallet_id).first()
@@ -299,7 +494,7 @@ def listar_checklists(desde: str = Query(None), hasta: str = Query(None), db: Se
 
 
 @router.put("/checklists/{checklist_id}")
-def actualizar_checklist(checklist_id: int, datos: ChecklistUpdate, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def actualizar_checklist(checklist_id: int, datos: ChecklistUpdate, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
     c = db.query(MantenimientoChecklistDB).filter(MantenimientoChecklistDB.id == checklist_id).first()
     if not c:
         raise HTTPException(status_code=404, detail="Checklist no encontrado")
@@ -381,7 +576,7 @@ def listar_maquina_productos(db: Session = Depends(get_db), ctx=Depends(require_
 
 
 @router.post("/maquina_productos")
-def crear_maquina_producto(datos: MaquinaProductoIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def crear_maquina_producto(datos: MaquinaProductoIn, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
     maquina = db.query(MaquinaDB).filter(MaquinaDB.id == datos.maquina_id).first()
     if not maquina:
         raise HTTPException(status_code=404, detail="Máquina no encontrada")
@@ -411,7 +606,7 @@ def crear_maquina_producto(datos: MaquinaProductoIn, db: Session = Depends(get_d
 
 
 @router.put("/maquina_productos/{fila_id}")
-def actualizar_maquina_producto(fila_id: int, datos: MaquinaProductoUpdate, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def actualizar_maquina_producto(fila_id: int, datos: MaquinaProductoUpdate, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
     fila = db.query(MaquinaProductoDB).filter(MaquinaProductoDB.id == fila_id).first()
     if not fila:
         raise HTTPException(status_code=404, detail="Combinación no encontrada")
@@ -534,7 +729,7 @@ def listar_maquina_fragancias(db: Session = Depends(get_db), ctx=Depends(require
 
 
 @router.post("/maquina_fragancias")
-def crear_maquina_fragancia(datos: MaquinaFraganciaIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def crear_maquina_fragancia(datos: MaquinaFraganciaIn, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
     """Asigna una fragancia a (máquina, marca). Reactiva si existía dada de baja."""
     maquina = db.query(MaquinaDB).filter(MaquinaDB.id == datos.maquina_id).first()
     if not maquina:
@@ -567,7 +762,7 @@ def crear_maquina_fragancia(datos: MaquinaFraganciaIn, db: Session = Depends(get
 
 
 @router.put("/maquina_fragancias/{fila_id}")
-def actualizar_maquina_fragancia(fila_id: int, datos: MaquinaFraganciaUpdate, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def actualizar_maquina_fragancia(fila_id: int, datos: MaquinaFraganciaUpdate, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
     """Baja lógica (`{activo:false}`) o cambio de fragancia. Es lo que usa la web:
     borrar físicamente dejaría el histórico de sesiones sin su referencia."""
     fila = db.query(MaquinaMarcaFraganciaDB).filter(MaquinaMarcaFraganciaDB.id == fila_id).first()
@@ -584,7 +779,7 @@ def actualizar_maquina_fragancia(fila_id: int, datos: MaquinaFraganciaUpdate, db
 
 
 @router.delete("/maquina_productos/{fila_id}")
-def eliminar_maquina_producto(fila_id: int, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def eliminar_maquina_producto(fila_id: int, db: Session = Depends(get_db), ctx=Depends(require_superadmin)):
     fila = db.query(MaquinaProductoDB).filter(MaquinaProductoDB.id == fila_id).first()
     if not fila:
         raise HTTPException(status_code=404, detail="Combinación no encontrada")
@@ -654,7 +849,7 @@ def _crear_o_reactivar(db, modelo, campo_activo, nombre, etiqueta, ctx):
 
 
 @router.post("/maquinas")
-def crear_maquina(datos: MaquinaIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def crear_maquina(datos: MaquinaIn, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
     """Crea (o reactiva) una máquina con su tipo de línea (SOLIDO por defecto)."""
     nombre = (datos.nombre or "").strip()
     if not nombre:
@@ -678,7 +873,7 @@ def crear_maquina(datos: MaquinaIn, db: Session = Depends(get_db), ctx=Depends(r
 
 
 @router.put("/maquinas/{maquina_id}")
-def actualizar_maquina(maquina_id: int, datos: MaquinaUpdate, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def actualizar_maquina(maquina_id: int, datos: MaquinaUpdate, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
     maq = db.query(MaquinaDB).filter(MaquinaDB.id == maquina_id).first()
     if not maq:
         raise HTTPException(status_code=404, detail="Máquina no encontrada")
@@ -700,22 +895,196 @@ def actualizar_maquina(maquina_id: int, datos: MaquinaUpdate, db: Session = Depe
 
 
 @router.post("/marcas")
-def crear_marca(datos: NombreIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def crear_marca(datos: NombreIn, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
     return _crear_o_reactivar(db, MarcaDB, "activa", datos.nombre, "Marca", ctx)
 
 
 @router.post("/presentaciones")
-def crear_presentacion(datos: NombreIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def crear_presentacion(datos: NombreIn, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
     return _crear_o_reactivar(db, PresentacionDB, "activa", datos.nombre, "Presentación", ctx)
 
 
 @router.post("/fragancias")
-def crear_fragancia(datos: NombreIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def crear_fragancia(datos: NombreIn, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
     """Alta en el catálogo maestro de fragancias (Floral, Limón, ...).
 
     El catálogo es la lista de la que se eligen las fragancias de cada máquina+marca;
     asignarlas es cosa de /admin/maquina_fragancias."""
     return _crear_o_reactivar(db, FraganciaDB, "activa", datos.nombre, "Fragancia", ctx)
+
+
+# ----------------------------------------------------------------------------
+# Usuarios administradores (2026-08-06) — solo SUPERADMIN
+# ----------------------------------------------------------------------------
+# Gestiona la tabla `administradores`, que NO es solo de la web: la app Android hace
+# login contra ella (POST /api/admin/login) y `GET /api/admin/supervisores` alimenta
+# el selector «Seleccione Supervisor» del checklist de las tablets. Por eso:
+#
+#   - dar de alta un usuario operativo lo hace aparecer en ese selector;
+#   - «eliminar» es baja lógica (`activo = 0`), como en el resto de la web: el
+#     histórico de checklists guarda el nombre del supervisor como texto y un
+#     borrado físico no lo rompería, pero sí perdería la trazabilidad de quién
+#     existió;
+#   - la contraseña NUNCA se devuelve, ni siquiera hasheada.
+
+class UsuarioAdminIn(BaseModel):
+    username: str
+    password: str
+    nivel_acceso: str | None = None      # SUPERADMIN por defecto sería peligroso: ver abajo
+
+
+class UsuarioAdminUpdate(BaseModel):
+    password: str | None = None          # resetear contraseña
+    nivel_acceso: str | None = None
+    activo: bool | None = None
+
+
+def _norm_nivel(valor, por_defecto=None):
+    """Normaliza y valida el nivel de acceso."""
+    if valor is None:
+        if por_defecto is None:
+            raise HTTPException(status_code=400, detail="El nivel de acceso es obligatorio")
+        return por_defecto
+    nivel = (valor or "").strip().upper()
+    if nivel not in NIVELES_VALIDOS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Nivel inválido. Use uno de: {', '.join(sorted(NIVELES_VALIDOS))}",
+        )
+    return nivel
+
+
+def _superadmins_activos(db, excluyendo=None):
+    q = db.query(AdministradorDB).filter(
+        AdministradorDB.nivel_acceso == NIVEL_SUPERADMIN,
+        AdministradorDB.activo.is_(True),
+    )
+    if excluyendo is not None:
+        q = q.filter(AdministradorDB.id != excluyendo)
+    return q.count()
+
+
+@router.get("/usuarios")
+def listar_usuarios(db: Session = Depends(get_db), ctx=Depends(require_superadmin)):
+    """Usuarios administradores. Sin contraseñas, ni en claro ni hasheadas.
+
+    `password_migrada` dice si esa fila ya usa hash PBKDF2: mientras haya usuarios
+    en texto plano conviene verlo, y se resuelve solo cuando esa persona entra.
+    """
+    usuarios = db.query(AdministradorDB).order_by(
+        AdministradorDB.activo.desc(), AdministradorDB.username.asc()
+    ).all()
+    return [
+        {
+            "id": u.id,
+            "username": u.username,
+            "nivel_acceso": u.nivel_acceso,
+            "activo": bool(u.activo),
+            "password_migrada": seguridad.es_hash(u.password or ""),
+            "es_tu_usuario": u.username == ctx.get("username"),
+        }
+        for u in usuarios
+    ]
+
+
+@router.post("/usuarios")
+def crear_usuario(datos: UsuarioAdminIn, db: Session = Depends(get_db), ctx=Depends(require_superadmin)):
+    """Alta de usuario administrador. La contraseña se guarda hasheada desde el minuto uno."""
+    username = (datos.username or "").strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="El usuario es obligatorio")
+    password = datos.password or ""
+    if len(password) < 6:
+        raise HTTPException(status_code=400, detail="La contraseña debe tener al menos 6 caracteres")
+    nivel = _norm_nivel(datos.nivel_acceso)
+
+    existente = db.query(AdministradorDB).filter(AdministradorDB.username == username).first()
+    if existente:
+        if existente.activo:
+            raise HTTPException(status_code=409, detail=f'El usuario "{username}" ya existe')
+        # Reactivar con credenciales nuevas, igual que operarios/marcas.
+        existente.activo = True
+        existente.nivel_acceso = nivel
+        existente.password = seguridad.hashear(password)
+        db.commit()
+        logger.info(f"Usuario admin reactivado: {username} [{nivel}] por {ctx.get('username')}")
+        return {"id": existente.id, "username": username, "nivel_acceso": nivel,
+                "activo": True, "reactivado": True}
+
+    usuario = AdministradorDB(
+        username=username,
+        password=seguridad.hashear(password),
+        nivel_acceso=nivel,
+        activo=True,
+    )
+    db.add(usuario)
+    db.commit()
+    db.refresh(usuario)
+    logger.info(f"Usuario admin creado: {username} [{nivel}] por {ctx.get('username')}")
+    return {"id": usuario.id, "username": username, "nivel_acceso": nivel, "activo": True}
+
+
+@router.put("/usuarios/{usuario_id}")
+def actualizar_usuario(usuario_id: int, datos: UsuarioAdminUpdate,
+                       db: Session = Depends(get_db), ctx=Depends(require_superadmin)):
+    """Cambia nivel, reactiva/desactiva o resetea la contraseña.
+
+    Dos salvaguardas que no son negociables:
+      - nadie se desactiva ni se degrada a sí mismo (te quedarías fuera en el acto);
+      - no puede quedar el sistema sin ningún SUPERADMIN activo, porque entonces
+        nadie podría volver a gestionar usuarios y habría que arreglarlo por SQL.
+    """
+    usuario = db.query(AdministradorDB).filter(AdministradorDB.id == usuario_id).first()
+    if not usuario:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    es_uno_mismo = usuario.username == ctx.get("username")
+    era_superadmin = usuario.nivel_acceso == NIVEL_SUPERADMIN and bool(usuario.activo)
+
+    if datos.activo is False and es_uno_mismo:
+        raise HTTPException(status_code=400, detail="No puedes desactivar tu propio usuario")
+
+    nivel_nuevo = _norm_nivel(datos.nivel_acceso, usuario.nivel_acceso) if datos.nivel_acceso is not None else usuario.nivel_acceso
+    if es_uno_mismo and nivel_nuevo != NIVEL_SUPERADMIN and usuario.nivel_acceso == NIVEL_SUPERADMIN:
+        raise HTTPException(status_code=400, detail="No puedes quitarte a ti mismo el nivel SUPERADMIN")
+
+    # ¿Este cambio dejaría el sistema sin superadmin?
+    pierde_superadmin = era_superadmin and (datos.activo is False or nivel_nuevo != NIVEL_SUPERADMIN)
+    if pierde_superadmin and _superadmins_activos(db, excluyendo=usuario.id) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Debe quedar al menos un SUPERADMIN activo",
+        )
+
+    if datos.password is not None:
+        if len(datos.password) < 6:
+            raise HTTPException(status_code=400, detail="La contraseña debe tener al menos 6 caracteres")
+        usuario.password = seguridad.hashear(datos.password)
+        logger.info(f"Contraseña de {usuario.username} reseteada por {ctx.get('username')}")
+    if datos.nivel_acceso is not None:
+        usuario.nivel_acceso = nivel_nuevo
+    if datos.activo is not None:
+        usuario.activo = datos.activo
+
+    db.commit()
+    logger.info(
+        f"Usuario admin {usuario.username} actualizado por {ctx.get('username')} "
+        f"[{usuario.nivel_acceso}, activo={bool(usuario.activo)}]"
+    )
+    return {"id": usuario.id, "username": usuario.username,
+            "nivel_acceso": usuario.nivel_acceso, "activo": bool(usuario.activo)}
+
+
+@router.get("/niveles")
+def listar_niveles(ctx=Depends(require_admin)):
+    """Niveles disponibles y qué implica cada uno, para el selector de la web."""
+    return [
+        {"nivel": NIVEL_SUPERADMIN, "descripcion": "Todo, incluidos usuarios y eliminar sesiones"},
+        {"nivel": "ADMINPLANTA", "descripcion": "Operación de planta: corregir, cerrar turnos, catálogos"},
+        {"nivel": "ADMINBODEGA", "descripcion": "Operación de bodega: corregir, cerrar turnos, catálogos"},
+        {"nivel": "ADMIN", "descripcion": "Operación general (nivel heredado)"},
+        {"nivel": NIVEL_CONSULTA, "descripcion": "Solo lectura: ve todo, no modifica nada"},
+    ]
 
 
 # ----------------------------------------------------------------------------
@@ -794,7 +1163,7 @@ def _push_ws_mensaje(db, msg):
 
 
 @router.post("/mensajes")
-def enviar_mensaje(datos: MensajeAdminIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def enviar_mensaje(datos: MensajeAdminIn, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
     """Envía un mensaje a la sesión/tablet de producción indicada (individual)."""
     texto = (datos.texto or "").strip()
     if not texto:
@@ -832,7 +1201,7 @@ class MensajeMasivoIn(BaseModel):
 
 
 @router.post("/mensajes/masivo")
-def enviar_mensaje_masivo(datos: MensajeMasivoIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def enviar_mensaje_masivo(datos: MensajeMasivoIn, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
     """Envía la MISMA alerta a varias sesiones activas a la vez.
 
     - `sesion_ids` vacío o nulo  -> a TODAS las sesiones activas (alerta general).
@@ -881,7 +1250,7 @@ class PedidoCorreccionIn(BaseModel):
 
 
 @router.put("/pedidos/{pedido_id}")
-def corregir_pedido(pedido_id: int, datos: PedidoCorreccionIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def corregir_pedido(pedido_id: int, datos: PedidoCorreccionIn, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
     p = db.query(PedidoBodegaDB).filter(PedidoBodegaDB.id == pedido_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Pedido no encontrado")
@@ -907,7 +1276,7 @@ def corregir_pedido(pedido_id: int, datos: PedidoCorreccionIn, db: Session = Dep
 
 
 @router.delete("/pedidos/{pedido_id}")
-def eliminar_pedido(pedido_id: int, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def eliminar_pedido(pedido_id: int, db: Session = Depends(get_db), ctx=Depends(require_superadmin)):
     """Elimina un registro de pedido de insumo (desde el dashboard de insumos)."""
     p = db.query(PedidoBodegaDB).filter(PedidoBodegaDB.id == pedido_id).first()
     if not p:
@@ -926,7 +1295,7 @@ class EntregaCorreccionIn(BaseModel):
 
 
 @router.put("/entregas/{entrega_id}")
-def corregir_entrega(entrega_id: int, datos: EntregaCorreccionIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def corregir_entrega(entrega_id: int, datos: EntregaCorreccionIn, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
     """Corrige la cantidad de una entrega proactiva."""
     e = db.query(EntregaProactivaDB).filter(EntregaProactivaDB.id == entrega_id).first()
     if not e:
@@ -941,7 +1310,7 @@ def corregir_entrega(entrega_id: int, datos: EntregaCorreccionIn, db: Session = 
 
 
 @router.delete("/entregas/{entrega_id}")
-def eliminar_entrega(entrega_id: int, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def eliminar_entrega(entrega_id: int, db: Session = Depends(get_db), ctx=Depends(require_superadmin)):
     """Elimina una entrega proactiva y, si existe, su foto de evidencia en disco."""
     e = db.query(EntregaProactivaDB).filter(EntregaProactivaDB.id == entrega_id).first()
     if not e:

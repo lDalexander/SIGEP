@@ -78,6 +78,26 @@ export async function salir() {
   borrarSesion();
 }
 
+/* ── Niveles de acceso ────────────────────────────────────────────────────────
+   Espejo de `NIVELES_OPERATIVOS` en `routers/admin.py`. Sirve solo para no
+   enseñar controles que el servidor va a rechazar: quien decide es el backend,
+   que exige el nivel en cada endpoint (403). Ocultar un botón no es un permiso. */
+export const NIVELES_OPERATIVOS = ['SUPERADMIN', 'ADMIN', 'ADMINPLANTA', 'ADMINBODEGA'];
+
+export function nivelActual(sesion = leerSesion()) {
+  return String(sesion?.nivel || '').toUpperCase();
+}
+
+/** SUPERADMIN: además de todo lo operativo, gestiona usuarios y borra sesiones. */
+export function esSuperadmin(sesion) {
+  return nivelActual(sesion) === 'SUPERADMIN';
+}
+
+/** ¿Puede modificar datos? Falso para CONSULTA, que es de solo lectura. */
+export function puedeEditar(sesion) {
+  return NIVELES_OPERATIVOS.includes(nivelActual(sesion));
+}
+
 /** Extrae el mensaje de error que devuelve FastAPI en `detail`. */
 export function mensajeDeError(error, porDefecto = 'No se pudo completar la operación') {
   return error?.response?.data?.detail || error?.message || porDefecto;

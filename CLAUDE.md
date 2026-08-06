@@ -14,7 +14,7 @@ industriales con sincronización offline-first.
 
 **Última sesión: 2026-08-06.** El frontend está reconstruido y **desplegado en producción**
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
-capturas de `referencia_ui/`. 117 tests en verde.
+capturas de `referencia_ui/`. 127 tests en verde.
 
 La **jerarquía de fragancias por máquina + marca** (2026-08-06) **ya está en producción**
 (backend con `kill -HUP`, worker nuevo 2140077, y frontend `main.edc4db7b.js`). Se comprobó
@@ -84,7 +84,38 @@ falta tag, y la prohibición de «limpiar» el árbol con `checkout`/`reset`/`cl
 
 ### Cambios de backend ya autorizados y aplicados
 
-Tras la reconstrucción se autorizaron **seis** excepciones a la regla de oro:
+Tras la reconstrucción se autorizaron **siete** excepciones a la regla de oro:
+
+- **Cerrar turno, eliminar sesión, usuarios y niveles de acceso** (2026-08-06,
+  autorizada, **probada · pendiente de desplegar**). **Sin `ALTER` y sin tablas
+  nuevas**: todo usa columnas que ya existían.
+
+  - `POST /admin/sesiones/{id}/cerrar` — la salida para los turnos que quedan
+    abiertos y bloquean a la máquina («Esta máquina ya tiene un turno activo»).
+    Hace lo mismo que el `finalizar_turno` de la tablet —cierra el paro abierto y
+    los pedidos de insumo vivos, avisa al insumista por WS, fija `fin_turno` y
+    `duracion_minutos`— y escribe `observaciones = "CERRADO MANUALMENTE POR: X"`,
+    el mismo campo donde el GC pone `CERRADO AUTOMATICAMENTE POR EL SISTEMA`.
+  - `DELETE /admin/sesiones/{id}` — **solo SUPERADMIN**, borra en cascada las seis
+    tablas que cuelgan de `session_id`. En cascada a propósito: los pallets se
+    cuentan por `pallets.fecha_hora` sin pasar por la sesión, así que dejarlos
+    seguiría sumándolos a los KPIs de un turno que ya no existe.
+  - `GET/POST/PUT /admin/usuarios` y `GET /admin/niveles` — **solo SUPERADMIN**.
+    Nunca devuelven la contraseña. «Eliminar» es `PUT {activo:false}`.
+  - **Los niveles ahora se aplican de verdad.** `nivel_acceso` existía pero no
+    controlaba nada: bastaba un token válido para todo. Se añadió `require_nivel`
+    en `routers/admin.py` y se exige en los **22 endpoints de escritura** que ya
+    existían. Detalle en §3.
+  - **Contraseñas hasheadas con PBKDF2-SHA256** (`services/seguridad.py`, sin
+    dependencias nuevas). Migración progresiva: `verificar()` acepta el texto plano
+    heredado y el login lo reescribe hasheado en ese momento. Toca **los dos**
+    logins —`/api/admin/auth` (web) y `/api/admin/login` (app Android)— y para los
+    clientes es invisible. **Ojo con el orden de despliegue por esto**: un login
+    contra el código nuevo hashea la contraseña en la BD, y el código viejo, que
+    compara con `==`, dejaría de aceptarla. El backend va primero, siempre.
+  - Verificado con `diff` 8000 vs 8001 en **18 endpoints**, todos idénticos byte a
+    byte, incluidos `/api/admin/supervisores` y `/api/usuarios`, que usa la app.
+    **Las tablets no necesitan actualización.**
 
 - **Jerarquía de fragancias por máquina + marca** (2026-08-06, **en producción**).
   La fragancia era universal: la app
@@ -379,7 +410,8 @@ frontend_sigep/
     │       ├── AdminApp.js      # login, cabecera propia y las 5 pestañas
     │       ├── AdminLogin.js
     │       ├── Ayuda.js, FiltroRango.js
-    │       └── TabOperarios / TabProduccion / TabChecklists / TabJerarquia / TabMensajes
+    │       ├── TabOperarios / TabProduccion / TabChecklists / TabJerarquia / TabMensajes
+    │       └── TabUsuarios.js   # administradores y niveles — solo la ve un SUPERADMIN
     └── components/ui/           # componentes base del sistema de diseño
         ├── Label, Badge, Button, Card, StatCard (+ Cifra)
         ├── ProgressBar, Ring, Tabs, Dot, Logo
@@ -540,12 +572,20 @@ npx eslint --ext .js src/
   filtros, que marcar una máquina acota la lista de operarios, y que **no** acota la de
   máquinas. `beforeEach` **resetea la ruta**: jsdom la conserva entre tests del mismo
   archivo y la vista se decide por el pathname.
-- `src/components/admin/AdminApp.test.js` — las cinco pestañas, incluido que
+- `src/components/admin/AdminApp.test.js` — las pestañas, incluido que
   «Eliminar» haga `PUT {activo:false}` y nunca `DELETE`. De las fragancias de Jerarquía:
   que van por marca y no por presentación, que el alta manda `{maquina_id, marca,
   fragancia}`, que el desplegable no repite una ya activa (sería un 409), que quitar es
   `PUT {activo:false}` y nunca `DELETE`, que una quitada sigue reactivable, que una marca
   sin ninguna avisa de que se ofrecen todas, y el alta en el catálogo maestro.
+  De Producción y Usuarios (2026-08-06): que «CERRAR TURNO» solo sale en las sesiones
+  activas y avisa cuando la tablet sigue conectada, que eliminar una sesión con
+  producción **exige teclear su número** y no borra nada si se teclea mal, que un
+  `ADMINPLANTA` cierra turnos pero no ve «Eliminar», que un `CONSULTA` no ve ninguna
+  acción de escritura, que la pestaña Usuarios solo existe para un `SUPERADMIN`, que
+  una contraseña corta ni sale de la web, y que dar de baja a un usuario es
+  `PUT {activo:false}` y nunca `DELETE`. `mockNivel` simula el nivel de la sesión (el
+  prefijo `mock` es obligatorio: `jest.mock` se iza sobre los `let`).
 
 ### Dev server
 
@@ -685,6 +725,27 @@ El token se guarda **en memoria del proceso**: al reiniciar `sigep.service` cadu
 todas las sesiones admin y hay que volver a entrar. `POST /api/admin/logout` lo revoca.
 Sin token o con token inválido: **401**.
 
+**Contraseñas** (2026-08-06): `administradores.password` guarda un hash PBKDF2-SHA256
+(`services/seguridad.py`, librería estándar, sin dependencias). Las que quedan en texto
+plano se aceptan igual y **se migran solas** en el primer login de esa persona, así que
+no hizo falta ningún `UPDATE`. Aplica a los dos logins: el de la web y el
+`POST /api/admin/login` que usa la app Android.
+
+**Niveles de acceso** (2026-08-06): antes `nivel_acceso` no controlaba nada. Ahora
+`require_nivel` los exige **en el backend**, endpoint por endpoint; la web solo oculta
+los controles, que no es lo mismo.
+
+| Nivel | Puede |
+|---|---|
+| `SUPERADMIN` | todo, incluidos usuarios, `DELETE` de sesión y los borrados físicos |
+| `ADMINPLANTA` · `ADMINBODEGA` · `ADMIN` | operación diaria: corregir, cerrar turnos, catálogos, mensajes |
+| `CONSULTA` | **solo lectura**: los `GET` responden, cualquier escritura da **403** |
+
+Los `GET` siguen pidiendo solo token válido. Un nivel insuficiente da **403**, no 401:
+la sesión es buena, lo que falta es permiso. `GET /api/admin/supervisores` (el selector
+de supervisor de las tablets) filtra por los niveles operativos, así que un usuario
+`CONSULTA` no aparece ahí.
+
 | Método | Ruta | Notas |
 |---|---|---|
 | GET | `/admin/operadores` | `[{id,nombre,tipo,activo}]`, activos primero, luego alfabético. Acepta `?tipo=` |
@@ -693,6 +754,12 @@ Sin token o con token inválido: **401**.
 | DELETE | `/admin/operadores/{id}` | ⚠️ **borrado físico** (`db.delete`) |
 | GET | `/admin/sesiones` | `desde`,`hasta` → `[{id,maquina,operador,marca,presentacion,fragancia,inicio,fin,estado,total_pacas,n_registros}]` |
 | PUT | `/admin/sesiones/{id}` | `{maquina?,operador?,marca?,presentacion?,fragancia?}` |
+| POST | `/admin/sesiones/{id}/cerrar` | Cierra un turno abierto: paro abierto + pedidos vivos + `fin_turno` + `duracion_minutos`, y deja `observaciones = "CERRADO MANUALMENTE POR: X"`. 400 si ya estaba cerrado. **No avisa a la tablet**: si sigue trabajando, seguirá mandando pacas a una sesión cerrada y su finalizar dará 400 |
+| DELETE | `/admin/sesiones/{id}` | ⚠️ **borrado físico en cascada**, solo `SUPERADMIN`: sesión + pallets + paros + pedidos + comentarios + reportes + mensajes. Devuelve el recuento de lo borrado, que es la única traza que queda |
+| GET | `/admin/usuarios` | solo `SUPERADMIN`. `[{id,username,nivel_acceso,activo,password_migrada,es_tu_usuario}]` — **nunca** la contraseña |
+| POST | `/admin/usuarios` | `{username,password,nivel_acceso}`, mínimo 6 caracteres. Reactiva si existía inactivo |
+| PUT | `/admin/usuarios/{id}` | `{password?,nivel_acceso?,activo?}`. No puedes desactivarte ni degradarte a ti mismo, ni dejar el sistema sin ningún `SUPERADMIN` activo |
+| GET | `/admin/niveles` | los niveles con su descripción, para el selector |
 | GET | `/admin/sesiones/{id}/pallets` | `[{id,cantidad_pacas,fecha_hora}]` |
 | PUT | `/admin/pallets/{id}` | `{cantidad_pacas}` |
 | GET | `/admin/checklists` | `desde`,`hasta`. Como el público **pero los items traen `id`** (necesario para editar) |
@@ -790,10 +857,11 @@ equipo con la hora mal puesta inventaría paros de horas o duraciones negativas.
 |---|---|
 | Cabecera / `Salir` | `POST /admin/auth`, `POST /admin/logout` |
 | Operarios | `GET`/`POST` `/admin/operadores`, `PUT /admin/operadores/{id}` |
-| Producción | `GET /admin/sesiones`, `PUT /admin/sesiones/{id}`; selects desde `/admin/catalogos` |
+| Producción | `GET /admin/sesiones`, `PUT /admin/sesiones/{id}`, `POST /admin/sesiones/{id}/cerrar`, `DELETE /admin/sesiones/{id}`, `GET /admin/sesiones_activas` (para saber si la tablet sigue conectada); selects desde `/admin/catalogos` |
 | Checklists | `GET /admin/checklists`, `PUT /admin/checklists/{id}` |
 | Jerarquía | `GET /admin/maquina_productos`, `GET /admin/maquina_fragancias`, `GET /admin/catalogos`, `POST`/`PUT`/`DELETE /admin/maquina_productos`, `POST`/`PUT /admin/maquina_fragancias`, `POST`/`PUT /admin/maquinas`, `POST /admin/marcas`, `POST /admin/presentaciones`, `POST /admin/fragancias` |
 | Mensajes | `GET /admin/sesiones_activas`, `POST /admin/mensajes/masivo` |
+| Usuarios (solo `SUPERADMIN`) | `GET/POST /admin/usuarios`, `PUT /admin/usuarios/{id}`, `GET /admin/niveles` |
 
 ### Retirado del dashboard
 

@@ -12,6 +12,7 @@ from schemas import LoginRequest, LogoutRequest
 from sqlalchemy import func
 import schemas
 import models
+from services import seguridad
 
 router = APIRouter(prefix="/api", tags=["Autenticación y Estado"])
 
@@ -86,8 +87,19 @@ def login_administrador(credenciales: schemas.AdminLoginRequest, db: Session = D
     ).first()
 
     # 2. Validamos si existe y si la contraseña coincide (pin -> password)
-    # NOTA DE SEGURIDAD: Por ahora es texto plano ('=='). 
-    if not admin or admin.password != credenciales.pin:
+    # Desde 2026-08-06 las contraseñas se guardan hasheadas (PBKDF2, ver
+    # services/seguridad.py). `verificar` acepta también el texto plano heredado y
+    # avisa de que hay que reescribirlo: así este login —el que usa la app Android—
+    # sigue funcionando igual el día del despliegue, sin tocar la app.
+    correcta, necesita_rehash = (False, False)
+    if admin:
+        correcta, necesita_rehash = seguridad.verificar(credenciales.pin, admin.password)
+    if admin and correcta and necesita_rehash:
+        admin.password = seguridad.hashear(credenciales.pin)
+        db.commit()
+        logger.info(f"Contraseña de {admin.username} migrada a hash en el login de la app")
+
+    if not admin or not correcta:
         return JSONResponse(
             status_code=401,
             content={

@@ -11,13 +11,24 @@ jest.mock('axios');
    test ejercita los componentes y comprueba QUÉ endpoint se llama, sin depender de
    los interceptores ni de localStorage. El cliente se crea DENTRO del factory porque
    este se evalúa antes que cualquier `const` del módulo. */
+/* `mockNivel` permite probar la misma UI con distintos niveles de acceso: el
+   prefijo `mock` es obligatorio — jest.mock se iza sobre los `let` y solo deja
+   referenciar desde el factory variables que empiecen así. El
+   backend es quien decide (403), pero la web no debe ofrecer lo que va a rechazar. */
+let mockNivel = 'SUPERADMIN';
+
 jest.mock('../../lib/adminApi', () => ({
   admin: { get: jest.fn(), post: jest.fn(), put: jest.fn(), delete: jest.fn() },
   entrar: jest.fn(),
   salir: jest.fn(() => Promise.resolve()),
-  leerSesion: () => ({ token: 't0ken', username: 'admin', nivel: 'SUPERADMIN' }),
+  leerSesion: () => ({ token: 't0ken', username: 'admin', nivel: mockNivel }),
   registrarCaducidad: jest.fn(),
   mensajeDeError: (err, porDefecto) => err?.response?.data?.detail || porDefecto || 'error',
+  NIVELES_OPERATIVOS: ['SUPERADMIN', 'ADMIN', 'ADMINPLANTA', 'ADMINBODEGA'],
+  nivelActual: () => mockNivel,
+  esSuperadmin: () => mockNivel === 'SUPERADMIN',
+  puedeEditar: () =>
+    ['SUPERADMIN', 'ADMIN', 'ADMINPLANTA', 'ADMINBODEGA'].includes(mockNivel),
 }));
 
 const OPERARIOS = [
@@ -69,6 +80,26 @@ const SESIONES = [
     presentacion: '500 GR', fragancia: 'Limón', inicio: '2026-07-23 11:19',
     fin: null, estado: 'Activo', total_pacas: 0, n_registros: 0,
   },
+  /* Finalizada y con producción: no debe ofrecer «CERRAR TURNO», y su borrado
+     exige teclear el número por tener pacas registradas. */
+  {
+    id: 331, maquina: 'Máquina 7', operador: 'PEDRO SARABIA', marca: 'PQP',
+    presentacion: '25 KG', fragancia: 'Floral', inicio: '2026-07-23 07:10',
+    fin: '15:40', estado: 'Finalizado', total_pacas: 480, n_registros: 12,
+  },
+];
+
+const USUARIOS = [
+  { id: 1, username: 'admin', nivel_acceso: 'SUPERADMIN', activo: true,
+    password_migrada: true, es_tu_usuario: true },
+  { id: 2, username: 'Planta', nivel_acceso: 'ADMINPLANTA', activo: true,
+    password_migrada: false, es_tu_usuario: false },
+];
+
+const NIVELES = [
+  { nivel: 'SUPERADMIN', descripcion: 'Todo, incluidos usuarios y eliminar sesiones' },
+  { nivel: 'ADMINPLANTA', descripcion: 'Operación de planta' },
+  { nivel: 'CONSULTA', descripcion: 'Solo lectura: ve todo, no modifica nada' },
 ];
 
 const CHECKLISTS = [
@@ -97,6 +128,8 @@ const SESIONES_ACTIVAS = [
 beforeEach(() => {
   jest.clearAllMocks();
   window.confirm = jest.fn(() => true);
+  window.prompt = jest.fn(() => '331');   // confirmación tecleada del borrado
+  mockNivel = 'SUPERADMIN';
 
   mockAdmin.get.mockImplementation((url) => {
     if (url === '/operadores')        return Promise.resolve({ data: OPERARIOS });
@@ -106,10 +139,13 @@ beforeEach(() => {
     if (url === '/sesiones')          return Promise.resolve({ data: SESIONES });
     if (url === '/checklists')        return Promise.resolve({ data: CHECKLISTS });
     if (url === '/sesiones_activas')  return Promise.resolve({ data: SESIONES_ACTIVAS });
+    if (url === '/usuarios')          return Promise.resolve({ data: USUARIOS });
+    if (url === '/niveles')           return Promise.resolve({ data: NIVELES });
     return Promise.reject(new Error(`sin mock para ${url}`));
   });
   mockAdmin.post.mockResolvedValue({ data: { ok: true } });
   mockAdmin.put.mockResolvedValue({ data: { ok: true } });
+  mockAdmin.delete.mockResolvedValue({ data: { eliminada: 331, borrado: { pallets: 12, paros: 2 } } });
 
   // TabProduccion pide las fragancias al endpoint público (no hay tabla maestra).
   axios.get.mockResolvedValue({ data: { fragancia: ['Limón', 'Floral'] } });
@@ -361,19 +397,170 @@ test('Producción: los campos son selects de catálogo y solo guardan lo cambiad
   expect(await screen.findByText(/Sesión #330 · 2026-07-23 11:19/)).toBeInTheDocument();
   expect(screen.getByText('Pacas: 0 (0 reg.)')).toBeInTheDocument();
 
+  /* Hay más de una sesión en pantalla, así que todo se busca DENTRO de la tarjeta
+     de la #330: si no, «Guardar sesión» sería ambiguo. Cada tarjeta es una región
+     con su nombre accesible. */
+  const tarjeta = within(screen.getByRole('region', { name: 'Sesión #330' }));
+
   // Sin cambios no se manda ningún PUT: se avisa en la propia pestaña.
-  fireEvent.click(screen.getByRole('button', { name: 'Guardar sesión' }));
+  fireEvent.click(tarjeta.getByRole('button', { name: 'Guardar sesión' }));
   expect(await screen.findByText('No hay cambios en esta sesión')).toBeInTheDocument();
   expect(mockAdmin.put).not.toHaveBeenCalled();
 
-  const maquina = screen.getByLabelText(/^maquina$/i, { selector: 'select' });
+  const maquina = tarjeta.getByLabelText(/^maquina$/i, { selector: 'select' });
   expect(maquina.tagName).toBe('SELECT');
   fireEvent.change(maquina, { target: { value: 'Máquina 7' } });
 
-  fireEvent.click(screen.getByRole('button', { name: 'Guardar sesión' }));
+  fireEvent.click(tarjeta.getByRole('button', { name: 'Guardar sesión' }));
   await waitFor(() =>
     expect(mockAdmin.put).toHaveBeenCalledWith('/sesiones/330', { maquina: 'Máquina 7' })
   );
+});
+
+test('Producción: CERRAR TURNO solo aparece en las sesiones activas', async () => {
+  render(<AdminApp />);
+  irA('Producción');
+  await screen.findByText(/Sesión #330/);
+
+  // Una sola sesión activa (#330) → un solo botón de cerrar.
+  const cerrar = screen.getAllByRole('button', { name: 'CERRAR TURNO' });
+  expect(cerrar).toHaveLength(1);
+
+  fireEvent.click(cerrar[0]);
+  await waitFor(() =>
+    expect(mockAdmin.post).toHaveBeenCalledWith('/sesiones/330/cerrar')
+  );
+});
+
+test('Producción: cerrar un turno con la tablet conectada avisa antes', async () => {
+  render(<AdminApp />);
+  irA('Producción');
+  await screen.findByText(/Sesión #330/);
+
+  fireEvent.click(screen.getByRole('button', { name: 'CERRAR TURNO' }));
+
+  // La sesión 330 no está en SESIONES_ACTIVAS, así que no debe salir el aviso...
+  expect(window.confirm.mock.calls[0][0]).not.toMatch(/SIGUE CONECTADA/);
+  expect(window.confirm.mock.calls[0][0]).toMatch(/paro abierto y los pedidos/);
+  await waitFor(() => expect(mockAdmin.post).toHaveBeenCalled());
+});
+
+test('Producción: eliminar una sesión con producción pide teclear el número', async () => {
+  render(<AdminApp />);
+  irA('Producción');
+  await screen.findByText(/Sesión #331/);
+
+  const tarjeta = within(screen.getByRole('region', { name: 'Sesión #331' }));
+  fireEvent.click(tarjeta.getByRole('button', { name: 'Eliminar' }));
+
+  await waitFor(() => expect(window.prompt).toHaveBeenCalled());
+  expect(window.prompt.mock.calls[0][0]).toMatch(/480 pacas/);
+  await waitFor(() => expect(mockAdmin.delete).toHaveBeenCalledWith('/sesiones/331'));
+});
+
+test('Producción: si no se teclea bien el número, no se borra nada', async () => {
+  window.prompt = jest.fn(() => '999');   // número equivocado
+  render(<AdminApp />);
+  irA('Producción');
+  await screen.findByText(/Sesión #331/);
+
+  const tarjeta = within(screen.getByRole('region', { name: 'Sesión #331' }));
+  fireEvent.click(tarjeta.getByRole('button', { name: 'Eliminar' }));
+
+  expect(await screen.findByText('Eliminación cancelada')).toBeInTheDocument();
+  expect(mockAdmin.delete).not.toHaveBeenCalled();
+});
+
+test('Producción: un ADMINPLANTA no puede eliminar, pero sí cerrar turnos', async () => {
+  mockNivel = 'ADMINPLANTA';
+  render(<AdminApp />);
+  irA('Producción');
+  await screen.findByText(/Sesión #330/);
+
+  expect(screen.getByRole('button', { name: 'CERRAR TURNO' })).toBeInTheDocument();
+  expect(screen.getAllByRole('button', { name: 'Guardar sesión' })).not.toHaveLength(0);
+  // Eliminar es irreversible y borra en cascada: solo SUPERADMIN.
+  expect(screen.queryByRole('button', { name: 'Eliminar' })).not.toBeInTheDocument();
+});
+
+test('Producción: un usuario de CONSULTA no ve ninguna acción de escritura', async () => {
+  mockNivel = 'CONSULTA';
+  render(<AdminApp />);
+  irA('Producción');
+  await screen.findByText(/Sesión #330/);
+
+  ['Guardar sesión', 'CERRAR TURNO', 'Eliminar'].forEach((rotulo) =>
+    expect(screen.queryByRole('button', { name: rotulo })).not.toBeInTheDocument()
+  );
+});
+
+test('Usuarios: la pestaña solo existe para un SUPERADMIN', async () => {
+  mockNivel = 'ADMINPLANTA';
+  const { unmount } = render(<AdminApp />);
+  expect(screen.queryByRole('tab', { name: 'Usuarios' })).not.toBeInTheDocument();
+  await screen.findByText('ALEX VALENZUELA');
+  unmount();
+
+  mockNivel = 'SUPERADMIN';
+  render(<AdminApp />);
+  expect(screen.getByRole('tab', { name: 'Usuarios' })).toBeInTheDocument();
+  await screen.findByText('ALEX VALENZUELA');
+});
+
+test('Usuarios: alta con nivel, y la contraseña sin cifrar se señala', async () => {
+  render(<AdminApp />);
+  irA('Usuarios');
+  await screen.findByText('Planta');
+
+  // El backend migra la contraseña sola en el próximo login; hasta entonces se avisa.
+  expect(screen.getByText('contraseña sin cifrar')).toBeInTheDocument();
+  expect(screen.getByText('tú')).toBeInTheDocument();
+
+  fireEvent.change(screen.getByLabelText('Nuevo usuario'), { target: { value: '  agarcia ' } });
+  fireEvent.change(screen.getByLabelText('Contraseña del nuevo usuario'), {
+    target: { value: 'clave-larga' },
+  });
+  fireEvent.change(screen.getByLabelText('Nivel del nuevo usuario'), {
+    target: { value: 'SUPERADMIN' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Crear usuario' }));
+
+  await waitFor(() =>
+    expect(mockAdmin.post).toHaveBeenCalledWith('/usuarios', {
+      username: 'agarcia', password: 'clave-larga', nivel_acceso: 'SUPERADMIN',
+    })
+  );
+});
+
+test('Usuarios: una contraseña corta no llega a salir de la web', async () => {
+  render(<AdminApp />);
+  irA('Usuarios');
+  await screen.findByText('Planta');
+
+  fireEvent.change(screen.getByLabelText('Nuevo usuario'), { target: { value: 'pepe' } });
+  fireEvent.change(screen.getByLabelText('Contraseña del nuevo usuario'), {
+    target: { value: '123' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Crear usuario' }));
+
+  expect(await screen.findByText(/al menos 6 caracteres/)).toBeInTheDocument();
+  expect(mockAdmin.post).not.toHaveBeenCalled();
+});
+
+test('Usuarios: «Eliminar» hace PUT {activo:false} y nunca DELETE', async () => {
+  render(<AdminApp />);
+  irA('Usuarios');
+  await screen.findByText('Planta');
+
+  // El propio usuario no puede desactivarse: su botón está deshabilitado.
+  const botones = screen.getAllByRole('button', { name: 'Eliminar' });
+  expect(botones[0]).toBeDisabled();
+
+  fireEvent.click(botones[1]);   // Planta
+  await waitFor(() =>
+    expect(mockAdmin.put).toHaveBeenCalledWith('/usuarios/2', { activo: false })
+  );
+  expect(mockAdmin.delete).not.toHaveBeenCalled();
 });
 
 test('Checklists: los ítems vienen de la API y se guardan por id', async () => {

@@ -4,7 +4,7 @@ import { Card, Badge, Button, Campo, Select, Estado, Aviso, useAviso, Label } fr
 import { num, fechaISO, plural } from '../../lib/format';
 import FiltroRango from './FiltroRango';
 import useApi from '../../lib/useApi';
-import { admin, mensajeDeError } from '../../lib/adminApi';
+import { admin, mensajeDeError, esSuperadmin, puedeEditar } from '../../lib/adminApi';
 
 const CAMPOS = ['maquina', 'operador', 'marca', 'presentacion', 'fragancia'];
 
@@ -27,11 +27,19 @@ export default function TabProduccion() {
   const sesiones = useApi('/sesiones', { params: aplicado, cliente: admin });
   const catalogos = useApi('/catalogos', { cliente: admin });
   const operarios = useApi('/operadores', { cliente: admin });
+  /* Para saber si la tablet de una sesión activa sigue reportando: cerrar un turno
+     que alguien está usando de verdad deja a esa tablet en un estado inconsistente,
+     así que la confirmación tiene que poder advertirlo. */
+  const activas = useApi('/sesiones_activas', { cliente: admin });
   const [fragancias, setFragancias] = useState([]);
 
   /* Borradores por sesión: { [id]: {maquina, operador, ...} } */
   const [borrador, setBorrador] = useState({});
   const [guardando, setGuardando] = useState(null);
+  const [ocupado, setOcupado] = useState(null);   // { id, accion } mientras se cierra/elimina
+
+  const editable = puedeEditar();
+  const puedeEliminar = esSuperadmin();
 
   useEffect(() => {
     axios
@@ -86,6 +94,80 @@ export default function TabProduccion() {
     }
   };
 
+  /* ¿La tablet de esta sesión sigue en línea? Solo lo sabemos de las activas. */
+  const tabletEnLinea = (sesion) =>
+    Boolean(
+      (Array.isArray(activas.datos) ? activas.datos : []).find(
+        (a) => a.sesion_id === sesion.id,
+      )?.tablet_online,
+    );
+
+  const cerrarTurno = async (sesion) => {
+    const enLinea = tabletEnLinea(sesion);
+    const aviso = enLinea
+      ? '\n\n⚠ LA TABLET DE ESTA MÁQUINA SIGUE CONECTADA.\nSi hay alguien trabajando, sus pacas se seguirán registrando en un turno ya cerrado y su botón de finalizar dará error. Ciérralo solo si el turno quedó abandonado.'
+      : '';
+    if (!window.confirm(
+      `¿Cerrar el turno de ${sesion.operador} en ${sesion.maquina}?\n\n` +
+      'Se cerrarán también el paro abierto y los pedidos de insumo pendientes, y ' +
+      'quedará registrado que lo cerraste tú.' + aviso
+    )) return;
+
+    setOcupado({ id: sesion.id, accion: 'cerrar' });
+    try {
+      const { data } = await admin.post(`/sesiones/${sesion.id}/cerrar`);
+      const extras = [
+        data.paro_cerrado ? 'paro cerrado' : null,
+        data.pedidos_cerrados ? `${data.pedidos_cerrados} pedido(s) cerrado(s)` : null,
+      ].filter(Boolean);
+      ok(`Turno #${sesion.id} cerrado${extras.length ? ` · ${extras.join(' · ')}` : ''}`);
+      sesiones.recargar();
+      activas.recargar();
+    } catch (err) {
+      fallo(mensajeDeError(err));
+    } finally {
+      setOcupado(null);
+    }
+  };
+
+  const eliminar = async (sesion) => {
+    const conProduccion = Number(sesion.total_pacas) > 0 || Number(sesion.n_registros) > 0;
+    if (!window.confirm(
+      `¿ELIMINAR la sesión #${sesion.id}?\n\n` +
+      `${sesion.maquina} · ${sesion.operador} · ${sesion.inicio}\n` +
+      `${num(sesion.total_pacas)} pacas en ${num(sesion.n_registros)} registro(s).\n\n` +
+      'Se borrará también TODO lo que cuelga de ella: pacas, paros, pedidos de ' +
+      'insumo, comentarios y reportes. No se puede deshacer.'
+    )) return;
+
+    /* Con producción registrada se pide teclear el número: el clic de más en un
+       confirm es demasiado fácil para algo irreversible que mueve los KPIs. */
+    if (conProduccion) {
+      const tecleado = window.prompt(
+        `Esta sesión tiene ${num(sesion.total_pacas)} pacas registradas.\n` +
+        `Escribe ${sesion.id} para confirmar que quieres borrarla con toda su producción:`
+      );
+      if (String(tecleado || '').trim() !== String(sesion.id)) {
+        fallo('Eliminación cancelada');
+        return;
+      }
+    }
+
+    setOcupado({ id: sesion.id, accion: 'eliminar' });
+    try {
+      const { data } = await admin.delete(`/sesiones/${sesion.id}`);
+      const b = data?.borrado || {};
+      ok(`Sesión #${sesion.id} eliminada · ${num(b.pallets || 0)} registro(s) de pacas, ` +
+         `${num(b.paros || 0)} paro(s)`);
+      sesiones.recargar();
+      activas.recargar();
+    } catch (err) {
+      fallo(mensajeDeError(err));
+    } finally {
+      setOcupado(null);
+    }
+  };
+
   return (
     <div>
       <FiltroRango
@@ -111,7 +193,7 @@ export default function TabProduccion() {
           {lista.map((sesion) => {
             const tocada = Boolean(borrador[sesion.id]);
             return (
-              <Card key={sesion.id} sinPad>
+              <Card key={sesion.id} sinPad etiqueta={`Sesión #${sesion.id}`}>
                 <header className="flex items-center justify-between gap-3 border-b border-sig-line px-5 py-3.5">
                   <h2 className="text-[14px] font-bold text-sig-text">
                     Sesión #{sesion.id} · {sesion.inicio}
@@ -141,14 +223,49 @@ export default function TabProduccion() {
                   </Label>
                   {/* Habilitado siempre, como en las capturas: si no hay cambios el
                       propio `guardar` lo avisa en lugar de mandar un PUT vacío. */}
-                  <Button
-                    variante="primary"
-                    onClick={() => guardar(sesion)}
-                    disabled={guardando === sesion.id}
-                    title={tocada ? undefined : 'Sin cambios pendientes'}
-                  >
-                    {guardando === sesion.id ? 'Guardando…' : 'Guardar sesión'}
-                  </Button>
+                  {editable && (
+                    <Button
+                      variante="primary"
+                      onClick={() => guardar(sesion)}
+                      disabled={guardando === sesion.id}
+                      title={tocada ? undefined : 'Sin cambios pendientes'}
+                    >
+                      {guardando === sesion.id ? 'Guardando…' : 'Guardar sesión'}
+                    </Button>
+                  )}
+
+                  {/* Solo tiene sentido en un turno abierto: es la salida para los que
+                      quedan sin finalizar y bloquean a la máquina para el grupo
+                      siguiente («Esta máquina ya tiene un turno activo»). */}
+                  {editable && sesion.estado === 'Activo' && (
+                    <Button
+                      onClick={() => cerrarTurno(sesion)}
+                      disabled={ocupado?.id === sesion.id}
+                      title={
+                        tabletEnLinea(sesion)
+                          ? 'La tablet de esta máquina sigue conectada'
+                          : 'Cierra el turno y deja constancia de quién lo cerró'
+                      }
+                    >
+                      {ocupado?.id === sesion.id && ocupado.accion === 'cerrar'
+                        ? 'Cerrando…'
+                        : 'CERRAR TURNO'}
+                    </Button>
+                  )}
+
+                  {/* Irreversible y borra en cascada, por eso solo SUPERADMIN. Estilo
+                      secundario sin rojo, como el resto de «Eliminar» del sistema. */}
+                  {puedeEliminar && (
+                    <Button
+                      onClick={() => eliminar(sesion)}
+                      disabled={ocupado?.id === sesion.id}
+                      title="Borra la sesión y toda su producción. No se puede deshacer"
+                    >
+                      {ocupado?.id === sesion.id && ocupado.accion === 'eliminar'
+                        ? 'Eliminando…'
+                        : 'Eliminar'}
+                    </Button>
+                  )}
                 </div>
               </Card>
             );
