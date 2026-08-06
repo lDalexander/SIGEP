@@ -89,6 +89,12 @@ const SESIONES = [
   },
 ];
 
+/* Registros de pacas de la sesión 331: lo que devuelve /sesiones/{id}/pallets. */
+const PALLETS_331 = [
+  { id: 900, cantidad_pacas: 240, fecha_hora: '2026-07-23 08:15:32' },
+  { id: 901, cantidad_pacas: 240, fecha_hora: '2026-07-23 11:47:05' },
+];
+
 const USUARIOS = [
   { id: 1, username: 'admin', nivel_acceso: 'SUPERADMIN', activo: true,
     password_migrada: true, es_tu_usuario: true },
@@ -139,6 +145,8 @@ beforeEach(() => {
     if (url === '/sesiones')          return Promise.resolve({ data: SESIONES });
     if (url === '/checklists')        return Promise.resolve({ data: CHECKLISTS });
     if (url === '/sesiones_activas')  return Promise.resolve({ data: SESIONES_ACTIVAS });
+    if (url === '/sesiones/331/pallets') return Promise.resolve({ data: PALLETS_331 });
+    if (url === '/sesiones/330/pallets') return Promise.resolve({ data: [] });
     if (url === '/usuarios')          return Promise.resolve({ data: USUARIOS });
     if (url === '/niveles')           return Promise.resolve({ data: NIVELES });
     return Promise.reject(new Error(`sin mock para ${url}`));
@@ -492,6 +500,103 @@ test('Producción: un usuario de CONSULTA no ve ninguna acción de escritura', a
   ['Guardar sesión', 'CERRAR TURNO', 'Eliminar'].forEach((rotulo) =>
     expect(screen.queryByRole('button', { name: rotulo })).not.toBeInTheDocument()
   );
+});
+
+test('Producción: el total despliega el historial de pacas, y se pide al abrirlo', async () => {
+  render(<AdminApp />);
+  irA('Producción');
+  await screen.findByText(/Sesión #331/);
+
+  // No se piden los registros de todas las sesiones al entrar: sería una petición
+  // por sesión para algo que casi nunca se abre.
+  expect(mockAdmin.get).not.toHaveBeenCalledWith('/sesiones/331/pallets');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Registros de pacas de la sesión 331' }));
+
+  await waitFor(() => expect(mockAdmin.get).toHaveBeenCalledWith('/sesiones/331/pallets'));
+  expect(await screen.findByLabelText('Pacas del registro 900')).toHaveValue(240);
+  // La hora llega como «YYYY-MM-DD HH:MM:SS» y el input la necesita con T y sin segundos.
+  expect(screen.getByLabelText('Fecha y hora del registro 901')).toHaveValue('2026-07-23T11:47');
+});
+
+test('Producción: cambiar solo la cantidad no manda la hora, y viceversa', async () => {
+  render(<AdminApp />);
+  irA('Producción');
+  await screen.findByText(/Sesión #331/);
+  fireEvent.click(screen.getByRole('button', { name: 'Registros de pacas de la sesión 331' }));
+  await screen.findByLabelText('Pacas del registro 900');
+
+  fireEvent.change(screen.getByLabelText('Pacas del registro 900'), { target: { value: '200' } });
+  fireEvent.click(within(screen.getByRole('region', { name: 'Sesión #331' }))
+    .getAllByRole('button', { name: 'Guardar' })[0]);
+
+  /* Solo viaja lo que cambió: reenviar la hora sin tocarla le pondría los segundos
+     a cero, porque el input `datetime-local` no los maneja. */
+  await waitFor(() =>
+    expect(mockAdmin.put).toHaveBeenCalledWith('/pallets/900', { cantidad_pacas: 200 })
+  );
+});
+
+test('Producción: corregir la hora de un registro la manda sin la T', async () => {
+  render(<AdminApp />);
+  irA('Producción');
+  await screen.findByText(/Sesión #331/);
+  fireEvent.click(screen.getByRole('button', { name: 'Registros de pacas de la sesión 331' }));
+  await screen.findByLabelText('Fecha y hora del registro 901');
+
+  fireEvent.change(screen.getByLabelText('Fecha y hora del registro 901'), {
+    target: { value: '2026-07-23T09:30' },
+  });
+  fireEvent.click(within(screen.getByRole('region', { name: 'Sesión #331' }))
+    .getAllByRole('button', { name: 'Guardar' })[1]);
+
+  await waitFor(() =>
+    expect(mockAdmin.put).toHaveBeenCalledWith('/pallets/901', { fecha_hora: '2026-07-23 09:30' })
+  );
+});
+
+test('Producción: eliminar un registro de pacas es DELETE y pide confirmación', async () => {
+  render(<AdminApp />);
+  irA('Producción');
+  await screen.findByText(/Sesión #331/);
+  fireEvent.click(screen.getByRole('button', { name: 'Registros de pacas de la sesión 331' }));
+  await screen.findByLabelText('Pacas del registro 900');
+
+  const tarjeta = within(screen.getByRole('region', { name: 'Sesión #331' }));
+  // El primer «Eliminar» de la tarjeta es el de la sesión entera; los siguientes,
+  // los de cada registro.
+  fireEvent.click(tarjeta.getAllByRole('button', { name: 'Eliminar' })[1]);
+
+  expect(window.confirm.mock.calls[0][0]).toMatch(/240 pacas de las 08:15/);
+  // Se ofrece la salida no destructiva, que cualquier operativo puede hacer.
+  expect(window.confirm.mock.calls[0][0]).toMatch(/ponle 0 pacas/);
+  await waitFor(() => expect(mockAdmin.delete).toHaveBeenCalledWith('/pallets/900'));
+});
+
+test('Producción: un ADMINPLANTA edita los registros pero no los borra', async () => {
+  mockNivel = 'ADMINPLANTA';
+  render(<AdminApp />);
+  irA('Producción');
+  await screen.findByText(/Sesión #331/);
+  fireEvent.click(screen.getByRole('button', { name: 'Registros de pacas de la sesión 331' }));
+  await screen.findByLabelText('Pacas del registro 900');
+
+  const tarjeta = within(screen.getByRole('region', { name: 'Sesión #331' }));
+  expect(tarjeta.getAllByRole('button', { name: 'Guardar' })).toHaveLength(2);
+  expect(tarjeta.queryByRole('button', { name: 'Eliminar' })).not.toBeInTheDocument();
+});
+
+test('Producción: un CONSULTA ve el historial pero no puede tocarlo', async () => {
+  mockNivel = 'CONSULTA';
+  render(<AdminApp />);
+  irA('Producción');
+  await screen.findByText(/Sesión #331/);
+  fireEvent.click(screen.getByRole('button', { name: 'Registros de pacas de la sesión 331' }));
+
+  expect(await screen.findByLabelText('Pacas del registro 900')).toBeDisabled();
+  expect(screen.getByLabelText('Fecha y hora del registro 900')).toBeDisabled();
+  const tarjeta = within(screen.getByRole('region', { name: 'Sesión #331' }));
+  expect(tarjeta.queryByRole('button', { name: 'Guardar' })).not.toBeInTheDocument();
 });
 
 test('Usuarios: la pestaña solo existe para un SUPERADMIN', async () => {

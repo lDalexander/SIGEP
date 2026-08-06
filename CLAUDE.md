@@ -14,7 +14,7 @@ industriales con sincronización offline-first.
 
 **Última sesión: 2026-08-06.** El frontend está reconstruido y **desplegado en producción**
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
-capturas de `referencia_ui/`. 127 tests en verde.
+capturas de `referencia_ui/`. 133 tests en verde.
 
 La **jerarquía de fragancias por máquina + marca** (2026-08-06) **ya está en producción**
 (backend con `kill -HUP`, worker nuevo 2140077, y frontend `main.edc4db7b.js`). Se comprobó
@@ -586,6 +586,12 @@ npx eslint --ext .js src/
   una contraseña corta ni sale de la web, y que dar de baja a un usuario es
   `PUT {activo:false}` y nunca `DELETE`. `mockNivel` simula el nivel de la sesión (el
   prefijo `mock` es obligatorio: `jest.mock` se iza sobre los `let`).
+  Del historial de pacas: que los registros **no se piden hasta abrir** el
+  desplegable, que la hora llega como `YYYY-MM-DD HH:MM:SS` y el input la muestra
+  como `T` sin segundos, que **solo viaja el campo que se tocó** —reenviar la hora
+  intacta pondría los segundos a cero—, que borrar un registro avisa de la salida no
+  destructiva, y que un `ADMINPLANTA` edita pero no borra y un `CONSULTA` ve los
+  campos deshabilitados.
 
 ### Dev server
 
@@ -760,8 +766,9 @@ de supervisor de las tablets) filtra por los niveles operativos, así que un usu
 | POST | `/admin/usuarios` | `{username,password,nivel_acceso}`, mínimo 6 caracteres. Reactiva si existía inactivo |
 | PUT | `/admin/usuarios/{id}` | `{password?,nivel_acceso?,activo?}`. No puedes desactivarte ni degradarte a ti mismo, ni dejar el sistema sin ningún `SUPERADMIN` activo |
 | GET | `/admin/niveles` | los niveles con su descripción, para el selector |
-| GET | `/admin/sesiones/{id}/pallets` | `[{id,cantidad_pacas,fecha_hora}]` |
-| PUT | `/admin/pallets/{id}` | `{cantidad_pacas}` |
+| GET | `/admin/sesiones/{id}/pallets` | `[{id,cantidad_pacas,fecha_hora}]` — alimenta el desplegable del historial |
+| PUT | `/admin/pallets/{id}` | `{cantidad_pacas?, fecha_hora?}` — los dos opcionales desde el 2026-08-06 (antes `cantidad_pacas` era obligatorio, y ese cuerpo sigue valiendo). La hora acepta `AAAA-MM-DD HH:MM[:SS]` y el ISO con `T`; un valor no parseable da **400**. **Cambiar la hora mueve la producción de hora y de día** en KPIs, gráfico y Excel, que cuentan por `pallets.fecha_hora` |
+| DELETE | `/admin/pallets/{id}` | ⚠️ **borrado físico**, solo `SUPERADMIN`. Para anular sin destruir, `PUT {cantidad_pacas: 0}`, que sí puede un operativo |
 | GET | `/admin/checklists` | `desde`,`hasta`. Como el público **pero los items traen `id`** (necesario para editar) |
 | PUT | `/admin/checklists/{id}` | `{supervisor?, comentarios?, items?:[{id,marcado}]}` |
 | GET | `/admin/catalogos` | `{maquinas:[{id,nombre,tipo}], marcas:[str], presentaciones:[str], fragancias:[str]}` — solo activos. `fragancias` se añadió el 2026-08-06: es admin-only, ninguna tablet lo lee |
@@ -857,7 +864,7 @@ equipo con la hora mal puesta inventaría paros de horas o duraciones negativas.
 |---|---|
 | Cabecera / `Salir` | `POST /admin/auth`, `POST /admin/logout` |
 | Operarios | `GET`/`POST` `/admin/operadores`, `PUT /admin/operadores/{id}` |
-| Producción | `GET /admin/sesiones`, `PUT /admin/sesiones/{id}`, `POST /admin/sesiones/{id}/cerrar`, `DELETE /admin/sesiones/{id}`, `GET /admin/sesiones_activas` (para saber si la tablet sigue conectada); selects desde `/admin/catalogos` |
+| Producción | `GET /admin/sesiones`, `PUT /admin/sesiones/{id}`, `POST /admin/sesiones/{id}/cerrar`, `DELETE /admin/sesiones/{id}`, `GET /admin/sesiones_activas` (para saber si la tablet sigue conectada); el desplegable de pacas usa `GET /admin/sesiones/{id}/pallets`, `PUT`/`DELETE /admin/pallets/{id}`; selects desde `/admin/catalogos` |
 | Checklists | `GET /admin/checklists`, `PUT /admin/checklists/{id}` |
 | Jerarquía | `GET /admin/maquina_productos`, `GET /admin/maquina_fragancias`, `GET /admin/catalogos`, `POST`/`PUT`/`DELETE /admin/maquina_productos`, `POST`/`PUT /admin/maquina_fragancias`, `POST`/`PUT /admin/maquinas`, `POST /admin/marcas`, `POST /admin/presentaciones`, `POST /admin/fragancias` |
 | Mensajes | `GET /admin/sesiones_activas`, `POST /admin/mensajes/masivo` |

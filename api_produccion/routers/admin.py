@@ -261,7 +261,11 @@ class SesionUpdate(BaseModel):
 
 
 class PalletUpdate(BaseModel):
-    cantidad_pacas: int
+    # Los dos campos son opcionales para poder corregir solo uno. `cantidad_pacas` era
+    # obligatorio hasta el 2026-08-06; hacerlo opcional no rompe a nadie, porque un
+    # cuerpo que lo traiga sigue funcionando igual.
+    cantidad_pacas: int | None = None
+    fecha_hora: str | None = None      # "YYYY-MM-DD HH:MM[:SS]" o ISO con T
 
 
 @router.get("/sesiones")
@@ -444,16 +448,80 @@ def listar_pallets(sesion_id: int, db: Session = Depends(get_db), ctx=Depends(re
 
 @router.put("/pallets/{pallet_id}")
 def actualizar_pallet(pallet_id: int, datos: PalletUpdate, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
-    if datos.cantidad_pacas < 0:
-        raise HTTPException(status_code=400, detail="La cantidad no puede ser negativa")
+    """Corrige un registro de pacas: la cantidad, la hora, o las dos.
+
+    La hora se admite desde el 2026-08-06. No es cosmética: el dashboard cuenta la
+    producción por `pallets.fecha_hora`, así que mover un registro lo mueve de hora
+    —y de día— en KPIs, gráfico y Excel. Sirve para colocar en su sitio los pallets
+    que una tablet sincroniza tarde tras estar sin red.
+    """
     p = db.query(PalletDB).filter(PalletDB.id == pallet_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Registro no encontrado")
-    anterior = p.cantidad_pacas
-    p.cantidad_pacas = datos.cantidad_pacas
+
+    cambios = []
+    if datos.cantidad_pacas is not None:
+        if datos.cantidad_pacas < 0:
+            raise HTTPException(status_code=400, detail="La cantidad no puede ser negativa")
+        cambios.append(f"{p.cantidad_pacas} -> {datos.cantidad_pacas} pacas")
+        p.cantidad_pacas = datos.cantidad_pacas
+
+    if datos.fecha_hora is not None:
+        nueva = _parsear_fecha_hora(datos.fecha_hora)
+        anterior = p.fecha_hora.strftime("%Y-%m-%d %H:%M:%S") if p.fecha_hora else "—"
+        cambios.append(f"{anterior} -> {nueva:%Y-%m-%d %H:%M:%S}")
+        p.fecha_hora = nueva
+
+    if not cambios:
+        raise HTTPException(status_code=400, detail="No hay nada que cambiar")
+
     db.commit()
-    logger.info(f"Pallet {pallet_id}: {anterior} -> {datos.cantidad_pacas} pacas (admin {ctx.get('username')})")
-    return {"id": p.id, "cantidad_pacas": p.cantidad_pacas}
+    logger.info(f"Pallet {pallet_id}: {' · '.join(cambios)} (admin {ctx.get('username')})")
+    return {
+        "id": p.id,
+        "cantidad_pacas": p.cantidad_pacas,
+        "fecha_hora": p.fecha_hora.strftime("%Y-%m-%d %H:%M:%S") if p.fecha_hora else "",
+    }
+
+
+def _parsear_fecha_hora(valor: str):
+    """Acepta 'YYYY-MM-DD HH:MM[:SS]' y el ISO con T que manda `datetime-local`."""
+    texto = (valor or "").strip().replace("T", " ")
+    for formato in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(texto, formato)
+        except ValueError:
+            continue
+    raise HTTPException(
+        status_code=400,
+        detail="Fecha y hora inválidas (use AAAA-MM-DD HH:MM)",
+    )
+
+
+@router.delete("/pallets/{pallet_id}")
+def eliminar_pallet(pallet_id: int, db: Session = Depends(get_db), ctx=Depends(require_superadmin)):
+    """Borra un registro de pacas. Irreversible, solo SUPERADMIN.
+
+    Es la vía para los duplicados que deja una tablet al reenviar su cola. Alternativa
+    no destructiva y al alcance de un operativo: poner la cantidad a 0 con el PUT, que
+    conserva la traza de que ese registro existió.
+    """
+    p = db.query(PalletDB).filter(PalletDB.id == pallet_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Registro no encontrado")
+    resumen = {
+        "sesion_id": p.session_id,
+        "cantidad_pacas": p.cantidad_pacas,
+        "fecha_hora": p.fecha_hora.strftime("%Y-%m-%d %H:%M:%S") if p.fecha_hora else "",
+    }
+    db.delete(p)
+    db.commit()
+    logger.warning(
+        f"PALLET ELIMINADO: #{pallet_id} (sesión {resumen['sesion_id']}, "
+        f"{resumen['cantidad_pacas']} pacas, {resumen['fecha_hora']}) "
+        f"por {ctx.get('username')}"
+    )
+    return {"eliminado": pallet_id, "registro": resumen}
 
 
 # ----------------------------------------------------------------------------

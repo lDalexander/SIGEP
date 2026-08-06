@@ -1,12 +1,19 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
-import { Card, Badge, Button, Campo, Select, Estado, Aviso, useAviso, Label } from '../ui';
+import { ChevronDown } from 'lucide-react';
+import { Card, Badge, Button, Campo, Input, Select, Estado, Aviso, useAviso, Label } from '../ui';
 import { num, fechaISO, plural } from '../../lib/format';
 import FiltroRango from './FiltroRango';
 import useApi from '../../lib/useApi';
 import { admin, mensajeDeError, esSuperadmin, puedeEditar } from '../../lib/adminApi';
 
 const CAMPOS = ['maquina', 'operador', 'marca', 'presentacion', 'fragancia'];
+
+/* La API devuelve «YYYY-MM-DD HH:MM:SS»; `datetime-local` quiere «YYYY-MM-DDTHH:MM».
+   Se recorta a minutos a propósito: el control no maneja segundos, y por eso la hora
+   solo se manda al backend cuando el usuario la cambia (si no, los pondría a :00). */
+const paraInput = (fechaHora) => String(fechaHora || '').replace(' ', 'T').slice(0, 16);
+const horaDe = (fechaHora) => String(fechaHora || '').slice(11, 16) || '—';
 
 /**
  * Pestaña «Producción» — corrige los datos de las sesiones que llegan de las tablets.
@@ -37,6 +44,12 @@ export default function TabProduccion() {
   const [borrador, setBorrador] = useState({});
   const [guardando, setGuardando] = useState(null);
   const [ocupado, setOcupado] = useState(null);   // { id, accion } mientras se cierra/elimina
+
+  /* Historial de pacas, por sesión y bajo demanda: { [id]: {abierto, cargando, filas, error} }.
+     No se piden todos al entrar — son N peticiones para algo que casi nunca se abre. */
+  const [historial, setHistorial] = useState({});
+  /* Ediciones en curso de un registro: { [pallet_id]: {cantidad_pacas?, fecha_hora?} } */
+  const [edicion, setEdicion] = useState({});
 
   const editable = puedeEditar();
   const puedeEliminar = esSuperadmin();
@@ -91,6 +104,100 @@ export default function TabProduccion() {
       fallo(mensajeDeError(err));
     } finally {
       setGuardando(null);
+    }
+  };
+
+  /* ── Historial de pacas de una sesión ───────────────── */
+
+  const cargarHistorial = async (sesion) => {
+    setHistorial((prev) => ({ ...prev, [sesion.id]: { ...prev[sesion.id], abierto: true, cargando: true } }));
+    try {
+      const { data } = await admin.get(`/sesiones/${sesion.id}/pallets`);
+      setHistorial((prev) => ({
+        ...prev,
+        [sesion.id]: { abierto: true, cargando: false, filas: Array.isArray(data) ? data : [] },
+      }));
+    } catch (err) {
+      setHistorial((prev) => ({
+        ...prev,
+        [sesion.id]: { abierto: true, cargando: false, filas: [], error: mensajeDeError(err) },
+      }));
+    }
+  };
+
+  const alternarHistorial = (sesion) => {
+    const actual = historial[sesion.id];
+    if (actual?.abierto) {
+      setHistorial((prev) => ({ ...prev, [sesion.id]: { ...actual, abierto: false } }));
+      return;
+    }
+    cargarHistorial(sesion);
+  };
+
+  const editarRegistro = (pallet, campo, valor) =>
+    setEdicion((prev) => ({ ...prev, [pallet.id]: { ...prev[pallet.id], [campo]: valor } }));
+
+  const guardarRegistro = async (sesion, pallet) => {
+    const cambios = {};
+    const pendiente = edicion[pallet.id] || {};
+    if (pendiente.cantidad_pacas !== undefined &&
+        Number(pendiente.cantidad_pacas) !== Number(pallet.cantidad_pacas)) {
+      const cantidad = Number(pendiente.cantidad_pacas);
+      if (!Number.isFinite(cantidad) || cantidad < 0) {
+        fallo('La cantidad no puede ser negativa');
+        return;
+      }
+      cambios.cantidad_pacas = cantidad;
+    }
+    /* Solo viaja la hora si se tocó: el input `datetime-local` no lleva segundos y
+       reenviarla sin cambios los pondría a cero sin que nadie lo haya pedido. */
+    if (pendiente.fecha_hora !== undefined &&
+        pendiente.fecha_hora !== paraInput(pallet.fecha_hora)) {
+      if (!pendiente.fecha_hora) {
+        fallo('La fecha y hora no pueden quedar vacías');
+        return;
+      }
+      cambios.fecha_hora = pendiente.fecha_hora.replace('T', ' ');
+    }
+    if (Object.keys(cambios).length === 0) {
+      fallo('No hay cambios en ese registro');
+      return;
+    }
+
+    setOcupado({ id: sesion.id, accion: `pallet-${pallet.id}` });
+    try {
+      await admin.put(`/pallets/${pallet.id}`, cambios);
+      ok(`Registro #${pallet.id} actualizado`);
+      setEdicion((prev) => {
+        const resto = { ...prev };
+        delete resto[pallet.id];
+        return resto;
+      });
+      await cargarHistorial(sesion);
+      sesiones.recargar();      // el total de la sesión lo recalcula el backend
+    } catch (err) {
+      fallo(mensajeDeError(err));
+    } finally {
+      setOcupado(null);
+    }
+  };
+
+  const eliminarRegistro = async (sesion, pallet) => {
+    if (!window.confirm(
+      `¿Eliminar el registro de ${num(pallet.cantidad_pacas)} pacas de las ${horaDe(pallet.fecha_hora)}?\n\n` +
+      'No se puede deshacer. Si solo quieres anularlo conservando la traza, ponle 0 pacas.'
+    )) return;
+
+    setOcupado({ id: sesion.id, accion: `pallet-${pallet.id}` });
+    try {
+      await admin.delete(`/pallets/${pallet.id}`);
+      ok(`Registro #${pallet.id} eliminado`);
+      await cargarHistorial(sesion);
+      sesiones.recargar();
+    } catch (err) {
+      fallo(mensajeDeError(err));
+    } finally {
+      setOcupado(null);
     }
   };
 
@@ -192,6 +299,8 @@ export default function TabProduccion() {
         <div className="space-y-5">
           {lista.map((sesion) => {
             const tocada = Boolean(borrador[sesion.id]);
+            const detalle = historial[sesion.id];
+            const abierto = detalle?.abierto;
             return (
               <Card key={sesion.id} sinPad etiqueta={`Sesión #${sesion.id}`}>
                 <header className="flex items-center justify-between gap-3 border-b border-sig-line px-5 py-3.5">
@@ -218,9 +327,23 @@ export default function TabProduccion() {
                 </div>
 
                 <div className="flex flex-wrap items-center justify-end gap-3 border-t border-sig-line px-5 py-3">
-                  <Label caja="normal" className="rounded-lg bg-sig-input px-3 py-1.5">
+                  {/* El total abre el detalle: es donde uno mira cuando la cifra no
+                      cuadra, así que es el sitio natural del desplegable. */}
+                  <button
+                    type="button"
+                    onClick={() => alternarHistorial(sesion)}
+                    aria-expanded={Boolean(abierto)}
+                    aria-label={`Registros de pacas de la sesión ${sesion.id}`}
+                    className="sig-meta flex items-center gap-2 rounded-lg bg-sig-input px-3 py-1.5
+                               text-sig-muted transition-colors hover:text-sig-text"
+                  >
+                    <ChevronDown
+                      size={12}
+                      aria-hidden="true"
+                      className={`transition-transform ${abierto ? 'rotate-180' : ''}`}
+                    />
                     Pacas: {num(sesion.total_pacas)} ({num(sesion.n_registros)} reg.)
-                  </Label>
+                  </button>
                   {/* Habilitado siempre, como en las capturas: si no hay cambios el
                       propio `guardar` lo avisa en lugar de mandar un PUT vacío. */}
                   {editable && (
@@ -267,6 +390,85 @@ export default function TabProduccion() {
                     </Button>
                   )}
                 </div>
+
+                {/* Historial de pacas: una fila por registro que mandó la tablet.
+                    Cambiar la hora NO es cosmético — el dashboard cuenta la
+                    producción por `pallets.fecha_hora`, así que mueve el registro de
+                    hora y de día en KPIs, gráfico y Excel. */}
+                {abierto && (
+                  <div className="border-t border-sig-line bg-black/10 px-5 py-3">
+                    {detalle.cargando ? (
+                      <Label caja="normal" className="text-sig-dim">Cargando registros…</Label>
+                    ) : detalle.error ? (
+                      <Label caja="normal" className="text-sig-dim">{detalle.error}</Label>
+                    ) : detalle.filas.length === 0 ? (
+                      <Label caja="normal" className="text-sig-dim">
+                        Esta sesión no tiene pacas registradas
+                      </Label>
+                    ) : (
+                      <>
+                        <div className="mb-2 flex items-center gap-3">
+                          <Label className="text-sig-muted">Registros de pacas</Label>
+                          <Label caja="normal" className="text-sig-dim">
+                            cambiar la hora mueve la producción de hora y de día en el dashboard
+                          </Label>
+                        </div>
+                        <ul className="space-y-2">
+                          {detalle.filas.map((pallet) => {
+                            const enCurso = ocupado?.accion === `pallet-${pallet.id}`;
+                            const pendiente = edicion[pallet.id] || {};
+                            return (
+                              <li key={pallet.id} className="flex flex-wrap items-center gap-2.5">
+                                <Label caja="normal" className="w-[64px] shrink-0 text-sig-dim">
+                                  #{pallet.id}
+                                </Label>
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  value={pendiente.cantidad_pacas ?? pallet.cantidad_pacas}
+                                  onChange={(e) => editarRegistro(pallet, 'cantidad_pacas', e.target.value)}
+                                  disabled={!editable || enCurso}
+                                  aria-label={`Pacas del registro ${pallet.id}`}
+                                  className="w-[96px]"
+                                />
+                                <Label caja="normal" className="text-sig-dim">pacas</Label>
+                                <Input
+                                  type="datetime-local"
+                                  value={pendiente.fecha_hora ?? paraInput(pallet.fecha_hora)}
+                                  onChange={(e) => editarRegistro(pallet, 'fecha_hora', e.target.value)}
+                                  disabled={!editable || enCurso}
+                                  aria-label={`Fecha y hora del registro ${pallet.id}`}
+                                  className="w-[210px]"
+                                />
+                                <div className="ml-auto flex items-center gap-2">
+                                  {editable && (
+                                    <Button
+                                      tamano="sm"
+                                      onClick={() => guardarRegistro(sesion, pallet)}
+                                      disabled={enCurso}
+                                    >
+                                      {enCurso ? 'Guardando…' : 'Guardar'}
+                                    </Button>
+                                  )}
+                                  {puedeEliminar && (
+                                    <Button
+                                      tamano="sm"
+                                      onClick={() => eliminarRegistro(sesion, pallet)}
+                                      disabled={enCurso}
+                                      title="Borra el registro. Para anularlo conservando la traza, ponle 0 pacas"
+                                    >
+                                      Eliminar
+                                    </Button>
+                                  )}
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </>
+                    )}
+                  </div>
+                )}
               </Card>
             );
           })}
