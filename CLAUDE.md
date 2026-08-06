@@ -12,9 +12,14 @@ industriales con sincronización offline-first.
 
 ## 0. Estado actual
 
-**Última sesión: 2026-08-05.** El frontend está reconstruido y **desplegado en producción**
+**Última sesión: 2026-08-06.** El frontend está reconstruido y **desplegado en producción**
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
-capturas de `referencia_ui/`. 112 tests en verde.
+capturas de `referencia_ui/`. 117 tests en verde.
+
+La **jerarquía de fragancias por máquina + marca** (2026-08-06) está **probada en el 3001
+contra el 8001 y pendiente de desplegar**: falta la siembra de
+`alter_fragancias_jerarquia.sql`, el `kill -HUP` del backend y el `./deploy.sh`. Detalle
+en «Cambios de backend ya autorizados» más abajo.
 
 Los **segmentadores multi-selección** del dashboard con **menús encadenados** (2026-08-05)
 **ya están en producción**. Semántica en §2 y §4. Cómo se desplegó, por si sirve de patrón:
@@ -48,6 +53,7 @@ heartbeat, sin errores en el log del servicio.
 | Tag previo a los segmentadores | `v1.3-pre-segmentadores` (en GitHub) |
 | Tag previo a los filtros de estadísticas | `v1.4-pre-filtros-estadisticas` (en GitHub) |
 | Tag previo a los menús encadenados | `v1.5-pre-opciones-encadenadas` (en GitHub) |
+| Tag previo a la jerarquía de fragancias | `v1.6-pre-fragancias` (en GitHub) |
 | Build de esa versión | `~/respaldos_build_sigep/build_pre-paros_2026-08-05_*` |
 | Build previo a los segmentadores | `~/respaldos_build_sigep/build_2026-08-05_165753` |
 | Build estable v1.0 | `~/RESPALDO_build_estable_v1.0` |
@@ -66,7 +72,41 @@ falta tag, y la prohibición de «limpiar» el árbol con `checkout`/`reset`/`cl
 
 ### Cambios de backend ya autorizados y aplicados
 
-Tras la reconstrucción se autorizaron **cinco** excepciones a la regla de oro:
+Tras la reconstrucción se autorizaron **seis** excepciones a la regla de oro:
+
+- **Jerarquía de fragancias por máquina + marca** (2026-08-06, autorizada,
+  **probada en el 3001 · pendiente de desplegar**). La fragancia era universal: la app
+  ofrecía la misma lista fija (Floral / Limón) en cualquier máquina y marca. Con la línea
+  líquida en producción cada máquina y marca hace fragancias distintas, así que pasa a
+  formar parte de la jerarquía.
+
+  - **BD:** una tabla nueva, `maquina_marca_fragancias` (`maquina_id`, `marca`,
+    `fragancia`, `activo`, UNIQUE de las tres primeras), en
+    `api_produccion/alter_fragancias_jerarquia.sql`. La granularidad es
+    **(máquina, marca)**, sin presentación: ULTREX 1 KG y ULTREX 3 KG de la misma máquina
+    llevan las mismas fragancias, así que colgarlo de `maquina_productos` habría
+    multiplicado las filas sin ganar precisión. **`maquina_productos` no se tocó.**
+  - **`fragancias` ya existía en MySQL** —creada a mano como `marcas` y
+    `presentaciones`, con Limón y Floral dentro— y **nadie la leía**. Se empieza a usar
+    como catálogo maestro; su esquema y sus filas están intactos.
+  - **Cuidado:** `main.py` llama a `Base.metadata.create_all()` al arrancar, así que la
+    tabla nueva **se crea sola** en cuanto un proceso importa el modelo. `create_all`
+    crea lo que falta y nunca altera lo que existe, así que es inocuo, pero significa que
+    el `CREATE TABLE` del `.sql` puede llegar tarde; por eso el script lleva además un
+    `ALTER … MODIFY activo tinyint NOT NULL DEFAULT 1` idempotente (SQLAlchemy resuelve
+    el default en Python, no en MySQL, y una fila insertada a mano sin ese campo quedaría
+    en NULL, o sea leída como dada de baja).
+  - **API:** solo **rutas nuevas** — `GET /api/fragancias`, `POST /api/admin/fragancias`,
+    `GET`/`POST /api/admin/maquina_fragancias`, `PUT /api/admin/maquina_fragancias/{id}`.
+    Lo único que cambia en una respuesta existente es la clave `fragancias` añadida a
+    `GET /api/admin/catalogos`, que exige token admin y solo consume esta web.
+  - Verificado con `diff` 8000 vs 8001 en **23 endpoints**: 22 idénticos byte a byte
+    (`/api/maquinas`, `/api/operadores` con y sin `tipo`, los cinco del dashboard con
+    rango, franja y segmentadores, `opciones_filtros`, `comentarios_turno`,
+    `mantenimiento/checklist`, `tablets/estado`, `insumos/dashboard`). El único distinto,
+    `/dashboard/paros`, difería en las décimas de segundo del cronómetro de un paro
+    abierto, no por el código. **Las tablets no necesitan actualización.**
+  - Semántica y contrato para Android en `api_produccion/CAMBIO_ANDROID_fragancias.md`.
 
 - **Segmentación del dashboard** (2026-08-05, **en producción**).
   Dos endpoints tocados, en los dos añadiendo **solo parámetros opcionales**:
@@ -127,24 +167,31 @@ Tras la reconstrucción se autorizaron **cinco** excepciones a la regla de oro:
 
 ### Pendiente
 
-1. **App Android** — para que el selector «Seleccione Operador» filtre de verdad, la app
-   debe pasar `?tipo=` con el tipo de su máquina. Instrucciones completas en
-   `api_produccion/CAMBIO_ANDROID_tipo_operario.md`. **No corre prisa**: sin ese cambio
-   todo sigue funcionando como antes.
-2. **Paros sin cerrar** — el garbage collector de `tasks.py` cierra los turnos colgados a
+1. **App Android** — dos cambios, ninguno urgente (sin ellos todo sigue igual):
+   - el selector «Seleccione Operador» solo filtra por línea si la app pasa `?tipo=` con
+     el tipo de su máquina → `api_produccion/CAMBIO_ANDROID_tipo_operario.md`;
+   - el selector de fragancia sigue con su lista fija hasta que la app llame a
+     `GET /api/fragancias?maquina=&marca=` → `api_produccion/CAMBIO_ANDROID_fragancias.md`.
+     **Mientras no lo haga, configurar fragancias en la web no cambia lo que ve el
+     operario en la tablet.**
+2. **Validación de fragancia en `iniciar_turno`** — hoy valida
+   `(máquina, marca, presentación)` pero **no** la fragancia, a propósito: activarla antes
+   de que todas las tablets lean `/api/fragancias` rechazaría turnos legítimos. Cuando la
+   app esté actualizada se puede añadir, con autorización aparte.
+3. **Paros sin cerrar** — el garbage collector de `tasks.py` cierra los turnos colgados a
    las 13 h pero **no cierra los paros abiertos de esa sesión**, así que quedan con
    `fin_paro` NULL para siempre (hay 1 de 78 así: el paro 105). La vista de paros los
    distingue con el estado «SIN CIERRE» en vez de contarlos como paros en curso, pero el
    arreglo de fondo está en el backend y **no se ha tocado** (haría falta autorización).
-3. **Máquinas de línea líquida** — ya hay dos dadas de alta (`Máquina 3` y `Maquina 12`),
+4. **Máquinas de línea líquida** — ya hay dos dadas de alta (`Máquina 3` y `Maquina 12`),
    sin producción registrada todavía. Total: 8 máquinas activas, una de ellas `PRUEBA`.
-4. **Logo provisional** — `public/logo192.png` es el de Create React App. El de la cabecera
+5. **Logo provisional** — `public/logo192.png` es el de Create React App. El de la cabecera
    es un SVG hecho a partir de las capturas (`components/ui/Logo.js`); si aparece el
    original, se sustituye por un `<img>`.
-5. **Botón «Insumos» de la cabecera** — aparece en las capturas pero no hay ninguna captura
+6. **Botón «Insumos» de la cabecera** — aparece en las capturas pero no hay ninguna captura
    ni especificación de esa vista. Hoy muestra un aviso de «vista sin especificación de
    referencia». Falta decidir qué debe contener, o quitar el botón.
-6. **El total de estadísticas no cuadra con el KPI de producción**, y es **de siempre**, no
+7. **El total de estadísticas no cuadra con el KPI de producción**, y es **de siempre**, no
    de la segmentación: el rango de fechas de `estadisticas` filtra por `inicio_turno` de la
    sesión mientras `kpis` cuenta por `pallets.fecha_hora`. Sin ningún filtro, el 2026-08-05
    daban 1801 y 2767 pacas respectivamente. Con los segmentadores puestos la diferencia se
@@ -423,9 +470,19 @@ devuelve al login — los tokens viven en la memoria del proceso del backend, as
 Los componentes que leen datos del admin usan `useApi` pasándole ese cliente:
 `useApi('/operadores', { cliente: admin })`.
 
-**«Eliminar» nunca llama a `DELETE`.** Tanto en Operarios como en las combinaciones de
-Jerarquía hace `PUT {activo: false}` tras confirmación, porque los endpoints de borrado
-del backend son físicos y dejarían huérfano el histórico. Hay un test que lo verifica.
+**«Eliminar» nunca llama a `DELETE`.** Tanto en Operarios como en las combinaciones y las
+fragancias de Jerarquía hace `PUT {activo: false}` tras confirmación, porque los endpoints
+de borrado del backend son físicos y dejarían huérfano el histórico. Hay tests que lo
+verifican.
+
+**La pestaña Jerarquía administra dos jerarquías con granularidad distinta**, y no es un
+descuido: `maquina_productos` va por (máquina, marca, presentación) y
+`maquina_marca_fragancias` por (máquina, marca) — la fragancia no depende del gramaje. En
+la tarjeta de cada máquina, el bloque «Fragancias por marca» solo ofrece las marcas que
+esa máquina produce, las activas se muestran como chips ámbar con «×» y las quitadas
+siguen visibles tachadas para poder reactivarlas. Una marca **sin ninguna fragancia
+activa** se rotula «sin configurar · se ofrecen todas», porque el endpoint cae al catálogo
+completo en ese caso y el hueco se leería, si no, como «esta marca no lleva fragancia».
 
 ### Estados y errores
 
@@ -472,7 +529,11 @@ npx eslint --ext .js src/
   máquinas. `beforeEach` **resetea la ruta**: jsdom la conserva entre tests del mismo
   archivo y la vista se decide por el pathname.
 - `src/components/admin/AdminApp.test.js` — las cinco pestañas, incluido que
-  «Eliminar» haga `PUT {activo:false}` y nunca `DELETE`.
+  «Eliminar» haga `PUT {activo:false}` y nunca `DELETE`. De las fragancias de Jerarquía:
+  que van por marca y no por presentación, que el alta manda `{maquina_id, marca,
+  fragancia}`, que el desplegable no repite una ya activa (sería un 409), que quitar es
+  `PUT {activo:false}` y nunca `DELETE`, que una quitada sigue reactivable, que una marca
+  sin ninguna avisa de que se ofrecen todas, y el alta en el catálogo maestro.
 
 ### Dev server
 
@@ -520,7 +581,8 @@ así se evita CORS. El `App.js` heredado apunta a `http://150.36.200.252:8000/ap
 | POST | `/tablets/sincronizar_todas` | — | `{total, enviadas}` |
 | GET | `/insumos/dashboard` | `desde`,`hasta` | `{rango, kpis{total_pedidos,tiempo_resp_prom_seg,con_discrepancia,entregas_proactivas}, pedidos[], entregas[]}` |
 | GET | `/operadores` | `tipo` (opcional) | `[{id, nombre}]` activos. `?tipo=SOLIDO\|LIQUIDO` filtra por línea; **sin el parámetro devuelve todos**, que es lo que hace la app Android actual. Un tipo desconocido se ignora en vez de vaciar el selector |
-| GET | `/maquinas` | — | `[{id,nombre,tipo,marcas:[{nombre,presentaciones[]}]}]` — jerarquía completa |
+| GET | `/maquinas` | — | `[{id,nombre,tipo,marcas:[{nombre,presentaciones[]}]}]` — jerarquía completa. **No trae fragancias**: van aparte, en `/fragancias` |
+| GET | `/fragancias` | `maquina`, `marca` (opcionales) | `["Floral","Limón"]` — las de esa máquina+marca. **Nunca devuelve lista vacía**: sin parámetros, sin configuración para esa combinación o con una máquina desconocida cae al catálogo activo completo, para que una configuración a medias no deje al operario sin poder iniciar turno (mismo criterio que `/maquinas` sin jerarquía) |
 | GET | `/reportes/excel` | `desde`,`hasta` | .xlsx producción (404 si el rango está vacío) |
 | GET | `/reportes/formularios_excel` | `desde`,`hasta` | .xlsx checklists (404 si vacío) |
 | GET | `/reportes/insumos_excel` | `desde`,`hasta` | .xlsx insumos (404 si vacío) |
@@ -623,7 +685,11 @@ Sin token o con token inválido: **401**.
 | PUT | `/admin/pallets/{id}` | `{cantidad_pacas}` |
 | GET | `/admin/checklists` | `desde`,`hasta`. Como el público **pero los items traen `id`** (necesario para editar) |
 | PUT | `/admin/checklists/{id}` | `{supervisor?, comentarios?, items?:[{id,marcado}]}` |
-| GET | `/admin/catalogos` | `{maquinas:[{id,nombre,tipo}], marcas:[str], presentaciones:[str]}` — solo activos |
+| GET | `/admin/catalogos` | `{maquinas:[{id,nombre,tipo}], marcas:[str], presentaciones:[str], fragancias:[str]}` — solo activos. `fragancias` se añadió el 2026-08-06: es admin-only, ninguna tablet lo lee |
+| GET | `/admin/maquina_fragancias` | `[{maquina_id,maquina,tipo,activa,marcas:[{marca,produce,fragancias:[{id,fragancia,activo}]}]}]` — incluye inactivas. Las marcas son la unión de las que produce y las que ya tienen fragancias, para que una combinación dada de baja no esconda sus fragancias |
+| POST | `/admin/maquina_fragancias` | `{maquina_id,marca,fragancia}`. Reactiva si existía inactiva, 409 si ya está activa. La fragancia debe estar en el catálogo (422 si no) y la marca debe ser de esa máquina si tiene jerarquía (422 si no) |
+| PUT | `/admin/maquina_fragancias/{id}` | `{fragancia?, activo?}` → quitar = `{activo:false}` |
+| POST | `/admin/fragancias` | `{nombre}` — catálogo maestro, crea o reactiva |
 | GET | `/admin/maquina_productos` | `[{maquina_id,maquina,tipo,activa,productos:[{id,marca,presentacion,activo}]}]` — incluye inactivos |
 | POST | `/admin/maquina_productos` | `{maquina_id,marca,presentacion}`. Reactiva si existía inactiva |
 | PUT | `/admin/maquina_productos/{id}` | `{marca?,presentacion?,activo?}` → desactivar |
@@ -714,7 +780,7 @@ equipo con la hora mal puesta inventaría paros de horas o duraciones negativas.
 | Operarios | `GET`/`POST` `/admin/operadores`, `PUT /admin/operadores/{id}` |
 | Producción | `GET /admin/sesiones`, `PUT /admin/sesiones/{id}`; selects desde `/admin/catalogos` |
 | Checklists | `GET /admin/checklists`, `PUT /admin/checklists/{id}` |
-| Jerarquía | `GET /admin/maquina_productos`, `GET /admin/catalogos`, `POST`/`PUT`/`DELETE /admin/maquina_productos`, `POST`/`PUT /admin/maquinas`, `POST /admin/marcas`, `POST /admin/presentaciones` |
+| Jerarquía | `GET /admin/maquina_productos`, `GET /admin/maquina_fragancias`, `GET /admin/catalogos`, `POST`/`PUT`/`DELETE /admin/maquina_productos`, `POST`/`PUT /admin/maquina_fragancias`, `POST`/`PUT /admin/maquinas`, `POST /admin/marcas`, `POST /admin/presentaciones`, `POST /admin/fragancias` |
 | Mensajes | `GET /admin/sesiones_activas`, `POST /admin/mensajes/masivo` |
 
 ### Retirado del dashboard
@@ -729,9 +795,12 @@ equipo con la hora mal puesta inventaría paros de horas o duraciones negativas.
 
 ### Sin endpoint propio (resuelto de otra forma)
 
-- **Catálogo de fragancias** — no existe tabla maestra (sí hay `marcas` y
-  `presentaciones`). El select de FRAGANCIA se puebla con
-  `dashboard/opciones_filtros.fragancia` (valores históricos distintos).
+- **Catálogo de fragancias** — la tabla `fragancias` **sí existe** (se empezó a usar el
+  2026-08-06; antes estaba en MySQL sin que nada la leyera), pero el segmentador del
+  dashboard y el editor de sesiones de `/admin` → Producción siguen poblándose con
+  `dashboard/opciones_filtros.fragancia`, es decir con los **valores históricos**: una
+  sesión vieja puede llevar una fragancia que ya no esté en el catálogo, y el select no
+  debe perderla al editarla. El catálogo maestro solo manda en la pestaña Jerarquía.
 - **"Últimas 24h" de insumos** — `insumos/dashboard` filtra por día natural, no por
   ventana móvil. Se pide `desde`=ayer, `hasta`=hoy y se filtra en cliente por
   `>= ahora - 24h`.

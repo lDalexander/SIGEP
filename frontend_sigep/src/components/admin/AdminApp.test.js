@@ -36,10 +36,31 @@ const MAQUINA_PRODUCTOS = [
   },
 ];
 
+/* Fragancias: cuelgan de (máquina, marca) — sin la presentación. COMISARIATO tiene
+   una activa y una quitada; TORBELLINO ninguna, que es el caso en que la API cae al
+   catálogo completo y la tablet las ofrece todas. */
+const MAQUINA_FRAGANCIAS = [
+  {
+    maquina_id: 1, maquina: 'Máquina 7', tipo: 'SOLIDO', activa: true,
+    marcas: [
+      {
+        marca: 'COMISARIATO',
+        produce: true,
+        fragancias: [
+          { id: 51, fragancia: 'Floral', activo: true },
+          { id: 52, fragancia: 'Limón', activo: false },
+        ],
+      },
+      { marca: 'TORBELLINO', produce: true, fragancias: [] },
+    ],
+  },
+];
+
 const CATALOGOS = {
   maquinas: [{ id: 1, nombre: 'Máquina 7', tipo: 'SOLIDO' }],
   marcas: ['COMISARIATO', 'TORBELLINO', 'ULTREX'],
   presentaciones: ['1 KG', '1.2 KG', '500 GR'],
+  fragancias: ['Floral', 'Limón'],
 };
 
 const SESIONES = [
@@ -80,6 +101,7 @@ beforeEach(() => {
   mockAdmin.get.mockImplementation((url) => {
     if (url === '/operadores')        return Promise.resolve({ data: OPERARIOS });
     if (url === '/maquina_productos') return Promise.resolve({ data: MAQUINA_PRODUCTOS });
+    if (url === '/maquina_fragancias') return Promise.resolve({ data: MAQUINA_FRAGANCIAS });
     if (url === '/catalogos')         return Promise.resolve({ data: CATALOGOS });
     if (url === '/sesiones')          return Promise.resolve({ data: SESIONES });
     if (url === '/checklists')        return Promise.resolve({ data: CHECKLISTS });
@@ -240,6 +262,95 @@ test('Jerarquía: se puede añadir una combinación marca + presentación', asyn
     expect(mockAdmin.post).toHaveBeenCalledWith('/maquina_productos', {
       maquina_id: 1, marca: 'ULTREX', presentacion: '1 KG',
     })
+  );
+});
+
+test('Jerarquía: las fragancias van por marca, no por presentación', async () => {
+  render(<AdminApp />);
+  irA('Jerarquía');
+  await screen.findByText('Máquina 7');
+
+  expect(screen.getByText('Fragancias por marca')).toBeInTheDocument();
+
+  // La activa se muestra como chip con su acción de quitar...
+  expect(screen.getByRole('button', {
+    name: 'Quitar Floral de COMISARIATO · Máquina 7',
+  })).toBeInTheDocument();
+  // ...y la quitada sigue visible para poder reactivarla (baja lógica, no borrado).
+  expect(screen.getByRole('button', {
+    name: 'Reactivar Limón en COMISARIATO · Máquina 7',
+  })).toBeInTheDocument();
+
+  // TORBELLINO no tiene ninguna: la API cae al catálogo, así que la tablet ofrece
+  // todas. Sin este aviso el hueco se leería como «esta marca no lleva fragancia».
+  expect(screen.getByText('sin configurar · se ofrecen todas')).toBeInTheDocument();
+
+  // El select de cada marca es independiente: uno por (máquina, marca).
+  expect(screen.getByLabelText('Fragancia para COMISARIATO en Máquina 7')).toBeInTheDocument();
+  expect(screen.getByLabelText('Fragancia para TORBELLINO en Máquina 7')).toBeInTheDocument();
+});
+
+test('Jerarquía: añadir una fragancia manda máquina y marca, sin presentación', async () => {
+  render(<AdminApp />);
+  irA('Jerarquía');
+  await screen.findByText('Máquina 7');
+
+  const select = screen.getByLabelText('Fragancia para TORBELLINO en Máquina 7');
+  // Ninguna activa todavía, así que el desplegable ofrece el catálogo entero.
+  expect(within(select).getAllByRole('option').map((o) => o.textContent))
+    .toEqual(['Fragancia…', 'Floral', 'Limón']);
+
+  fireEvent.change(select, { target: { value: 'Limón' } });
+  fireEvent.click(screen.getAllByRole('button', { name: 'Añadir' })[1]);
+
+  await waitFor(() =>
+    expect(mockAdmin.post).toHaveBeenCalledWith('/maquina_fragancias', {
+      maquina_id: 1, marca: 'TORBELLINO', fragancia: 'Limón',
+    })
+  );
+});
+
+test('Jerarquía: el desplegable no repite una fragancia ya activa', async () => {
+  render(<AdminApp />);
+  irA('Jerarquía');
+  await screen.findByText('Máquina 7');
+
+  // COMISARIATO ya tiene Floral activa: ofrecerla otra vez solo daría el 409 del
+  // backend, así que se cae de la lista.
+  const select = screen.getByLabelText('Fragancia para COMISARIATO en Máquina 7');
+  expect(within(select).getAllByRole('option').map((o) => o.textContent))
+    .toEqual(['Fragancia…', 'Limón']);
+});
+
+test('Jerarquía: quitar una fragancia hace PUT {activo:false}, nunca DELETE', async () => {
+  render(<AdminApp />);
+  irA('Jerarquía');
+  await screen.findByText('Máquina 7');
+
+  fireEvent.click(screen.getByRole('button', {
+    name: 'Quitar Floral de COMISARIATO · Máquina 7',
+  }));
+
+  await waitFor(() =>
+    expect(mockAdmin.put).toHaveBeenCalledWith('/maquina_fragancias/51', { activo: false })
+  );
+  // El histórico de sesiones se cruza con la fragancia por texto: un borrado físico
+  // lo dejaría colgando.
+  expect(mockAdmin.delete).not.toHaveBeenCalled();
+});
+
+test('Jerarquía: el catálogo maestro de fragancias se da de alta como marcas y presentaciones', async () => {
+  render(<AdminApp />);
+  irA('Jerarquía');
+  await screen.findByText('Máquina 7');
+
+  fireEvent.change(screen.getByLabelText('Nueva fragancia'), {
+    target: { value: '  Lavanda  ' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Agregar fragancia' }));
+
+  await waitFor(() =>
+    expect(mockAdmin.post).toHaveBeenCalledWith('/fragancias', { nombre: 'Lavanda' })
   );
 });
 

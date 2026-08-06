@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 
 from database import get_db, logger
-from models import OperadorDB, MaquinaDB, SesionTrabajoDB, PalletDB, ParoMaquinaDB, PedidoBodegaDB, UsuarioDB, InsumoDB, RecetaProductoDB, MaquinaProductoDB, ComentarioTurnoDB, ReporteAppDB
+from models import OperadorDB, MaquinaDB, SesionTrabajoDB, PalletDB, ParoMaquinaDB, PedidoBodegaDB, UsuarioDB, InsumoDB, RecetaProductoDB, MaquinaProductoDB, MaquinaMarcaFraganciaDB, FraganciaDB, ComentarioTurnoDB, ReporteAppDB
 from schemas import IniciarTurno, RegistrarPalletRequest, FinalizarTurno, IniciarParo, FinalizarParo, ComentarioTurnoRequest, ReporteAppRequest
 from ws_manager import manager
 
@@ -98,6 +98,46 @@ def obtener_maquinas(db: Session = Depends(get_db)):
         {"id": maq.id, "nombre": maq.nombre, "tipo": maq.tipo, "marcas": _catalogo(maq.id)}
         for maq in maquinas
     ]
+
+@router.get("/fragancias")
+def obtener_fragancias(maquina: str = Query(None), marca: str = Query(None),
+                       db: Session = Depends(get_db)):
+    """Fragancias que puede hacer una máquina de una marca (RUTA NUEVA, 2026-08-06).
+
+    Hasta ahora la fragancia era universal y la app llevaba su propia lista fija
+    (Floral / Limón). Con la línea líquida en producción cada máquina y marca hace
+    fragancias distintas, así que se administran desde la web (tabla
+    `maquina_marca_fragancias`) y se leen aquí.
+
+    Es una ruta NUEVA a propósito: `GET /api/maquinas` no cambia, así que las 21
+    tablets que hay hoy en planta siguen funcionando exactamente igual sin
+    actualizarse. Ver CAMBIO_ANDROID_fragancias.md.
+
+    - Con `maquina` y `marca`: las fragancias activas de esa combinación.
+    - Sin parámetros (o si esa combinación no tiene ninguna configurada): el
+      catálogo activo completo. Nunca se devuelve una lista vacía por falta de
+      configuración — dejaría al operario sin poder elegir fragancia y sin poder
+      iniciar el turno. Mismo criterio que `/api/maquinas`, que cae al fallback de
+      la app cuando una máquina no tiene jerarquía.
+
+    Formato: `["Floral", "Limón"]`, la lista de cadenas que el selector necesita.
+    """
+    catalogo = [f.nombre for f in db.query(FraganciaDB)
+                .filter(FraganciaDB.activa.is_(True))
+                .order_by(FraganciaDB.nombre).all()]
+    if not maquina or not marca:
+        return catalogo
+
+    maq = db.query(MaquinaDB).filter(MaquinaDB.nombre == maquina.strip()).first()
+    if not maq:
+        return catalogo
+    propias = [f.fragancia for f in db.query(MaquinaMarcaFraganciaDB).filter(
+        MaquinaMarcaFraganciaDB.maquina_id == maq.id,
+        MaquinaMarcaFraganciaDB.marca == marca.strip(),
+        MaquinaMarcaFraganciaDB.activo.is_(True),
+    ).order_by(MaquinaMarcaFraganciaDB.fragancia).all()]
+    return propias or catalogo
+
 
 @router.get("/sesion/{sesion_id}/detalle_pedidos")
 def obtener_detalle_pedidos_sesion(sesion_id: int, db: Session = Depends(get_db)):

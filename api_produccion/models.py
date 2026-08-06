@@ -44,9 +44,10 @@ class MaquinaProductoDB(Base):
     """Jerarquía máquina → marca → presentación.
 
     Define QUÉ puede producir cada máquina: una fila por cada combinación válida
-    (máquina, marca, presentación). La fragancia (Floral/Limón) es universal y NO
-    forma parte de la jerarquía. Es la fuente de verdad que consume la app Android
-    al iniciar turno (filtra los selectores) y la valida el backend.
+    (máquina, marca, presentación). La fragancia NO va aquí: cuelga de (máquina,
+    marca) en `maquina_marca_fragancias`, porque no depende del gramaje. Es la
+    fuente de verdad que consume la app Android al iniciar turno (filtra los
+    selectores) y la valida el backend.
 
     Se usa texto para marca/presentación (coherente con `recetas_productos` y la
     respuesta de /api/maquinas que ya consume la app). UNIQUE evita duplicados.
@@ -77,6 +78,41 @@ class PresentacionDB(Base):
     id = Column(Integer, primary_key=True, index=True)
     nombre = Column(String(100), unique=True)
     activa = Column(Boolean, default=True)
+
+class FraganciaDB(Base):
+    """Catálogo maestro de fragancias (Floral, Limón...).
+
+    La tabla ya existía en MySQL —creada a mano como `marcas` y `presentaciones`—
+    pero nada la leía: la app Android llevaba su propia lista fija. Se empieza a
+    usar como catálogo de la jerarquía de fragancias; su esquema no se ha tocado."""
+    __tablename__ = "fragancias"
+    id = Column(Integer, primary_key=True, index=True)
+    nombre = Column(String(100), unique=True)
+    activa = Column(Boolean, default=True)
+
+class MaquinaMarcaFraganciaDB(Base):
+    """Jerarquía (máquina, marca) → fragancia. Ver alter_fragancias_jerarquia.sql.
+
+    Qué fragancias puede hacer cada máquina de cada marca. La fragancia era
+    universal (la misma lista en las 21 tablets) hasta que la línea líquida entró
+    en producción con fragancias propias por marca y por máquina.
+
+    La presentación queda FUERA a propósito: ULTREX 1 KG y ULTREX 3 KG en la misma
+    máquina llevan las mismas fragancias, así que colgarlo de `maquina_productos`
+    habría multiplicado las filas a configurar sin ganar precisión.
+
+    `activo` es baja lógica igual que en `MaquinaProductoDB`: quitarle una fragancia
+    a una máquina no puede borrar el histórico de sesiones que la usaron.
+    """
+    __tablename__ = "maquina_marca_fragancias"
+    __table_args__ = (
+        UniqueConstraint("maquina_id", "marca", "fragancia", name="uq_maquina_marca_fragancia"),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    maquina_id = Column(Integer, ForeignKey("maquinas.id"), index=True, nullable=False)
+    marca = Column(String(100), nullable=False)
+    fragancia = Column(String(100), nullable=False)
+    activo = Column(Boolean, default=True)
 
 class InsumoDB(Base):
     """Catálogo de insumos (materiales) que se pueden solicitar a bodega."""

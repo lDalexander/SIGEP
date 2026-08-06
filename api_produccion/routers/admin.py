@@ -34,8 +34,10 @@ from models import (
     MantenimientoChecklistItemDB,
     MaquinaDB,
     MaquinaProductoDB,
+    MaquinaMarcaFraganciaDB,
     MarcaDB,
     PresentacionDB,
+    FraganciaDB,
     MensajeTabletDB,
     EstadoTabletDB,
     PedidoBodegaDB,
@@ -347,10 +349,17 @@ def catalogos_jerarquia(db: Session = Depends(get_db), ctx=Depends(require_admin
     presentaciones = [r[0] for r in db.execute(text(
         "SELECT nombre FROM presentaciones WHERE activa = 1 ORDER BY id"
     )).fetchall()]
+    # `fragancias` se añadió el 2026-08-06 para el editor de la jerarquía de
+    # fragancias. Es una clave NUEVA en la respuesta: este endpoint exige token
+    # admin y solo lo consume esta web, así que ninguna tablet lo ve.
+    fragancias = [f.nombre for f in db.query(FraganciaDB)
+                  .filter(FraganciaDB.activa.is_(True))
+                  .order_by(FraganciaDB.nombre).all()]
     return {
         "maquinas": [{"id": m.id, "nombre": m.nombre, "tipo": m.tipo} for m in maquinas],
         "marcas": marcas,
         "presentaciones": presentaciones,
+        "fragancias": fragancias,
     }
 
 
@@ -416,6 +425,162 @@ def actualizar_maquina_producto(fila_id: int, datos: MaquinaProductoUpdate, db: 
     logger.info(f"Jerarquía editada: id {fila.id} (admin {ctx.get('username')})")
     return {"id": fila.id, "maquina_id": fila.maquina_id, "marca": fila.marca,
             "presentacion": fila.presentacion, "activo": bool(fila.activo)}
+
+
+# ----------------------------------------------------------------------------
+# Jerarquía de fragancias: (máquina, marca) -> fragancias  (2026-08-06)
+# ----------------------------------------------------------------------------
+# La fragancia era universal (la misma lista fija en las 21 tablets). Con la línea
+# líquida en producción cada máquina y marca hace fragancias distintas, así que
+# pasa a ser parte de la jerarquía, en su propia tabla para no tocar
+# `maquina_productos` ni la respuesta de GET /api/maquinas que consumen las tablets.
+#
+# La presentación NO entra: la fragancia no depende del gramaje.
+
+class MaquinaFraganciaIn(BaseModel):
+    maquina_id: int
+    marca: str
+    fragancia: str
+
+
+class MaquinaFraganciaUpdate(BaseModel):
+    fragancia: str | None = None
+    activo: bool | None = None
+
+
+def _fragancia_del_catalogo(db, nombre):
+    """Valida contra el catálogo maestro y devuelve el nombre canónico.
+
+    Se exige que exista y esté activa en `fragancias` en vez de aceptar texto
+    libre: la fragancia se cruza con `sesiones_trabajo.fragancia` por texto, y un
+    'Limon' sin tilde crearía una fragancia paralela que no cuadra con nada. Se
+    devuelve el nombre tal como está en el catálogo (MySQL compara sin acentos ni
+    mayúsculas, así que 'limon' entra y sale como 'Limón')."""
+    nombre = (nombre or "").strip()
+    if not nombre:
+        raise HTTPException(status_code=400, detail="La fragancia es obligatoria")
+    fila = db.query(FraganciaDB).filter(FraganciaDB.nombre == nombre).first()
+    if not fila or not fila.activa:
+        raise HTTPException(
+            status_code=422,
+            detail=f'La fragancia "{nombre}" no está en el catálogo. Créala primero.',
+        )
+    return fila.nombre
+
+
+def _marca_de_la_maquina(db, maquina_id, marca):
+    """Valida que la máquina produzca esa marca, con el mismo criterio blando que
+    `iniciar_turno`: solo se comprueba si la máquina TIENE jerarquía configurada.
+    Una máquina recién dada de alta (Maquina 12 hoy) debe poder configurar sus
+    fragancias antes que sus presentaciones."""
+    marca = (marca or "").strip()
+    if not marca:
+        raise HTTPException(status_code=400, detail="La marca es obligatoria")
+    suyas = {f.marca for f in db.query(MaquinaProductoDB).filter(
+        MaquinaProductoDB.maquina_id == maquina_id,
+        MaquinaProductoDB.activo.is_(True),
+    ).all()}
+    if suyas and marca not in suyas:
+        raise HTTPException(status_code=422, detail=f"Esa máquina no produce {marca}")
+    return marca
+
+
+@router.get("/maquina_fragancias")
+def listar_maquina_fragancias(db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    """Matriz máquina → marca → fragancias, para el editor de la jerarquía.
+
+    Las marcas de cada máquina son la unión de las que produce (`maquina_productos`
+    activo) y las que ya tienen fragancias configuradas: si se da de baja una
+    combinación de producto, sus fragancias siguen visibles y quitables en vez de
+    quedarse en la tabla sin que nada las muestre.
+
+    Incluye filas inactivas (`activo: false`) para poder reactivarlas, igual que
+    /admin/maquina_productos.
+    """
+    maquinas = db.query(MaquinaDB).order_by(MaquinaDB.id).all()
+
+    productos = db.query(MaquinaProductoDB).filter(MaquinaProductoDB.activo.is_(True)).all()
+    marcas_por_maquina: dict[int, set] = {}
+    for p in productos:
+        if p.marca:
+            marcas_por_maquina.setdefault(p.maquina_id, set()).add(p.marca)
+
+    filas = db.query(MaquinaMarcaFraganciaDB).order_by(
+        MaquinaMarcaFraganciaDB.marca, MaquinaMarcaFraganciaDB.fragancia
+    ).all()
+    fragancias_por_clave: dict[tuple, list] = {}
+    for f in filas:
+        fragancias_por_clave.setdefault((f.maquina_id, f.marca), []).append(
+            {"id": f.id, "fragancia": f.fragancia, "activo": bool(f.activo)}
+        )
+
+    def _marcas(maquina_id: int) -> list:
+        produce = marcas_por_maquina.get(maquina_id, set())
+        configuradas = {m for (mid, m) in fragancias_por_clave if mid == maquina_id}
+        return [
+            {
+                "marca": marca,
+                "produce": marca in produce,
+                "fragancias": fragancias_por_clave.get((maquina_id, marca), []),
+            }
+            for marca in sorted(produce | configuradas)
+        ]
+
+    return [
+        {"maquina_id": m.id, "maquina": m.nombre, "tipo": m.tipo, "activa": bool(m.activa),
+         "marcas": _marcas(m.id)}
+        for m in maquinas
+    ]
+
+
+@router.post("/maquina_fragancias")
+def crear_maquina_fragancia(datos: MaquinaFraganciaIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    """Asigna una fragancia a (máquina, marca). Reactiva si existía dada de baja."""
+    maquina = db.query(MaquinaDB).filter(MaquinaDB.id == datos.maquina_id).first()
+    if not maquina:
+        raise HTTPException(status_code=404, detail="Máquina no encontrada")
+    marca = _marca_de_la_maquina(db, datos.maquina_id, datos.marca)
+    fragancia = _fragancia_del_catalogo(db, datos.fragancia)
+
+    existente = db.query(MaquinaMarcaFraganciaDB).filter(
+        MaquinaMarcaFraganciaDB.maquina_id == datos.maquina_id,
+        MaquinaMarcaFraganciaDB.marca == marca,
+        MaquinaMarcaFraganciaDB.fragancia == fragancia,
+    ).first()
+    if existente:
+        if existente.activo:
+            raise HTTPException(status_code=409, detail="Esa fragancia ya está activa para esa marca")
+        existente.activo = True
+        db.commit()
+        logger.info(f"Fragancia reactivada: maq {datos.maquina_id} {marca} {fragancia} (admin {ctx.get('username')})")
+        return {"id": existente.id, "maquina_id": existente.maquina_id, "marca": marca,
+                "fragancia": fragancia, "activo": True, "reactivado": True}
+
+    fila = MaquinaMarcaFraganciaDB(maquina_id=datos.maquina_id, marca=marca,
+                                   fragancia=fragancia, activo=True)
+    db.add(fila)
+    db.commit()
+    db.refresh(fila)
+    logger.info(f"Fragancia creada: maq {datos.maquina_id} {marca} {fragancia} (admin {ctx.get('username')})")
+    return {"id": fila.id, "maquina_id": fila.maquina_id, "marca": marca,
+            "fragancia": fragancia, "activo": True}
+
+
+@router.put("/maquina_fragancias/{fila_id}")
+def actualizar_maquina_fragancia(fila_id: int, datos: MaquinaFraganciaUpdate, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    """Baja lógica (`{activo:false}`) o cambio de fragancia. Es lo que usa la web:
+    borrar físicamente dejaría el histórico de sesiones sin su referencia."""
+    fila = db.query(MaquinaMarcaFraganciaDB).filter(MaquinaMarcaFraganciaDB.id == fila_id).first()
+    if not fila:
+        raise HTTPException(status_code=404, detail="Fragancia no encontrada")
+    if datos.fragancia is not None:
+        fila.fragancia = _fragancia_del_catalogo(db, datos.fragancia)
+    if datos.activo is not None:
+        fila.activo = datos.activo
+    db.commit()
+    logger.info(f"Fragancia editada: id {fila.id} (admin {ctx.get('username')})")
+    return {"id": fila.id, "maquina_id": fila.maquina_id, "marca": fila.marca,
+            "fragancia": fila.fragancia, "activo": bool(fila.activo)}
 
 
 @router.delete("/maquina_productos/{fila_id}")
@@ -542,6 +707,15 @@ def crear_marca(datos: NombreIn, db: Session = Depends(get_db), ctx=Depends(requ
 @router.post("/presentaciones")
 def crear_presentacion(datos: NombreIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
     return _crear_o_reactivar(db, PresentacionDB, "activa", datos.nombre, "Presentación", ctx)
+
+
+@router.post("/fragancias")
+def crear_fragancia(datos: NombreIn, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    """Alta en el catálogo maestro de fragancias (Floral, Limón, ...).
+
+    El catálogo es la lista de la que se eligen las fragancias de cada máquina+marca;
+    asignarlas es cosa de /admin/maquina_fragancias."""
+    return _crear_o_reactivar(db, FraganciaDB, "activa", datos.nombre, "Fragancia", ctx)
 
 
 # ----------------------------------------------------------------------------
