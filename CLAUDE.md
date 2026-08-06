@@ -16,10 +16,21 @@ industriales con sincronización offline-first.
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
 capturas de `referencia_ui/`. 117 tests en verde.
 
-La **jerarquía de fragancias por máquina + marca** (2026-08-06) está **probada en el 3001
-contra el 8001 y pendiente de desplegar**: falta la siembra de
-`alter_fragancias_jerarquia.sql`, el `kill -HUP` del backend y el `./deploy.sh`. Detalle
-en «Cambios de backend ya autorizados» más abajo.
+La **jerarquía de fragancias por máquina + marca** (2026-08-06) **ya está en producción**
+(backend con `kill -HUP`, worker nuevo 2140077, y frontend `main.edc4db7b.js`). Se comprobó
+después que `/api/maquinas` seguía idéntica byte a byte al snapshot previo, que los KPIs
+(2070 pacas · 100 sacos) y las 10 líneas con 5 turnos activos no se movieron, y que una
+tablet abrió WebSocket y registró un paro **contra el código nuevo** un minuto después del
+HUP. Detalle en «Cambios de backend ya autorizados» más abajo.
+
+**Ojo con la app Android:** se verificó desensamblando `static/sigep_latest.apk` (v1.3.1)
+que la app **no lee las fragancias del servidor**. Sus rutas HTTP son `api/operadores`,
+`api/maquinas`, `api/iniciar_turno`, `api/registrar_pallet`,
+`api/mantenimiento/checklist`… y **ninguna de fragancias**; `"Floral"` y `"Limón"` están
+como literales en el dex, junto a los ítems del checklist; y su data class
+`MarcaResponse(nombre=…)` **no tiene campo `fragancias`**, así que tampoco las leería
+dentro de `/api/maquinas`. Configurar fragancias en la web **no cambia todavía lo que ve
+el operario en la tablet**.
 
 Los **segmentadores multi-selección** del dashboard con **menús encadenados** (2026-08-05)
 **ya están en producción**. Semántica en §2 y §4. Cómo se desplegó, por si sirve de patrón:
@@ -54,6 +65,7 @@ heartbeat, sin errores en el log del servicio.
 | Tag previo a los filtros de estadísticas | `v1.4-pre-filtros-estadisticas` (en GitHub) |
 | Tag previo a los menús encadenados | `v1.5-pre-opciones-encadenadas` (en GitHub) |
 | Tag previo a la jerarquía de fragancias | `v1.6-pre-fragancias` (en GitHub) |
+| Build previo a las fragancias | `~/respaldos_build_sigep/build_2026-08-06_130039` |
 | Build de esa versión | `~/respaldos_build_sigep/build_pre-paros_2026-08-05_*` |
 | Build previo a los segmentadores | `~/respaldos_build_sigep/build_2026-08-05_165753` |
 | Build estable v1.0 | `~/RESPALDO_build_estable_v1.0` |
@@ -74,8 +86,8 @@ falta tag, y la prohibición de «limpiar» el árbol con `checkout`/`reset`/`cl
 
 Tras la reconstrucción se autorizaron **seis** excepciones a la regla de oro:
 
-- **Jerarquía de fragancias por máquina + marca** (2026-08-06, autorizada,
-  **probada en el 3001 · pendiente de desplegar**). La fragancia era universal: la app
+- **Jerarquía de fragancias por máquina + marca** (2026-08-06, **en producción**).
+  La fragancia era universal: la app
   ofrecía la misma lista fija (Floral / Limón) en cualquier máquina y marca. Con la línea
   líquida en producción cada máquina y marca hace fragancias distintas, así que pasa a
   formar parte de la jerarquía.
