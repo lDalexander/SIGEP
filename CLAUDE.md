@@ -16,6 +16,13 @@ industriales con sincronización offline-first.
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
 capturas de `referencia_ui/`. 133 tests en verde.
 
+**Cerrar turno, eliminar sesión, historial editable de pacas, gestión de usuarios y
+niveles de acceso** (2026-08-06) **ya están en producción** (worker `2154040`, frontend
+`main.97f48aa0.js`). Se comprobó después que `/api/maquinas` seguía idéntica byte a byte
+al snapshot previo y que los KPIs (2720 pacas · 100 sacos) y las 11 líneas con 5 turnos
+activos no se movieron. Respaldo del build anterior:
+`~/respaldos_build_sigep/build_2026-08-06_164105`.
+
 La **jerarquía de fragancias por máquina + marca** (2026-08-06) **ya está en producción**
 (backend con `kill -HUP`, worker nuevo 2140077, y frontend `main.edc4db7b.js`). Se comprobó
 después que `/api/maquinas` seguía idéntica byte a byte al snapshot previo, que los KPIs
@@ -65,6 +72,9 @@ heartbeat, sin errores en el log del servicio.
 | Tag previo a los filtros de estadísticas | `v1.4-pre-filtros-estadisticas` (en GitHub) |
 | Tag previo a los menús encadenados | `v1.5-pre-opciones-encadenadas` (en GitHub) |
 | Tag previo a la jerarquía de fragancias | `v1.6-pre-fragancias` (en GitHub) |
+| Tag previo a la gestión de usuarios | `v1.7-pre-gestion-usuarios` (en GitHub) |
+| Tag previo al historial de pacas | `v1.8-pre-historial-pacas` (en GitHub) |
+| Build previo a estos dos cambios | `~/respaldos_build_sigep/build_2026-08-06_164105` |
 | Build previo a las fragancias | `~/respaldos_build_sigep/build_2026-08-06_130039` |
 | Build de esa versión | `~/respaldos_build_sigep/build_pre-paros_2026-08-05_*` |
 | Build previo a los segmentadores | `~/respaldos_build_sigep/build_2026-08-05_165753` |
@@ -86,9 +96,9 @@ falta tag, y la prohibición de «limpiar» el árbol con `checkout`/`reset`/`cl
 
 Tras la reconstrucción se autorizaron **siete** excepciones a la regla de oro:
 
-- **Cerrar turno, eliminar sesión, usuarios y niveles de acceso** (2026-08-06,
-  autorizada, **probada · pendiente de desplegar**). **Sin `ALTER` y sin tablas
-  nuevas**: todo usa columnas que ya existían.
+- **Cerrar turno, eliminar sesión, historial de pacas, usuarios y niveles de acceso**
+  (2026-08-06, **en producción**). **Sin `ALTER` y sin tablas nuevas**: todo usa
+  columnas que ya existían.
 
   - `POST /admin/sesiones/{id}/cerrar` — la salida para los turnos que quedan
     abiertos y bloquean a la máquina («Esta máquina ya tiene un turno activo»).
@@ -102,6 +112,11 @@ Tras la reconstrucción se autorizaron **siete** excepciones a la regla de oro:
     seguiría sumándolos a los KPIs de un turno que ya no existe.
   - `GET/POST/PUT /admin/usuarios` y `GET /admin/niveles` — **solo SUPERADMIN**.
     Nunca devuelven la contraseña. «Eliminar» es `PUT {activo:false}`.
+  - `PUT /admin/pallets/{id}` acepta también `fecha_hora`, y `DELETE /admin/pallets/{id}`
+    (solo SUPERADMIN) es nuevo: son el desplegable del historial de pacas de cada
+    sesión. Cambiar la hora **mueve la producción de hora y de día** en KPIs, gráfico
+    y Excel, que cuentan por `pallets.fecha_hora`; es lo que permite recolocar los
+    pallets que una tablet sincroniza tarde tras quedarse sin red.
   - **Los niveles ahora se aplican de verdad.** `nivel_acceso` existía pero no
     controlaba nada: bastaba un token válido para todo. Se añadió `require_nivel`
     en `routers/admin.py` y se exige en los **22 endpoints de escritura** que ya
