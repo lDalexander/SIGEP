@@ -145,6 +145,7 @@ const VISTA_PREVIA = {
   desde: '2026-07-24 12:00:00', hasta: '2026-07-31 12:00:00',
   total_horas: '20h 32m', total_paros: 17, promedio: '1h 12m',
   variacion_pct: 35.9, previo_horas: '15h 06m', sin_cierre: 0, en_curso: 0,
+  excluidos_paros: 11, excluidos_horas: '3h 05m', excluidas: ['ALMUERZO'],
   por_categoria: [{ etiqueta: 'MANTENIMIENTO', paros: 8, horas: '14h 42m' }],
   por_maquina: [{ etiqueta: 'Máquina 9', paros: 4, horas: '10h 53m' }],
 };
@@ -977,6 +978,9 @@ test('Correo: la vista previa enseña los números que saldrían, y «enviar aho
   expect(screen.getByText(/▲ 35.9% vs 15h 06m/)).toBeInTheDocument();
   expect(screen.getByText('MANTENIMIENTO')).toBeInTheDocument();
   expect(screen.getByText('Máquina 9')).toBeInTheDocument();
+  /* El almuerzo no cuenta como tiempo perdido, y decirlo es lo que evita que alguien
+     compare este total con el de /paros —que sí lo cuenta— y lo tome por un error. */
+  expect(screen.getByText(/no se cuentan 3h 05m de almuerzo \(11 paros\)/)).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole('button', { name: 'Enviar ahora' }));
   expect(window.confirm.mock.calls[0][0]).toMatch(/última semana cerrada/i);

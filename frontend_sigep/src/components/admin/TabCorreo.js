@@ -9,7 +9,8 @@ const LISTAS = [
   {
     tipo: 'semanal',
     titulo: 'Reporte semanal de paros',
-    ayuda: 'Se envía los viernes a las 12:00 con la semana cerrada (viernes a viernes).',
+    ayuda: 'Se envía los viernes a las 12:00 con la semana cerrada (viernes a viernes). '
+      + 'No cuenta los paros de almuerzo, así que su total es menor que el de la vista de paros.',
   },
   {
     tipo: 'reportes',
@@ -400,6 +401,13 @@ export default function TabCorreo() {
                   {p.variacion_pct !== null && p.variacion_pct !== undefined
                     ? ` · ${p.variacion_pct > 0 ? '▲' : '▼'} ${Math.abs(p.variacion_pct)}% vs ${p.previo_horas}`
                     : ''}
+                </Label>
+                {/* Lo excluido se enseña siempre, también cuando es cero: es lo que
+                    explica que este total no cuadre con el de la vista de paros. */}
+                <Label className="block mt-1 text-sig-dim">
+                  {p.excluidos_paros
+                    ? `no se cuentan ${p.excluidos_horas} de ${(p.excluidas || []).join(', ').toLowerCase()} (${p.excluidos_paros} paros)`
+                    : `no se cuentan los paros de ${(p.excluidas || []).join(', ').toLowerCase()} · ninguno en el periodo`}
                 </Label>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 mt-4">

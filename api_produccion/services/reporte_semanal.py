@@ -4,9 +4,13 @@ Ventana: **de viernes 12:00 a viernes 12:00**, siete días completos. Se envía 
 al mediodía y cubre exactamente lo ocurrido desde el mediodía del viernes anterior.
 
 Un paro cuenta **entero si su inicio cae dentro de la ventana**, aunque termine después
-del corte. Es el mismo criterio que `GET /dashboard/paros` y que la franja horaria del
-dashboard, y se eligió así para que el correo y la web no puedan dar cifras distintas
-del mismo periodo — una diferencia entre las dos se leería como un error del sistema.
+del corte: el mismo criterio que `GET /dashboard/paros` y que la franja horaria del
+dashboard.
+
+**Pero el total NO coincide con el de `/paros`, y es a propósito:** aquí no se cuentan
+las categorías de `CATEGORIAS_EXCLUIDAS` (el almuerzo), porque son paradas previstas de
+la jornada y no incidencias sobre las que actuar. La vista de paros sí las muestra. El
+correo lo dice en su pie para que la diferencia no se lea como un fallo.
 
 El estado y la duración de cada paro salen de `routers.dashboard` (`_estado_paro` y
 `_dur_segundos`) en vez de recalcularse aquí: son las que saben que un paro sin cerrar
@@ -20,6 +24,19 @@ from routers.dashboard import _desglosar_motivo, _dur_segundos, _estado_paro
 
 HORA_CORTE = 12  # mediodía
 DIA_CORTE = 4    # viernes (lunes=0)
+
+# Categorías que NO cuentan como tiempo perdido (2026-08-07, a petición del responsable).
+# El almuerzo es una parada prevista de la jornada, no una incidencia, y sumarlo inflaba
+# el total con algo sobre lo que no se puede actuar.
+#
+# La comparación se hace sobre la categoría ya normalizada por `_desglosar_motivo`, que
+# devuelve mayúsculas: la tablet manda tanto "ALMUERZO" suelto como "[Almuerzo] - …".
+# Comprobado sobre 120 días de datos: `ALMUERZO` es la única forma que aparece.
+#
+# **Esto separa el correo de la vista /paros**, que sí los cuenta. Es deliberado, y por
+# eso el correo lo dice explícitamente: si no, los dos números se compararían y la
+# diferencia parecería un error.
+CATEGORIAS_EXCLUIDAS = {"ALMUERZO"}
 
 
 def ultimo_corte(referencia=None):
@@ -49,14 +66,18 @@ def _hhmm(segundos):
 
 
 def _paros_de(db, desde, hasta):
-    """Los paros iniciados en la ventana, ya con su duración resuelta."""
+    """(contados, excluidos) de la ventana, con su duración ya resuelta.
+
+    Se devuelven los excluidos en vez de descartarlos sin más para poder decir en el
+    correo cuánto se dejó fuera: un total que baja sin explicación se lee como un fallo.
+    """
     filas = (
         db.query(ParoMaquinaDB)
         .filter(ParoMaquinaDB.inicio_paro >= desde, ParoMaquinaDB.inicio_paro < hasta)
         .all()
     )
     if not filas:
-        return []
+        return [], []
     ids = {p.session_id for p in filas if p.session_id}
     sesiones = {}
     if ids:
@@ -65,19 +86,33 @@ def _paros_de(db, desde, hasta):
         }
 
     ahora = datetime.now()
-    salida = []
+    contados, excluidos = [], []
     for p in filas:
         sesion = sesiones.get(p.session_id)
         estado, fin_efectivo, estimada = _estado_paro(p, sesion, ahora)
+        # Un paro todavía abierto corre contra el reloj: es lo correcto en /paros, que
+        # es una vista EN VIVO, pero aquí metería tiempo POSTERIOR al corte. Se nota en
+        # cuanto el reporte no se genera justo al mediodía del viernes — con el botón
+        # «enviar ahora» un miércoles, o si el servidor estuvo caído y sale con retraso,
+        # un paro sin cerrar sumaría también los días transcurridos desde entonces.
+        # El reporte no puede hablar de lo que pasó después de su propio periodo.
+        #
+        # Que esto importa lo enseñó el paro 105 (2026-08-07): sin `fin_paro` desde
+        # siempre, aportaba 13h 33m él solo —casi la mitad del total de la semana—
+        # simplemente porque nadie lo cerró.
+        if fin_efectivo and fin_efectivo > hasta:
+            fin_efectivo = hasta
+            estimada = True
         categoria, _ = _desglosar_motivo(p.motivo)
-        salida.append({
+        registro = {
             "categoria": categoria,
             "maquina": (sesion.maquina if sesion is not None else None) or "—",
             "segundos": _dur_segundos(p, fin_efectivo) or 0,
             "estado": estado,
             "estimada": estimada,
-        })
-    return salida
+        }
+        (excluidos if categoria in CATEGORIAS_EXCLUIDAS else contados).append(registro)
+    return contados, excluidos
 
 
 def _ranking(paros, clave):
@@ -101,9 +136,10 @@ def _ranking(paros, clave):
 def calcular(db, referencia=None):
     """Todos los números del reporte de la última semana cerrada."""
     desde, hasta = ventana(referencia)
-    paros = _paros_de(db, desde, hasta)
-    # La semana anterior, para la comparación. Mismo criterio, ventana desplazada.
-    previos = _paros_de(db, desde - timedelta(days=7), desde)
+    paros, excluidos = _paros_de(db, desde, hasta)
+    # La semana anterior, para la comparación. Mismo criterio y misma exclusión: si el
+    # almuerzo contara solo en una de las dos, la variación sería inventada.
+    previos, _ = _paros_de(db, desde - timedelta(days=7), desde)
 
     total = sum(p["segundos"] for p in paros)
     total_previo = sum(p["segundos"] for p in previos)
@@ -123,6 +159,11 @@ def calcular(db, referencia=None):
         "en_curso": en_curso,
         "previo_segundos": total_previo,
         "previo_paros": len(previos),
+        # Lo que se dejó fuera, para poder decirlo: un total que baja sin explicación
+        # se lee como un error del sistema.
+        "excluidos_paros": len(excluidos),
+        "excluidos_segundos": sum(p["segundos"] for p in excluidos),
+        "excluidas": sorted(CATEGORIAS_EXCLUIDAS),
         # None si la semana anterior no tuvo paros: dividir daría un porcentaje infinito.
         "variacion_pct": (
             round((total - total_previo) * 100.0 / total_previo, 1) if total_previo else None
@@ -148,6 +189,19 @@ def construir_correo(datos, limite=8):
     hasta_txt = datos["hasta"].strftime("%d/%m/%Y %H:%M")
     total_txt = _hhmm(datos["total_segundos"])
     prom_txt = _hhmm(datos["promedio_segundos"]) if datos["promedio_segundos"] is not None else "—"
+
+    # Lo excluido se dice siempre, incluso cuando es cero: quien compare este total con
+    # la vista /paros —que sí cuenta los almuerzos— tiene que poder ver por qué difieren.
+    excluidas_txt = ", ".join(datos.get("excluidas") or []) or "—"
+    nota_excluidas = (
+        f"No se cuentan los paros de {excluidas_txt}: son paradas previstas de la jornada, "
+        "así que el total es menor que el de la vista de paros de SIGEP."
+    )
+    if datos.get("excluidos_paros"):
+        excluido_txt = (f"Excluido: {_hhmm(datos['excluidos_segundos'])} de "
+                        f"{excluidas_txt.lower()} ({datos['excluidos_paros']} paro(s))")
+    else:
+        excluido_txt = f"Excluido: sin paros de {excluidas_txt.lower()} en el periodo"
 
     variacion = datos["variacion_pct"]
     if variacion is None:
@@ -177,7 +231,8 @@ def construir_correo(datos, limite=8):
         f"Periodo:      {desde_txt} → {hasta_txt}\n"
         f"Tiempo total: {total_txt}\n"
         f"Paros:        {datos['total_paros']}   ·   Duración media: {prom_txt}\n"
-        f"{comparacion}\n\n"
+        f"{comparacion}\n"
+        f"{excluido_txt}\n\n"
         "Categorías con más tiempo parado\n"
         "--------------------------------\n"
         f"{lineas_cat}\n\n"
@@ -185,6 +240,7 @@ def construir_correo(datos, limite=8):
         "------------------------------\n"
         f"{lineas_maq}\n\n"
         "Un paro cuenta entero si empezó dentro del periodo, aunque terminara después.\n"
+        f"{nota_excluidas}\n"
         "Mensaje automático — no responder."
     )
 
@@ -230,12 +286,13 @@ def construir_correo(datos, limite=8):
         {datos['total_paros']} paro(s) · media {prom_txt}
       </p>
       <p style="margin:8px 0 0;color:{color_var};font:700 13px Arial">{comparacion}</p>
+      <p style="margin:6px 0 0;color:#5E7674;font:600 12px Arial">{excluido_txt}</p>
       {tabla("Categorías con más tiempo parado", filas_cat)}
       {tabla("Máquinas con más tiempo parado", filas_maq)}
       {aviso_html}
       <p style="margin:16px 0 0;color:#5E7674;font-size:11px">
-        Un paro cuenta entero si empezó dentro del periodo, aunque terminara después —
-        el mismo criterio que la vista de paros de SIGEP.<br>
+        Un paro cuenta entero si empezó dentro del periodo, aunque terminara después.<br>
+        {nota_excluidas}<br>
         Mensaje automático generado por SIGEP — no responder.
       </p>
     </div>

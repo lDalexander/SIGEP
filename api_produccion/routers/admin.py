@@ -1713,6 +1713,11 @@ def vista_previa_semanal(db: Session = Depends(get_db), ctx=Depends(require_supe
         "previo_horas": reporte_semanal._hhmm(datos["previo_segundos"]),
         "sin_cierre": datos["sin_cierre"],
         "en_curso": datos["en_curso"],
+        # Lo que queda fuera del total (almuerzos): la web lo enseña para que nadie
+        # compare con la vista de paros y crea que falta tiempo.
+        "excluidos_paros": datos["excluidos_paros"],
+        "excluidas": datos["excluidas"],
+        "excluidos_horas": reporte_semanal._hhmm(datos["excluidos_segundos"]),
         "por_categoria": [
             {"etiqueta": e, "paros": n, "horas": reporte_semanal._hhmm(s)}
             for e, n, s in datos["por_categoria"][:8]

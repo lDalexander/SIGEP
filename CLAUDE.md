@@ -143,8 +143,16 @@ Tras la reconstrucción se autorizaron **once** excepciones a la regla de oro:
     edite el `.env` creyendo que sigue mandando.
   - **Ventana del reporte: viernes 12:00 → viernes 12:00**, siete días completos. Un paro
     cuenta **entero si su inicio cae dentro**, aunque termine después del corte: es el
-    criterio de `GET /dashboard/paros`, y se eligió así para que el correo y la web no
-    puedan dar cifras distintas del mismo periodo. El estado y la duración salen de
+    criterio de `GET /dashboard/paros`.
+  - **El total NO cuadra con `/paros`, a propósito** (2026-08-07): `CATEGORIAS_EXCLUIDAS`
+    deja fuera **ALMUERZO** —parada prevista de la jornada, no una incidencia— y la vista
+    sí lo cuenta. El correo lo dice en dos sitios, y **lo dice aunque sea cero**: un total
+    más bajo sin explicación se lee como un fallo. La exclusión se aplica **también a la
+    semana anterior**, o la variación sería inventada.
+  - **La duración de un paro abierto se acota al corte de la ventana** (2026-08-07). Contra
+    el reloj es lo correcto en `/paros`, que es una vista en vivo, pero aquí metería tiempo
+    posterior al periodo: se nota con «Enviar ahora» un miércoles, o si el servidor arranca
+    tarde y el reporte sale con retraso. El estado y la duración salen de
     `_estado_paro`/`_dur_segundos` de `routers/dashboard.py`, no de una copia: son las que
     saben acotar al fin del turno un paro «SIN CIERRE».
   - **El programador vive en `tasks.py`**, como el recolector de turnos, y **comprueba el
