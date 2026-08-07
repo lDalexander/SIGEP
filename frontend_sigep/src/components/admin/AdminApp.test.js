@@ -126,6 +126,30 @@ const CHECKLISTS = [
   },
 ];
 
+const PAROS = [
+  /* Uno cerrado normal, uno sin cerrar con el turno ya cerrado (el caso «SIN CIERRE»
+     que dejaba el recolector) y uno con categoría que no está en la lista fija. */
+  {
+    id: 130, sesion_id: 447, maquina: 'Máquina 7', operador: 'CRISTHIAN CEDEÑO',
+    categoria: 'ALMUERZO', comentario: null, motivo: 'ALMUERZO',
+    inicio_paro: '2026-08-07 11:52:21', fin_paro: '2026-08-07 12:31:54',
+    duracion_segundos: 2373, duracion_estimada: false, estado: 'CERRADO', sesion_existe: true,
+  },
+  {
+    id: 118, sesion_id: 440, maquina: 'Máquina 9', operador: 'ROSENDO VALENZUELA',
+    categoria: 'MANTENIMIENTO', comentario: 'cambio de teflón',
+    motivo: '[Mantenimiento] - cambio de teflón',
+    inicio_paro: '2026-08-06 12:56:00', fin_paro: null,
+    duracion_segundos: 12540, duracion_estimada: true, estado: 'SIN CIERRE', sesion_existe: true,
+  },
+  {
+    id: 99, sesion_id: null, maquina: '—', operador: '—',
+    categoria: 'CATEGORÍA RARA', comentario: null, motivo: 'CATEGORÍA RARA',
+    inicio_paro: '2026-08-05 08:00:00', fin_paro: '2026-08-05 08:30:00',
+    duracion_segundos: 1800, duracion_estimada: false, estado: 'CERRADO', sesion_existe: false,
+  },
+];
+
 const CONFIG_CORREO = {
   smtp_host: 'smtp-mail.outlook.com', smtp_port: 587,
   smtp_user: 'no-reply@detcuador.com', smtp_from: 'no-reply@detcuador.com',
@@ -181,6 +205,7 @@ beforeEach(() => {
     if (url === '/sesiones/330/pallets') return Promise.resolve({ data: [] });
     if (url === '/usuarios')          return Promise.resolve({ data: USUARIOS });
     if (url === '/niveles')           return Promise.resolve({ data: NIVELES });
+    if (url === '/paros')             return Promise.resolve({ data: PAROS });
     if (url === '/correo')            return Promise.resolve({ data: CONFIG_CORREO });
     if (url === '/correo/semanal_vista_previa') return Promise.resolve({ data: VISTA_PREVIA });
     return Promise.reject(new Error(`sin mock para ${url}`));
@@ -997,4 +1022,114 @@ test('Correo: el botón de prueba manda a la lista de esa tarjeta', async () => 
   await waitFor(() =>
     expect(mockAdmin.post).toHaveBeenCalledWith('/correo/prueba', { tipo: 'semanal' })
   );
+});
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Paros (2026-08-07)
+
+   Nace para no tener que entrar a MySQL: así se borró el paro 105 sin ver de qué
+   sesión colgaba. Lo que se protege: que solo viaje lo que se tocó, que mover el
+   inicio avise (cambia de día y de semana en KPIs y reporte), y que los niveles
+   se respeten.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+test('Paros: lista los del rango con su estado y el desplegable trae el detalle', async () => {
+  render(<AdminApp />);
+  irA('Paros');
+
+  expect(await screen.findByText(/ALMUERZO · Máquina 7/)).toBeInTheDocument();
+  expect(screen.getByText('SIN CIERRE')).toBeInTheDocument();
+
+  // Un paro sin cerrar avisa de que su duración es estimada, no un dato registrado.
+  fireEvent.click(screen.getByRole('button', { name: 'Paro 118' }));
+  expect(screen.getByText(/Duración estimada/)).toBeInTheDocument();
+  expect(screen.getByLabelText('Comentario del paro 118')).toHaveValue('cambio de teflón');
+  // La hora llega como "YYYY-MM-DD HH:MM:SS" y el input la muestra sin segundos.
+  expect(screen.getByLabelText('Inicio del paro 118')).toHaveValue('2026-08-06T12:56');
+});
+
+test('Paros: solo viaja el campo que se tocó', async () => {
+  render(<AdminApp />);
+  irA('Paros');
+  fireEvent.click(await screen.findByRole('button', { name: 'Paro 118' }));
+
+  fireEvent.change(screen.getByLabelText('Comentario del paro 118'), {
+    target: { value: 'cambio de teflón del tubo formador' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }));
+
+  await waitFor(() =>
+    expect(mockAdmin.put).toHaveBeenCalledWith('/paros/118', {
+      comentario: 'cambio de teflón del tubo formador',
+    })
+  );
+  // Ni categoría ni horas: reenviar una hora intacta le pondría los segundos a cero.
+  expect(window.confirm).not.toHaveBeenCalled();
+});
+
+test('Paros: mover el inicio avisa de que cambia de día y de semana', async () => {
+  render(<AdminApp />);
+  irA('Paros');
+  fireEvent.click(await screen.findByRole('button', { name: 'Paro 118' }));
+
+  fireEvent.change(screen.getByLabelText('Inicio del paro 118'), {
+    target: { value: '2026-08-04T10:00' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }));
+
+  expect(window.confirm.mock.calls[0][0]).toMatch(/cambiar de día y de semana/);
+  await waitFor(() =>
+    expect(mockAdmin.put).toHaveBeenCalledWith('/paros/118', { inicio_paro: '2026-08-04T10:00' })
+  );
+});
+
+test('Paros: «Cerrar ahora» solo sale en los que siguen abiertos', async () => {
+  render(<AdminApp />);
+  irA('Paros');
+
+  // El 130 está cerrado: no ofrece cerrarlo.
+  fireEvent.click(await screen.findByRole('button', { name: 'Paro 130' }));
+  expect(screen.queryByRole('button', { name: 'Cerrar ahora' })).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Paro 118' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Cerrar ahora' }));
+  await waitFor(() => expect(mockAdmin.post).toHaveBeenCalledWith('/paros/118/cerrar', {}));
+});
+
+test('Paros: una categoría fuera de la lista no se pierde al editar', async () => {
+  render(<AdminApp />);
+  irA('Paros');
+  fireEvent.click(await screen.findByRole('button', { name: 'Paro 99' }));
+
+  /* Si el desplegable no la incluyera, el select caería en la primera opción y
+     editar el comentario cambiaría la categoría sin querer. */
+  expect(screen.getByLabelText('Categoría del paro 99')).toHaveValue('CATEGORÍA RARA');
+  expect(screen.getByText(/no tiene turno asociado/)).toBeInTheDocument();
+});
+
+test('Paros: un ADMINPLANTA edita pero no borra; un CONSULTA no edita', async () => {
+  mockNivel = 'ADMINPLANTA';
+  const { unmount } = render(<AdminApp />);
+  irA('Paros');
+  fireEvent.click(await screen.findByRole('button', { name: 'Paro 130' }));
+  expect(screen.getByRole('button', { name: 'Guardar cambios' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Eliminar' })).not.toBeInTheDocument();
+  unmount();
+
+  mockNivel = 'CONSULTA';
+  render(<AdminApp />);
+  irA('Paros');
+  fireEvent.click(await screen.findByRole('button', { name: 'Paro 130' }));
+  expect(screen.queryByRole('button', { name: 'Guardar cambios' })).not.toBeInTheDocument();
+  expect(screen.getByLabelText('Comentario del paro 130')).toBeDisabled();
+});
+
+test('Paros: eliminar avisa de que es definitivo y sugiere corregir las horas', async () => {
+  render(<AdminApp />);
+  irA('Paros');
+  fireEvent.click(await screen.findByRole('button', { name: 'Paro 130' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Eliminar' }));
+
+  expect(window.confirm.mock.calls[0][0]).toMatch(/borrado definitivo/);
+  await waitFor(() => expect(mockAdmin.delete).toHaveBeenCalledWith('/paros/130'));
 });

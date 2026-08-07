@@ -8,6 +8,7 @@ import TabJerarquia from './TabJerarquia';
 import TabMensajes from './TabMensajes';
 import TabUsuarios from './TabUsuarios';
 import TabCorreo from './TabCorreo';
+import TabParos from './TabParos';
 import {
   leerSesion, registrarCaducidad, salir, esSuperadmin,
   msDeInactividad, AVISO_INACTIVIDAD,
@@ -21,6 +22,7 @@ import useInactividad from '../../lib/useInactividad';
 const PESTANAS = [
   { value: 'operarios',  label: 'Operarios',  Componente: TabOperarios },
   { value: 'produccion', label: 'Producción', Componente: TabProduccion },
+  { value: 'paros',      label: 'Paros',      Componente: TabParos },
   { value: 'checklists', label: 'Checklists', Componente: TabChecklists },
   { value: 'jerarquia',  label: 'Jerarquía',  Componente: TabJerarquia },
   { value: 'mensajes',   label: 'Mensajes',   Componente: TabMensajes },

@@ -51,6 +51,7 @@ from routers.tablets import enviar_payload_ws, tablet_manager
 # cierre manual de un turno tiene que dejar los pedidos exactamente igual que el
 # cierre desde la tablet, y si allí cambian, aquí cambian solos.
 from routers.operaciones import ESTADOS_PEDIDO_ACTIVO, ESTADO_PEDIDO_CIERRE_TURNO
+from routers.dashboard import _desglosar_motivo, _dur_segundos, _estado_paro
 from services import config_correo, email_service, reporte_semanal, seguridad
 from ws_manager import manager
 
@@ -1727,3 +1728,197 @@ def vista_previa_semanal(db: Session = Depends(get_db), ctx=Depends(require_supe
             for e, n, s in datos["por_maquina"][:8]
         ],
     }
+
+
+# ----------------------------------------------------------------------------
+# Paros (2026-08-07)
+# ----------------------------------------------------------------------------
+# Hasta ahora los paros solo se podían leer (`GET /dashboard/paros`) y corregir
+# entrando a MySQL a mano. Así se perdió el paro 105: se borró por SQL sin ver de qué
+# sesión colgaba. Estos endpoints hacen lo mismo, pero dejando traza en el log y sin
+# tocar nada que no se vea.
+#
+# El `motivo` se guarda como "[Categoría] - comentario" (lo compone la tablet), así que
+# aquí se acepta cada parte por separado y se recompone: escribir corchetes a mano en un
+# campo de texto es justo el tipo de detalle que se olvida y rompe el desglose.
+
+class ParoIn(BaseModel):
+    categoria: str | None = None
+    comentario: str | None = None
+    inicio_paro: str | None = None
+    fin_paro: str | None = None
+
+
+class CerrarParoIn(BaseModel):
+    fin_paro: str | None = None   # ausente = ahora mismo
+
+
+def _componer_motivo(categoria, comentario):
+    """("MANTENIMIENTO", "cambio de teflón") -> "[MANTENIMIENTO] - cambio de teflón".
+
+    Sin comentario se guarda la categoría sola, que es como manda la tablet los motivos
+    simples ("ALMUERZO"): así `_desglosar_motivo` lo vuelve a leer igual.
+    """
+    cat = (categoria or "").strip().upper()
+    com = (comentario or "").strip()
+    if not cat:
+        raise HTTPException(status_code=400, detail="La categoría no puede ir vacía")
+    return f"[{cat}] - {com}" if com else cat
+
+
+def _paro_publico(p, sesion=None):
+    categoria, comentario = _desglosar_motivo(p.motivo)
+    estado, fin_efectivo, estimada = _estado_paro(p, sesion, datetime.now())
+    return {
+        "id": p.id,
+        "sesion_id": p.session_id,
+        "maquina": (sesion.maquina if sesion is not None else None) or "—",
+        "operador": (sesion.operador if sesion is not None else None) or "—",
+        "categoria": categoria,
+        "comentario": comentario,
+        "motivo": p.motivo or "",
+        "inicio_paro": _fmt_dt(p.inicio_paro),
+        "fin_paro": _fmt_dt(p.fin_paro),
+        "duracion_segundos": _dur_segundos(p, fin_efectivo),
+        "duracion_estimada": estimada,
+        "estado": estado,
+        # Un paro cuyo turno ya no existe: se puede corregir igual, pero conviene verlo.
+        "sesion_existe": sesion is not None,
+    }
+
+
+@router.get("/paros")
+def listar_paros_admin(desde: str = Query(None), hasta: str = Query(None),
+                       db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    """Paros del rango (por `inicio_paro`), del más reciente al más antiguo.
+
+    Mismo criterio de rango que `GET /dashboard/paros`, para que las dos listas no
+    puedan discrepar. Sin rango, el día de hoy.
+    """
+    ini, fin = _rango(desde, hasta)
+    filas = (
+        db.query(ParoMaquinaDB)
+        .filter(ParoMaquinaDB.inicio_paro >= ini, ParoMaquinaDB.inicio_paro < fin)
+        .order_by(ParoMaquinaDB.inicio_paro.desc())
+        .all()
+    )
+    ids = {p.session_id for p in filas if p.session_id}
+    sesiones = {}
+    if ids:
+        sesiones = {s.id: s for s in
+                    db.query(SesionTrabajoDB).filter(SesionTrabajoDB.id.in_(ids)).all()}
+    return [_paro_publico(p, sesiones.get(p.session_id)) for p in filas]
+
+
+@router.put("/paros/{paro_id}")
+def editar_paro(paro_id: int, datos: ParoIn, db: Session = Depends(get_db),
+                ctx=Depends(require_operativo)):
+    """Corrige motivo y/o tiempos de un paro. Solo se toca lo que venga en el cuerpo.
+
+    **Cambiar los tiempos mueve el reporte semanal y la vista de paros**, que cuentan
+    por `inicio_paro`; y la duración se recalcula sola, porque dejar la vieja con horas
+    nuevas daría un dato incoherente que nadie sabría de dónde salió.
+    """
+    p = db.query(ParoMaquinaDB).filter(ParoMaquinaDB.id == paro_id).first()
+    if p is None:
+        raise HTTPException(status_code=404, detail="Paro no encontrado")
+
+    cambios = []
+    cuerpo = datos.model_dump(exclude_unset=True)
+
+    if "categoria" in cuerpo or "comentario" in cuerpo:
+        categoria_actual, comentario_actual = _desglosar_motivo(p.motivo)
+        nuevo = _componer_motivo(
+            cuerpo.get("categoria", categoria_actual),
+            cuerpo.get("comentario", comentario_actual),
+        )
+        if nuevo != (p.motivo or ""):
+            cambios.append(f"motivo {p.motivo!r} -> {nuevo!r}")
+            p.motivo = nuevo
+
+    # Los tiempos se calculan y se VALIDAN antes de tocar la fila. Asignar y validar
+    # después deja el objeto de la sesión con un valor que se rechazó: no llega a la BD
+    # —la sesión de la petición se descarta— pero cualquier lectura posterior dentro del
+    # mismo request vería un dato inválido.
+    nuevo_inicio = p.inicio_paro
+    nuevo_fin = p.fin_paro
+    if "inicio_paro" in cuerpo and cuerpo["inicio_paro"]:
+        nuevo_inicio = _parsear_fecha_hora(cuerpo["inicio_paro"])
+    if "fin_paro" in cuerpo:
+        # Cadena vacía = «déjalo abierto otra vez»; es la única forma de deshacer un
+        # cierre puesto por error sin borrar el registro entero.
+        nuevo_fin = _parsear_fecha_hora(cuerpo["fin_paro"]) if cuerpo["fin_paro"] else None
+
+    if nuevo_fin and nuevo_inicio and nuevo_fin < nuevo_inicio:
+        raise HTTPException(status_code=400, detail="El fin no puede ser anterior al inicio")
+
+    if nuevo_inicio != p.inicio_paro:
+        cambios.append(f"inicio {_fmt_dt(p.inicio_paro)} -> {nuevo_inicio:%Y-%m-%d %H:%M:%S}")
+        p.inicio_paro = nuevo_inicio
+    if nuevo_fin != p.fin_paro:
+        destino = f"{nuevo_fin:%Y-%m-%d %H:%M:%S}" if nuevo_fin else "abierto"
+        cambios.append(f"fin {_fmt_dt(p.fin_paro)} -> {destino}")
+        p.fin_paro = nuevo_fin
+
+    if not cambios:
+        raise HTTPException(status_code=400, detail="No hay nada que cambiar")
+
+    # La duración se recalcula siempre que haya con qué; sin fin, se deja en NULL, que
+    # es lo que significa «sigue abierto» en el resto del sistema.
+    p.duracion_segundos = (
+        (p.fin_paro - p.inicio_paro).total_seconds()
+        if (p.fin_paro and p.inicio_paro) else None
+    )
+
+    db.commit()
+    logger.info(f"Paro {paro_id}: {' · '.join(cambios)} (admin {ctx.get('username')})")
+    sesion = db.query(SesionTrabajoDB).filter(SesionTrabajoDB.id == p.session_id).first()
+    return _paro_publico(p, sesion)
+
+
+@router.post("/paros/{paro_id}/cerrar")
+def cerrar_paro(paro_id: int, datos: CerrarParoIn = None, db: Session = Depends(get_db),
+                ctx=Depends(require_operativo)):
+    """Cierra un paro que quedó abierto. Sin `fin_paro`, se cierra ahora mismo.
+
+    Existe por el agujero conocido: el recolector de `tasks.py` cierra los turnos
+    colgados pero **no sus paros**, que se quedan con `fin_paro` NULL para siempre. Antes
+    la única salida era un UPDATE a mano en MySQL.
+    """
+    p = db.query(ParoMaquinaDB).filter(ParoMaquinaDB.id == paro_id).first()
+    if p is None:
+        raise HTTPException(status_code=404, detail="Paro no encontrado")
+    if p.fin_paro is not None:
+        raise HTTPException(status_code=400, detail="Ese paro ya está cerrado")
+
+    fin = _parsear_fecha_hora(datos.fin_paro) if (datos and datos.fin_paro) else datetime.now()
+    if p.inicio_paro and fin < p.inicio_paro:
+        raise HTTPException(status_code=400, detail="El fin no puede ser anterior al inicio")
+
+    p.fin_paro = fin
+    p.duracion_segundos = (fin - p.inicio_paro).total_seconds() if p.inicio_paro else None
+    db.commit()
+    logger.info(f"Paro {paro_id} cerrado manualmente en {fin:%Y-%m-%d %H:%M:%S} "
+                f"(admin {ctx.get('username')})")
+    sesion = db.query(SesionTrabajoDB).filter(SesionTrabajoDB.id == p.session_id).first()
+    return _paro_publico(p, sesion)
+
+
+@router.delete("/paros/{paro_id}")
+def eliminar_paro(paro_id: int, db: Session = Depends(get_db),
+                  ctx=Depends(require_superadmin)):
+    """⚠️ Borrado físico de un paro. Solo SUPERADMIN.
+
+    No arrastra nada: `paros_maquina` no tiene hijos. Aun así desaparece de los KPIs y
+    del reporte semanal, así que para anularlo sin destruirlo suele bastar con cerrarlo
+    o corregir sus horas.
+    """
+    p = db.query(ParoMaquinaDB).filter(ParoMaquinaDB.id == paro_id).first()
+    if p is None:
+        raise HTTPException(status_code=404, detail="Paro no encontrado")
+    resumen = (f"sesión {p.session_id} · {p.motivo!r} · {_fmt_dt(p.inicio_paro)} → "
+               f"{_fmt_dt(p.fin_paro) or 'abierto'}")
+    db.delete(p)
+    db.commit()
+    logger.warning(f"Paro {paro_id} ELIMINADO por {ctx.get('username')} — {resumen}")
+    return {"eliminado": paro_id, "detalle": resumen}
