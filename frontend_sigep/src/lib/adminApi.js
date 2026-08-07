@@ -12,7 +12,8 @@ const CLAVE = 'sigep_admin_sesion';
 
 export const admin = axios.create({ baseURL: '/api/admin', timeout: 8000 });
 
-/** Handler que el contenedor del admin registra para volver al login ante un 401. */
+/** Handler que el contenedor del admin registra para volver al login ante un 401.
+ *  Recibe el motivo que dio el backend (`detail`), que puede ser el de inactividad. */
 let alCaducar = () => {};
 export function registrarCaducidad(fn) {
   alCaducar = typeof fn === 'function' ? fn : () => {};
@@ -54,7 +55,7 @@ admin.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       borrarSesion();
-      alCaducar();
+      alCaducar(error.response?.data?.detail || null);
     }
     return Promise.reject(error);
   }
@@ -63,10 +64,36 @@ admin.interceptors.response.use(
 /** POST /api/admin/auth — valida credenciales y guarda la sesión. */
 export async function entrar(nombre, pin) {
   const { data } = await axios.post('/api/admin/auth', { nombre, pin }, { timeout: 8000 });
-  const sesion = { token: data.token, username: data.username, nivel: data.nivel_acceso };
+  const sesion = {
+    token: data.token,
+    username: data.username,
+    nivel: data.nivel_acceso,
+    inactividad: data.inactividad_segundos,
+  };
   guardarSesion(sesion);
   return sesion;
 }
+
+/* ── Caducidad por inactividad (2026-08-07) ───────────────────────────────────
+   Quien corta de verdad es el backend (`INACTIVIDAD_MAX` en routers/admin.py): la
+   web no puede darse permiso a sí misma. Esto es para que el panel no se quede
+   abierto y aparentemente usable después de que el token haya muerto.
+
+   El límite lo manda el servidor en el login (`inactividad_segundos`); el valor de
+   aquí solo cubre una sesión guardada por una versión anterior de la web. */
+const INACTIVIDAD_POR_DEFECTO_S = 15 * 60;
+
+/* La web cierra un poco antes que el servidor para que el aviso lo dé ella y no un
+   401 a medio camino; el suelo de 60 s evita que un valor pequeño lo deje en cero. */
+const MARGEN_MS = 20000;
+
+export function msDeInactividad(sesion = leerSesion()) {
+  const segundos = Number(sesion?.inactividad) || INACTIVIDAD_POR_DEFECTO_S;
+  return Math.max(60000, segundos * 1000 - MARGEN_MS);
+}
+
+/** Texto que ve el usuario cuando es la propia web la que cierra la sesión. */
+export const AVISO_INACTIVIDAD = 'Sesión cerrada por inactividad. Vuelve a iniciar sesión.';
 
 /** POST /api/admin/logout — revoca el token en el servidor y limpia el local. */
 export async function salir() {

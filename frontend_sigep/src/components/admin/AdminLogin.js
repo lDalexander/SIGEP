@@ -6,7 +6,7 @@ import { entrar, mensajeDeError } from '../../lib/adminApi';
  * Pantalla de acceso a Administración. No hay captura de referencia de esta pantalla
  * (las cinco del admin están ya autenticadas), así que sigue el sistema de diseño.
  */
-export default function AdminLogin({ onEntrar, onVolver }) {
+export default function AdminLogin({ onEntrar, onVolver, aviso = null }) {
   const [nombre, setNombre] = useState('');
   const [pin, setPin] = useState('');
   const [error, setError] = useState(null);
@@ -40,6 +40,15 @@ export default function AdminLogin({ onEntrar, onVolver }) {
             <Label className="block mt-1 text-sig-dim">Administración</Label>
           </div>
         </div>
+
+        {/* Por qué se volvió al login sin que el usuario pulsara «Salir»: inactividad,
+            o un reinicio del servicio que se llevó los tokens por delante. Se oculta
+            en cuanto hay un error del intento actual, que es más reciente. */}
+        {aviso && !error && (
+          <p role="status" className="sig-meta mt-6 -mb-1 text-sig-dim">
+            {aviso}
+          </p>
+        )}
 
         <div className="mt-7 space-y-4">
           <Campo etiqueta="Usuario">

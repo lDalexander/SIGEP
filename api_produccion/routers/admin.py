@@ -57,7 +57,55 @@ from ws_manager import manager
 router = APIRouter(prefix="/api/admin", tags=["Administración"])
 
 # Token de sesión admin -> datos del admin. En memoria (1 worker gunicorn).
+# Cada entrada: {"username", "nivel", "ultimo_uso"}.
 _TOKENS: dict = {}
+
+# ----------------------------------------------------------------------------
+# Caducidad por inactividad (2026-08-07)
+# ----------------------------------------------------------------------------
+# Hasta ahora un token no caducaba NUNCA: solo lo mataba el «Salir» o un reinicio
+# del servicio. Un navegador olvidado abierto en /admin seguía pudiendo cerrar
+# turnos o borrar sesiones días después.
+#
+# Se mide INACTIVIDAD, no antigüedad: cada petición autenticada renueva el reloj,
+# así que una sesión de trabajo larga no se corta a media edición. No hay tope
+# absoluto a propósito (decisión del responsable, 2026-08-07).
+#
+# El reloj es el del servidor (`datetime.now()`, TZ America/Guayaquil como el
+# resto del módulo): un equipo con la hora mal puesta no puede alargar su sesión.
+#
+# `ADMIN_INACTIVIDAD_MIN` permite ajustarlo sin tocar código (y probarlo en la
+# instancia paralela del 8001 con un minuto en vez de esperar quince). Un valor
+# ilegible o <= 0 cae al defecto: quedarse sin caducidad por una errata en el .env
+# sería justo el agujero que esto viene a cerrar.
+def _minutos_inactividad() -> int:
+    try:
+        valor = int(os.getenv("ADMIN_INACTIVIDAD_MIN", "15"))
+        return valor if valor > 0 else 15
+    except (TypeError, ValueError):
+        return 15
+
+
+INACTIVIDAD_MAX = timedelta(minutes=_minutos_inactividad())
+
+# Mensaje del 401 cuando el token existía pero llevaba demasiado tiempo parado. La
+# web lo muestra tal cual en el login, así que distingue «te has ido» de «se
+# reinició el servicio» sin que el frontend tenga que adivinar el motivo.
+MOTIVO_INACTIVIDAD = "Sesión cerrada por inactividad. Vuelve a iniciar sesión."
+
+
+def _purgar_tokens(ahora: datetime) -> None:
+    """Suelta los tokens ya caducados.
+
+    `require_admin` ya rechaza uno caducado aunque siga en el dict, así que esto no
+    es lo que da la seguridad: solo evita que el store crezca sin fin con sesiones
+    que nadie va a volver a usar. Se llama en el login, que es poco frecuente.
+    """
+    caducados = [t for t, d in _TOKENS.items() if ahora - d["ultimo_uso"] > INACTIVIDAD_MAX]
+    for t in caducados:
+        datos = _TOKENS.pop(t, None)
+        if datos:
+            logger.info(f"Sesión admin de {datos['username']} caducada por inactividad")
 
 
 # ----------------------------------------------------------------------------
@@ -69,13 +117,29 @@ class AuthIn(BaseModel):
 
 
 def require_admin(x_admin_token: str = Header(default=None)):
-    """Dependencia: exige un token admin válido en la cabecera X-Admin-Token.
+    """Dependencia: exige un token admin válido y no caducado en X-Admin-Token.
 
     Solo autentica. Para exigir además un nivel concreto, ver `require_nivel`.
+
+    Renueva el reloj de inactividad en cada petición: es el único punto por el que
+    pasan TODOS los endpoints de la zona, así que aquí «usar la sesión» y «renovarla»
+    son lo mismo. Consecuencia a tener presente: cualquier petición cuenta como uso,
+    incluido el refresco automático de la pestaña Mensajes (cada 15 s) — mientras esa
+    pestaña esté abierta el token no caduca por este camino, y quien lo cierra es el
+    temporizador de inactividad del navegador, que sí sabe si hay alguien delante.
     """
-    if not x_admin_token or x_admin_token not in _TOKENS:
+    ctx = _TOKENS.get(x_admin_token) if x_admin_token else None
+    if ctx is None:
         raise HTTPException(status_code=401, detail="Sesión admin requerida o expirada")
-    return _TOKENS[x_admin_token]
+
+    ahora = datetime.now()
+    if ahora - ctx["ultimo_uso"] > INACTIVIDAD_MAX:
+        _TOKENS.pop(x_admin_token, None)
+        logger.info(f"Sesión admin de {ctx['username']} rechazada: inactividad")
+        raise HTTPException(status_code=401, detail=MOTIVO_INACTIVIDAD)
+
+    ctx["ultimo_uso"] = ahora
+    return ctx
 
 
 # ----------------------------------------------------------------------------
@@ -140,10 +204,24 @@ def admin_auth(datos: AuthIn, db: Session = Depends(get_db)):
         admin.password = seguridad.hashear(datos.pin)
         db.commit()
         logger.info(f"Contraseña de {admin.username} migrada a hash en el login")
+    ahora = datetime.now()
+    _purgar_tokens(ahora)
     token = secrets.token_urlsafe(32)
-    _TOKENS[token] = {"username": admin.username, "nivel": admin.nivel_acceso}
+    _TOKENS[token] = {
+        "username": admin.username,
+        "nivel": admin.nivel_acceso,
+        "ultimo_uso": ahora,
+    }
     logger.info(f"Admin login: {admin.username} ({admin.nivel_acceso})")
-    return {"token": token, "username": admin.username, "nivel_acceso": admin.nivel_acceso}
+    # `inactividad_segundos` es una clave NUEVA en la respuesta: la web la usa para
+    # cerrar sola antes de que el token muera, en vez de repetir aquí y allí el
+    # número de minutos. Solo la consume esta web (la app Android usa /admin/login).
+    return {
+        "token": token,
+        "username": admin.username,
+        "nivel_acceso": admin.nivel_acceso,
+        "inactividad_segundos": int(INACTIVIDAD_MAX.total_seconds()),
+    }
 
 
 @router.post("/logout")

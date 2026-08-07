@@ -7,7 +7,11 @@ import TabChecklists from './TabChecklists';
 import TabJerarquia from './TabJerarquia';
 import TabMensajes from './TabMensajes';
 import TabUsuarios from './TabUsuarios';
-import { leerSesion, registrarCaducidad, salir, esSuperadmin } from '../../lib/adminApi';
+import {
+  leerSesion, registrarCaducidad, salir, esSuperadmin,
+  msDeInactividad, AVISO_INACTIVIDAD,
+} from '../../lib/adminApi';
+import useInactividad from '../../lib/useInactividad';
 
 /* El orden de las cinco primeras es el de las capturas; «Usuarios» se añadió
    después (2026-08-06) y solo la ve un SUPERADMIN — `soloSuperadmin`. */
@@ -33,10 +37,17 @@ const PESTANAS = [
 export default function AdminApp({ onVolver = () => {} }) {
   const [sesion, setSesion] = useState(() => leerSesion());
   const [pestana, setPestana] = useState('operarios');
+  /* Por qué se volvió al login, si no fue el propio usuario: se enseña ahí para no
+     dejar la impresión de que la web ha perdido la sesión sola. */
+  const [aviso, setAviso] = useState(null);
 
-  /* Cualquier 401 del backend significa sesión caducada (los tokens viven en la
-     memoria del proceso y se pierden al reiniciar el servicio). */
-  const caducar = useCallback(() => setSesion(null), []);
+  /* Cualquier 401 del backend significa sesión caducada: puede ser un reinicio del
+     servicio (los tokens viven en la memoria del proceso) o los 15 minutos de
+     inactividad, y el motivo lo dice el propio backend en `detail`. */
+  const caducar = useCallback((motivo) => {
+    setSesion(null);
+    setAviso(motivo || null);
+  }, []);
   useEffect(() => {
     registrarCaducidad(caducar);
     return () => registrarCaducidad(null);
@@ -45,10 +56,27 @@ export default function AdminApp({ onVolver = () => {} }) {
   const cerrarSesion = async () => {
     await salir();
     setSesion(null);
+    setAviso(null);
   };
 
+  /* Cierre por inactividad en el propio navegador. No sustituye al del backend —que
+     es el que manda— sino que evita el caso en que no hay ninguna petición en curso
+     (todas las pestañas menos Mensajes cargan una vez) y el panel se quedaría
+     abierto y con aspecto de operativo aunque el token ya estuviera muerto. */
+  const cerrarPorInactividad = useCallback(async () => {
+    await salir();
+    setSesion(null);
+    setAviso(AVISO_INACTIVIDAD);
+  }, []);
+  useInactividad({
+    activo: !!sesion,
+    limiteMs: msDeInactividad(sesion),
+    alVencer: cerrarPorInactividad,
+  });
+
   if (!sesion) {
-    return <AdminLogin onEntrar={setSesion} onVolver={onVolver} />;
+    const entrar = (nueva) => { setAviso(null); setSesion(nueva); };
+    return <AdminLogin onEntrar={entrar} onVolver={onVolver} aviso={aviso} />;
   }
 
   const visibles = PESTANAS.filter((p) => !p.soloSuperadmin || esSuperadmin(sesion));

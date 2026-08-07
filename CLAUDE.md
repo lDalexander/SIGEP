@@ -12,9 +12,15 @@ industriales con sincronización offline-first.
 
 ## 0. Estado actual
 
-**Última sesión: 2026-08-06.** El frontend está reconstruido y **desplegado en producción**
+**Última sesión: 2026-08-07.** El frontend está reconstruido y **desplegado en producción**
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
-capturas de `referencia_ui/`. 133 tests en verde.
+capturas de `referencia_ui/`. 136 tests en verde.
+
+La **caducidad de la sesión admin por inactividad** (2026-08-07) está **implementada y
+probada, pero TODAVÍA NO DESPLEGADA**: el 8000 sigue con el código anterior y el build en
+producción es el de ayer. Hasta el despliegue, un `/admin` abierto sigue sin caducar.
+Qué falta: probar en el dev server, `kill -HUP` al backend y `./deploy.sh`. Detalle en
+«Cambios de backend ya autorizados» más abajo.
 
 **Cerrar turno, eliminar sesión, historial editable de pacas, gestión de usuarios y
 niveles de acceso** (2026-08-06) **ya están en producción** (worker `2154040`, frontend
@@ -74,6 +80,7 @@ heartbeat, sin errores en el log del servicio.
 | Tag previo a la jerarquía de fragancias | `v1.6-pre-fragancias` (en GitHub) |
 | Tag previo a la gestión de usuarios | `v1.7-pre-gestion-usuarios` (en GitHub) |
 | Tag previo al historial de pacas | `v1.8-pre-historial-pacas` (en GitHub) |
+| Tag previo a la caducidad de sesión | `v1.9-pre-caducidad-sesion` (en GitHub) |
 | Build previo a estos dos cambios | `~/respaldos_build_sigep/build_2026-08-06_164105` |
 | Build previo a las fragancias | `~/respaldos_build_sigep/build_2026-08-06_130039` |
 | Build de esa versión | `~/respaldos_build_sigep/build_pre-paros_2026-08-05_*` |
@@ -94,7 +101,38 @@ falta tag, y la prohibición de «limpiar» el árbol con `checkout`/`reset`/`cl
 
 ### Cambios de backend ya autorizados y aplicados
 
-Tras la reconstrucción se autorizaron **siete** excepciones a la regla de oro:
+Tras la reconstrucción se autorizaron **ocho** excepciones a la regla de oro:
+
+- **Caducidad de la sesión admin por inactividad** (2026-08-07, **implementada, sin
+  desplegar**). Un token admin no caducaba nunca: solo lo mataba «Salir» o un reinicio del
+  servicio, así que un navegador olvidado en `/admin` podía cerrar turnos o borrar sesiones
+  días después. **Sin `ALTER`, sin tablas y sin rutas nuevas**: solo cambia el ciclo de vida
+  de un `dict` que ya vivía en memoria.
+
+  - **Se mide inactividad, no antigüedad.** Cada petición autenticada renueva el reloj en
+    `require_admin`, así que una edición larga no se corta a medias. **No hay tope
+    absoluto**, por decisión del responsable.
+  - **15 minutos**, en `INACTIVIDAD_MAX`. Se puede ajustar sin tocar código con la variable
+    de entorno `ADMIN_INACTIVIDAD_MIN`; un valor ilegible o ≤ 0 cae al defecto de 15, nunca
+    a «sin caducidad» — una errata en el `.env` no debe reabrir el agujero.
+  - **El 401 dice por qué**: `detail` es «Sesión cerrada por inactividad…» cuando el token
+    existía y llevaba parado demasiado, y el «Sesión admin requerida o expirada» de siempre
+    cuando no existe (reinicio del servicio, token inventado). La web enseña ese texto en
+    el login, así que el usuario distingue los dos casos.
+  - **Única respuesta que cambia:** `POST /api/admin/auth` añade la clave
+    `inactividad_segundos`. Es admin-only y solo la consume esta web; **la app Android usa
+    `/api/admin/login`, que no se tocó**.
+  - **Ojo con el refresco de la pestaña Mensajes**: hace polling cada 15 s, y ese polling
+    cuenta como uso, así que por el camino del backend el token no caducaría mientras esa
+    pestaña esté abierta. Lo cubre el temporizador del navegador (§2), que sí sabe si hay
+    alguien delante.
+  - Verificado con `diff` 8000 vs 8001 en **23 endpoints**, todos idénticos byte a byte
+    (`/api/maquinas`, `/api/operadores` con y sin `tipo`, `/api/fragancias`,
+    `/api/usuarios`, `/api/admin/supervisores`, los del dashboard con rango, franja,
+    segmentadores y `agrupar=dia`, `opciones_filtros` encadenado, `comentarios_turno`,
+    `mantenimiento/checklist`, `tablets/estado`, `insumos/dashboard`). **Las tablets no
+    necesitan actualización.**
+
 
 - **Cerrar turno, eliminar sesión, historial de pacas, usuarios y niveles de acceso**
   (2026-08-06, **en producción**). **Sin `ALTER` y sin tablas nuevas**: todo usa
@@ -529,6 +567,26 @@ devuelve al login — los tokens viven en la memoria del proceso del backend, as
 Los componentes que leen datos del admin usan `useApi` pasándole ese cliente:
 `useApi('/operadores', { cliente: admin })`.
 
+**La sesión se cierra sola a los 15 minutos sin actividad**, sin aviso previo (decisión del
+responsable, 2026-08-07). Quien corta de verdad es el backend; el navegador lo hace también
+por su cuenta con `lib/useInactividad.js` por un motivo concreto: **todas las pestañas menos
+Mensajes cargan una sola vez**, así que sin peticiones el panel se quedaría abierto y con
+aspecto de operativo aunque el token ya estuviera muerto — y con Mensajes abierta pasa lo
+contrario, su refresco de 15 s renovaría el token en el servidor para siempre. Detalles:
+
+- Cuentan como actividad `mousedown`, `keydown`, `touchstart` y `wheel`. **No `mousemove`**:
+  un ratón rozado por la vibración de la planta no debe renovar una sesión.
+- Se mide con dos lecturas del **mismo** reloj (`Date.now()`), nunca contra la hora del
+  servidor: un equipo con la hora mal puesta no adelanta ni retrasa el cierre. Si el equipo
+  se suspende, al despertar la sesión ya está cerrada, que es lo correcto.
+- Al vencer llama a `salir()`, o sea `POST /admin/logout`: **revoca el token en el
+  servidor**. Limpiar solo el `localStorage` dejaría el token vivo.
+- El límite lo manda el backend en el login (`inactividad_segundos`) y la web resta 20 s,
+  para cerrar ella antes de que el 401 la pille a media petición. Los 15 minutos no están
+  escritos dos veces.
+- El login explica por qué se volvió ahí (`aviso`), distinguiendo la inactividad del
+  reinicio del servicio, que llega como un 401 con otro `detail`.
+
 **«Eliminar» nunca llama a `DELETE`.** Tanto en Operarios como en las combinaciones y las
 fragancias de Jerarquía hace `PUT {activo: false}` tras confirmación, porque los endpoints
 de borrado del backend son físicos y dejarían huérfano el histórico. Hay tests que lo
@@ -607,6 +665,12 @@ npx eslint --ext .js src/
   intacta pondría los segundos a cero—, que borrar un registro avisa de la salida no
   destructiva, y que un `ADMINPLANTA` edita pero no borra y un `CONSULTA` ve los
   campos deshabilitados.
+  De la caducidad por inactividad (2026-08-07): que a los 15 minutos sin tocar nada se
+  vuelve al login **y se llama a `salir()`** —revocar el token en el servidor es la mitad
+  del cambio; limpiar el estado local solo, no sirve—, que cualquier tecla reinicia la
+  cuenta y que la sesión sigue viva 14 minutos después, y que un 401 con el `detail` de
+  inactividad lo explica en el login. Usan temporizadores falsos (`jest.useFakeTimers`),
+  que en Jest moderno simulan también `Date.now()`, que es lo que lee el hook.
 
 ### Dev server
 
@@ -741,10 +805,20 @@ Dos reglas que **no son evidentes** y que se decidieron leyendo los datos reales
 
 ### Administración (requieren cabecera `X-Admin-Token`)
 
-Login: `POST /api/admin/auth {nombre, pin}` → `{token, username, nivel_acceso}`.
+Login: `POST /api/admin/auth {nombre, pin}` →
+`{token, username, nivel_acceso, inactividad_segundos}`.
 El token se guarda **en memoria del proceso**: al reiniciar `sigep.service` caducan
 todas las sesiones admin y hay que volver a entrar. `POST /api/admin/logout` lo revoca.
 Sin token o con token inválido: **401**.
+
+**Caducidad por inactividad** (2026-08-07): un token muere tras `INACTIVIDAD_MAX`
+(**15 min**, ajustable con la variable de entorno `ADMIN_INACTIVIDAD_MIN`; un valor
+ilegible o ≤ 0 cae al defecto, nunca a «sin caducidad») sin ninguna petición. Cada
+petición autenticada renueva el reloj en `require_admin`, así que se mide **inactividad,
+no antigüedad**, y no hay tope absoluto. El 401 de un token caducado trae
+`detail: "Sesión cerrada por inactividad…"`, distinto del «Sesión admin requerida o
+expirada» de un token inexistente: la web usa esa diferencia para explicarlo en el login.
+`inactividad_segundos` en el login existe para que el frontend no repita el número.
 
 **Contraseñas** (2026-08-06): `administradores.password` guarda un hash PBKDF2-SHA256
 (`services/seguridad.py`, librería estándar, sin dependencias). Las que quedan en texto

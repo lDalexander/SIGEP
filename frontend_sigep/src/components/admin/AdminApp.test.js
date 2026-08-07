@@ -1,9 +1,13 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import axios from 'axios';
 import AdminApp from './AdminApp';
 // El cliente que llega aquí es el del mock de abajo: jest.mock se iza sobre los imports.
-import { admin as mockAdmin } from '../../lib/adminApi';
+import {
+  admin as mockAdmin,
+  salir as mockSalir,
+  registrarCaducidad as mockRegistrarCaducidad,
+} from '../../lib/adminApi';
 
 jest.mock('axios');
 
@@ -23,6 +27,8 @@ jest.mock('../../lib/adminApi', () => ({
   salir: jest.fn(() => Promise.resolve()),
   leerSesion: () => ({ token: 't0ken', username: 'admin', nivel: mockNivel }),
   registrarCaducidad: jest.fn(),
+  msDeInactividad: () => 15 * 60 * 1000,
+  AVISO_INACTIVIDAD: 'Sesión cerrada por inactividad. Vuelve a iniciar sesión.',
   mensajeDeError: (err, porDefecto) => err?.response?.data?.detail || porDefecto || 'error',
   NIVELES_OPERATIVOS: ['SUPERADMIN', 'ADMIN', 'ADMINPLANTA', 'ADMINBODEGA'],
   nivelActual: () => mockNivel,
@@ -722,4 +728,73 @@ test('Mensajes: sin selección no se puede enviar, y «a todas» omite sesion_id
   await waitFor(() =>
     expect(mockAdmin.post).toHaveBeenCalledWith('/mensajes/masivo', { texto: 'Parada general' })
   );
+});
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Caducidad por inactividad (2026-08-07)
+
+   Quien corta de verdad es el backend (`INACTIVIDAD_MAX`, 15 min, en
+   routers/admin.py). Lo que se prueba aquí es lo que hace la web: no dejar el
+   panel abierto y con aspecto de operativo cuando ya no hay nadie delante, y
+   revocar el token en el servidor al hacerlo — si solo se limpiara el estado
+   local, el token seguiría vivo hasta que alguien lo usara.
+   ───────────────────────────────────────────────────────────────────────────── */
+const MINUTO = 60 * 1000;
+
+test('Inactividad: a los 15 minutos sin tocar nada vuelve al login y revoca el token', async () => {
+  jest.useFakeTimers();
+  try {
+    render(<AdminApp />);
+    await screen.findByText('JONATHAN VICUÑA');
+
+    // A los 14 minutos la sesión sigue abierta: el límite no se ha cumplido.
+    await act(async () => { jest.advanceTimersByTime(14 * MINUTO); });
+    expect(screen.getByText('SIGEP · Administración')).toBeInTheDocument();
+
+    await act(async () => { jest.advanceTimersByTime(2 * MINUTO); });
+
+    // `salir()` es POST /admin/logout: el token deja de valer también en el servidor.
+    expect(mockSalir).toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Entrar' })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(/inactividad/i);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('Inactividad: cualquier interacción reinicia la cuenta', async () => {
+  jest.useFakeTimers();
+  try {
+    render(<AdminApp />);
+    await screen.findByText('JONATHAN VICUÑA');
+
+    await act(async () => { jest.advanceTimersByTime(14 * MINUTO); });
+    // Una tecla a los 14 minutos: el reloj vuelve a cero.
+    fireEvent.keyDown(window, { key: 'a' });
+    await act(async () => { jest.advanceTimersByTime(14 * MINUTO); });
+
+    expect(mockSalir).not.toHaveBeenCalled();
+    expect(screen.getByText('SIGEP · Administración')).toBeInTheDocument();
+
+    // Y desde ese momento sí caduca a los 15.
+    await act(async () => { jest.advanceTimersByTime(2 * MINUTO); });
+    expect(screen.getByRole('button', { name: 'Entrar' })).toBeInTheDocument();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('Inactividad: el 401 del backend explica el motivo en el login', async () => {
+  render(<AdminApp />);
+  await screen.findByText('JONATHAN VICUÑA');
+
+  /* El interceptor de adminApi llama al handler registrado con el `detail` del 401.
+     Se distingue del reinicio del servicio, que trae otro texto. */
+  const alCaducar = mockRegistrarCaducidad.mock.calls.at(-1)[0];
+  await act(async () => {
+    alCaducar('Sesión cerrada por inactividad. Vuelve a iniciar sesión.');
+  });
+
+  expect(screen.getByRole('button', { name: 'Entrar' })).toBeInTheDocument();
+  expect(screen.getByRole('status')).toHaveTextContent(/inactividad/i);
 });
