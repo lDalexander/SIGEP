@@ -16,6 +16,12 @@ industriales con sincronización offline-first.
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
 capturas de `referencia_ui/`. 136 tests en verde.
 
+**Administrar desde /admin lo que antes obligaba a entrar a MySQL** (2026-08-07,
+**implementado, SIN DESPLEGAR**). Nació de un caso real: el paro 105 se borró por SQL sin
+ver de qué sesión colgaba. Cuatro bloques —**Paros**, **Insumos**, **Reportes** y
+**Tablets**— y **un `ALTER` YA APLICADO** en producción (`alter_reportes_atendido.sql`).
+Detalle abajo.
+
 El **panel de correo y el reporte semanal de paros** (2026-08-07) **ya están en
 producción** (worker `2230646`, frontend `main.7e508521.js`). Nueva pestaña
 `/admin` → **Correo** (solo SUPERADMIN) y una tabla nueva, `config_correo`. El reporte
@@ -105,6 +111,8 @@ heartbeat, sin errores en el log del servicio.
 | Tag previo al estado real de tablet | `v1.10-pre-estado-tablet` (en GitHub) |
 | Tag previo al correo de reportes | `v1.11-pre-correo-reportes` (en GitHub) |
 | Tag previo al panel de correo | `v1.12-pre-config-correo` (en GitHub) |
+| Tag previo a excluir el almuerzo | `v1.13-pre-excluir-almuerzo` (en GitHub) |
+| BD previa al `ALTER` de reportes | `backups/produccion_detg_pre_reportes_atendido_20260807_124057.sql.gz` |
 | Build previo al panel de correo | `~/respaldos_build_sigep/build_2026-08-07_114148` |
 | Build previo al estado de tablet | `~/respaldos_build_sigep/build_2026-08-07_104035` |
 | Build previo a la caducidad de sesión | `~/respaldos_build_sigep/build_2026-08-07_101252` |
@@ -128,7 +136,45 @@ falta tag, y la prohibición de «limpiar» el árbol con `checkout`/`reset`/`cl
 
 ### Cambios de backend ya autorizados y aplicados
 
-Tras la reconstrucción se autorizaron **once** excepciones a la regla de oro:
+Tras la reconstrucción se autorizaron **doce** excepciones a la regla de oro:
+
+- **Administración de paros, insumos, reportes y tablets** (2026-08-07, **sin desplegar**).
+  Todo lo que hasta ahora obligaba a abrir MySQL a mano.
+
+  - **Paros** — `GET/PUT /admin/paros`, `POST /admin/paros/{id}/cerrar` (operativo) y
+    `DELETE` (SUPERADMIN). El rango usa el mismo criterio que `/dashboard/paros`. El
+    `motivo` se acepta **por partes** (`categoria` + `comentario`) y se recompone como
+    `"[CAT] - comentario"`: escribir los corchetes a mano es lo que se olvida y rompe el
+    desglose. **La duración se recalcula** al mover las horas —dejar la vieja daría un dato
+    que nadie sabría de dónde salió— y los tiempos **se validan antes de asignarse**.
+    `fin_paro: ""` reabre un paro cerrado por error. `POST /cerrar` tapa el agujero del
+    recolector, que cierra turnos colgados pero no sus paros.
+  - **Insumos** — **solo frontend**: `PUT`/`DELETE` de `/admin/pedidos` y `/admin/entregas`
+    existían desde antes y nunca tuvieron pantalla. Se editan **solo cantidades**: las horas
+    las escribe el flujo de bodega y tocarlas daría tiempos de respuesta imposibles. La
+    cantidad **solicitada** tampoco se toca: es lo que pidió el operario, no lo que pasó
+    después. Se lee del endpoint **público** `/api/insumos/dashboard`, el único que arma
+    pedidos y entregas con máquina y tiempos.
+  - **Reportes de la app y comentarios de turno** — `GET/PUT/DELETE` de
+    `/admin/reportes_app` y `/admin/comentarios`. Los reportes **se atienden, no se
+    borran** (`atendido`, `atendido_en`, `atendido_por`): el historial de qué falló en las
+    tablets es justo lo que hoy se pierde en el buzón de correo; desmarcar limpia las dos
+    marcas. **Sin rango de fechas por defecto**, al revés que el resto del admin: son
+    esporádicos y la pantalla saldría vacía casi siempre.
+  - **Tablets** — `GET/PUT /admin/tablets`, `DELETE` (SUPERADMIN). El 2026-08-07 había 24
+    registradas y **17 sin señales en más de un día**. Dos avisos que da la pantalla:
+    «conectada» es **WebSocket abierto ahora** (los latidos llegan cada 20-25 min), y
+    **borrar no es permanente si el equipo sigue vivo** — el siguiente heartbeat recrea la
+    fila, porque es la propia tablet quien la escribe.
+  - **`ALTER` aplicado** (`alter_reportes_atendido.sql`): tres columnas nuevas en
+    `reportes_app`. Son columnas sobre una tabla que ya existía, así que `create_all` **no**
+    las crea. **Ya está ejecutado en producción**, y es aditivo: el código vigente no las
+    usa. Respaldo previo:
+    `backups/produccion_detg_pre_reportes_atendido_20260807_124057.sql.gz`.
+  - Verificado con `diff` 8000 vs 8001 en **23 endpoints**, idénticos byte a byte, y cada
+    endpoint nuevo probado contra la BD real **dentro de una transacción revertida**.
+    **Las tablets no necesitan actualización.**
+
 
 - **Panel de correo + reporte semanal de paros** (2026-08-07, **en producción**).
 
@@ -597,6 +643,10 @@ frontend_sigep/
     │       ├── AdminLogin.js
     │       ├── Ayuda.js, FiltroRango.js
     │       ├── TabOperarios / TabProduccion / TabChecklists / TabJerarquia / TabMensajes
+    │       ├── TabParos.js      # corregir, cerrar y borrar paros
+    │       ├── TabInsumos.js    # cantidades de pedidos y entregas
+    │       ├── TabFeedback.js   # reportes de la app (se atienden) y comentarios
+    │       ├── TabTablets.js    # registro de dispositivos
     │       ├── TabUsuarios.js   # administradores y niveles — solo la ve un SUPERADMIN
     │       └── TabCorreo.js     # servidor SMTP, listas de correo y reporte semanal
     └── components/ui/           # componentes base del sistema de diseño

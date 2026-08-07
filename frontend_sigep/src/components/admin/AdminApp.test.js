@@ -126,6 +126,66 @@ const CHECKLISTS = [
   },
 ];
 
+const TABLETS_ADMIN = [
+  {
+    device_id: 'c439e96c-3ea1-47e9-9411-1752b22f821e', nombre: 'CRISTHIAN CEDEÑO',
+    maquina: 'Máquina 7', pendientes: 0, ultimo_heartbeat: '2026-08-07 12:30:00',
+    ultima_sincronizacion: '2026-08-07 12:30:00', segundos_desde_heartbeat: 642,
+    conectada: true,
+  },
+  {
+    /* Retirada: casi 9 días sin dar señales. Es la que hay que poder limpiar. */
+    device_id: '7bf71ff0-64b0-4a1e-9f0e-000000000000', nombre: 'PRUEBAS',
+    maquina: 'PRUEBA', pendientes: 3, ultimo_heartbeat: '2026-07-29 08:00:00',
+    ultima_sincronizacion: null, segundos_desde_heartbeat: 758945, conectada: false,
+  },
+];
+
+const REPORTES_APP = [
+  {
+    id: 3, sesion_id: 449, maquina: 'Máquina 7', operador: 'CRISTHIAN CEDEÑO',
+    texto: 'No permite ingresar pacas', creado_en: '2026-08-07 09:12:00',
+    atendido: false, atendido_en: null, atendido_por: null,
+  },
+  {
+    id: 2, sesion_id: null, maquina: 'PRUEBA', operador: 'PRUEBAS',
+    texto: 'reporte de prueba', creado_en: '2026-08-01 10:00:00',
+    atendido: true, atendido_en: '2026-08-02 08:00:00', atendido_por: 'admin',
+  },
+];
+
+const COMENTARIOS_TURNO = [
+  {
+    id: 15, sesion_id: 447, maquina: 'Máquina 9', operador: 'ROSENDO VALENZUELA',
+    texto: 'Ya descansa hijito', creado_en: '2026-08-06 22:40:00',
+  },
+];
+
+const INSUMOS = {
+  kpis: { total_pedidos: 2, tiempo_resp_prom_seg: 240, con_discrepancia: 1, entregas_proactivas: 1 },
+  pedidos: [
+    /* Uno con descuadre entre lo entregado y lo recibido: es el caso que hay que
+       poder corregir sin entrar a la base. */
+    {
+      id: 51, maquina: 'Máquina 7', operador: 'CRISTHIAN CEDEÑO', insumo: 'Bobina',
+      categoria: 'EMPAQUE', insumista: 'LUIS BODEGA', estado: 'Entregado',
+      hora_solicitud: '08:15:00', solicitada: 10, entregada: 10, recibida: 8,
+    },
+    {
+      id: 52, maquina: 'Máquina 9', operador: 'ROSENDO VALENZUELA', insumo: 'Etiquetas',
+      categoria: 'EMPAQUE', insumista: null, estado: 'Pendiente',
+      hora_solicitud: '09:40:00', solicitada: 5, entregada: null, recibida: null,
+    },
+  ],
+  entregas: [
+    {
+      id: 7, insumista: 'LUIS BODEGA', tipo_producto: 'EMPAQUE', insumo: 'Cinta',
+      cantidad: 3, maquina: 'Máquina 7', observaciones: null, foto_url: null,
+      fecha_hora: '2026-08-07 10:05:00',
+    },
+  ],
+};
+
 const PAROS = [
   /* Uno cerrado normal, uno sin cerrar con el turno ya cerrado (el caso «SIN CIERRE»
      que dejaba el recolector) y uno con categoría que no está en la lista fija. */
@@ -206,6 +266,9 @@ beforeEach(() => {
     if (url === '/usuarios')          return Promise.resolve({ data: USUARIOS });
     if (url === '/niveles')           return Promise.resolve({ data: NIVELES });
     if (url === '/paros')             return Promise.resolve({ data: PAROS });
+    if (url === '/tablets')           return Promise.resolve({ data: TABLETS_ADMIN });
+    if (url === '/reportes_app')      return Promise.resolve({ data: REPORTES_APP });
+    if (url === '/comentarios')       return Promise.resolve({ data: COMENTARIOS_TURNO });
     if (url === '/correo')            return Promise.resolve({ data: CONFIG_CORREO });
     if (url === '/correo/semanal_vista_previa') return Promise.resolve({ data: VISTA_PREVIA });
     return Promise.reject(new Error(`sin mock para ${url}`));
@@ -214,8 +277,12 @@ beforeEach(() => {
   mockAdmin.put.mockResolvedValue({ data: { ok: true } });
   mockAdmin.delete.mockResolvedValue({ data: { eliminada: 331, borrado: { pallets: 12, paros: 2 } } });
 
-  // TabProduccion pide las fragancias al endpoint público (no hay tabla maestra).
-  axios.get.mockResolvedValue({ data: { fragancia: ['Limón', 'Floral'] } });
+  /* Endpoints públicos que consumen pestañas del admin: las fragancias en Producción
+     y el dashboard de insumos en Insumos (es el único que arma pedidos y entregas). */
+  axios.get.mockImplementation((url) => {
+    if (String(url).includes('/insumos/dashboard')) return Promise.resolve({ data: INSUMOS });
+    return Promise.resolve({ data: { fragancia: ['Limón', 'Floral'] } });
+  });
 });
 
 /** Cambia de pestaña por su rótulo. */
@@ -1132,4 +1199,232 @@ test('Paros: eliminar avisa de que es definitivo y sugiere corregir las horas', 
 
   expect(window.confirm.mock.calls[0][0]).toMatch(/borrado definitivo/);
   await waitFor(() => expect(mockAdmin.delete).toHaveBeenCalledWith('/paros/130'));
+});
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Insumos (2026-08-07)
+
+   Los endpoints de corrección existían desde antes y nunca tuvieron pantalla. Lo
+   que se protege: que solo se editen CANTIDADES (las horas las escribe el flujo de
+   bodega), que un campo vacío no se interprete como cero, y los niveles.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+test('Insumos: marca el pedido cuyas cantidades no cuadran', async () => {
+  render(<AdminApp />);
+  irA('Insumos');
+
+  expect(await screen.findByText(/Bobina · Máquina 7/)).toBeInTheDocument();
+  expect(screen.getByText('descuadre')).toBeInTheDocument();      // 10 entregadas, 8 recibidas
+  expect(screen.getByText('1 con cantidades distintas')).toBeInTheDocument();
+});
+
+test('Insumos: corregir manda solo la cantidad que cambió', async () => {
+  render(<AdminApp />);
+  irA('Insumos');
+
+  const recibida = await screen.findByLabelText('Cantidad recibida del pedido 51');
+  fireEvent.change(recibida, { target: { value: '10' } });
+  fireEvent.click(screen.getAllByRole('button', { name: 'Guardar' })[0]);
+
+  await waitFor(() =>
+    expect(mockAdmin.put).toHaveBeenCalledWith('/pedidos/51', { cantidad_recibida: 10 })
+  );
+});
+
+test('Insumos: una cantidad negativa o con decimales ni sale de la web', async () => {
+  render(<AdminApp />);
+  irA('Insumos');
+
+  const entregada = await screen.findByLabelText('Cantidad entregada del pedido 51');
+  fireEvent.change(entregada, { target: { value: '-3' } });
+  fireEvent.click(screen.getAllByRole('button', { name: 'Guardar' })[0]);
+
+  expect(await screen.findByText(/números enteros de cero en adelante/)).toBeInTheDocument();
+  expect(mockAdmin.put).not.toHaveBeenCalled();
+});
+
+test('Insumos: la cantidad solicitada no se puede editar', async () => {
+  render(<AdminApp />);
+  irA('Insumos');
+  await screen.findByText(/Bobina · Máquina 7/);
+
+  /* Es lo que pidió el operario desde la tablet: corregirla reescribiría la petición,
+     no el hecho. Solo se editan las cantidades de lo que pasó después. */
+  expect(screen.queryByLabelText(/Cantidad solicitada/)).not.toBeInTheDocument();
+});
+
+test('Insumos: corregir una entrega proactiva manda su cantidad', async () => {
+  render(<AdminApp />);
+  irA('Insumos');
+
+  const cantidad = await screen.findByLabelText('Cantidad de la entrega 7');
+  fireEvent.change(cantidad, { target: { value: '4' } });
+  const botones = screen.getAllByRole('button', { name: 'Guardar' });
+  fireEvent.click(botones[botones.length - 1]);
+
+  await waitFor(() => expect(mockAdmin.put).toHaveBeenCalledWith('/entregas/7', { cantidad: 4 }));
+});
+
+test('Insumos: un CONSULTA no puede tocar nada', async () => {
+  mockNivel = 'CONSULTA';
+  render(<AdminApp />);
+  irA('Insumos');
+
+  await screen.findByText(/Bobina · Máquina 7/);
+  expect(screen.getByLabelText('Cantidad recibida del pedido 51')).toBeDisabled();
+  expect(screen.queryByRole('button', { name: 'Guardar' })).not.toBeInTheDocument();
+});
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Reportes de la app y comentarios de turno (2026-08-07)
+
+   Lo que se protege: que los reportes se ATIENDAN en vez de borrarse (el borrado
+   pierde el historial de qué falló en planta), y que atender deje quién y cuándo.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+test('Reportes: separa pendientes de atendidos y dice quién atendió', async () => {
+  render(<AdminApp />);
+  irA('Reportes');
+
+  expect(await screen.findByText('No permite ingresar pacas')).toBeInTheDocument();
+  expect(screen.getByText('1 sin atender')).toBeInTheDocument();
+  expect(screen.getByText('atendido por admin')).toBeInTheDocument();
+  // Los comentarios de turno comparten pantalla pero son otra lista.
+  expect(screen.getByText('Ya descansa hijito')).toBeInTheDocument();
+});
+
+test('Reportes: marcar atendido no borra nada', async () => {
+  render(<AdminApp />);
+  irA('Reportes');
+
+  fireEvent.click((await screen.findAllByRole('button', { name: 'Marcar atendido' }))[0]);
+  await waitFor(() =>
+    expect(mockAdmin.put).toHaveBeenCalledWith('/reportes_app/3', { atendido: true })
+  );
+  expect(mockAdmin.delete).not.toHaveBeenCalled();
+});
+
+test('Reportes: uno ya atendido se puede reabrir', async () => {
+  render(<AdminApp />);
+  irA('Reportes');
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Reabrir' }));
+  await waitFor(() =>
+    expect(mockAdmin.put).toHaveBeenCalledWith('/reportes_app/2', { atendido: false })
+  );
+});
+
+test('Reportes: eliminar recuerda que atender conserva el historial', async () => {
+  render(<AdminApp />);
+  irA('Reportes');
+  await screen.findByText('No permite ingresar pacas');
+
+  fireEvent.click(screen.getAllByRole('button', { name: 'Eliminar' })[0]);
+  expect(window.confirm.mock.calls[0][0]).toMatch(/márcalo como atendido en vez de borrarlo/);
+  await waitFor(() => expect(mockAdmin.delete).toHaveBeenCalledWith('/reportes_app/3'));
+});
+
+test('Reportes: corregir el texto no admite dejarlo vacío', async () => {
+  render(<AdminApp />);
+  irA('Reportes');
+  await screen.findByText('No permite ingresar pacas');
+
+  fireEvent.click(screen.getAllByRole('button', { name: 'Corregir texto' })[0]);
+  const campo = screen.getByLabelText('Texto del reporte 3');
+  fireEvent.change(campo, { target: { value: '   ' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Guardar' }));
+
+  expect(await screen.findByText(/no puede quedar vacío/)).toBeInTheDocument();
+  expect(mockAdmin.put).not.toHaveBeenCalled();
+
+  fireEvent.change(campo, { target: { value: 'No permite ingresar pacas al reintentar' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Guardar' }));
+  await waitFor(() =>
+    expect(mockAdmin.put).toHaveBeenCalledWith('/reportes_app/3', {
+      texto: 'No permite ingresar pacas al reintentar',
+    })
+  );
+});
+
+test('Reportes: un CONSULTA no ve ninguna acción', async () => {
+  mockNivel = 'CONSULTA';
+  render(<AdminApp />);
+  irA('Reportes');
+
+  await screen.findByText('No permite ingresar pacas');
+  expect(screen.queryByRole('button', { name: 'Marcar atendido' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Corregir texto' })).not.toBeInTheDocument();
+});
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Tablets (2026-08-07)
+
+   Limpieza del registro de dispositivos, que hasta ahora solo se podía hacer en
+   MySQL. Lo que se protege: que «conectada» siga significando WebSocket abierto y
+   que el borrado avise de que no es permanente si el equipo sigue vivo.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+test('Tablets: distingue conectada de olvidada y cuenta las que no dan señales', async () => {
+  render(<AdminApp />);
+  irA('Tablets');
+
+  expect(await screen.findByText('conectada')).toBeInTheDocument();
+  expect(screen.getByText('sin señales')).toBeInTheDocument();
+  expect(screen.getByText(/1 sin señales en más de un día/)).toBeInTheDocument();
+});
+
+test('Tablets: reasignar la máquina manda solo ese campo', async () => {
+  render(<AdminApp />);
+  irA('Tablets');
+
+  const select = await screen.findByLabelText('Máquina de la tablet 7bf71ff0');
+  /* Hay que esperar al catálogo: un <select> ignora un valor cuya opción todavía no
+     existe y se quedaría en «sin máquina» — exactamente lo que vería un usuario que
+     abre el desplegable antes de que carguen las máquinas. */
+  await waitFor(() =>
+    expect(Array.from(select.options).map((o) => o.value)).toContain('Máquina 7')
+  );
+  fireEvent.change(select, { target: { value: 'Máquina 7' } });
+  fireEvent.click(screen.getAllByRole('button', { name: 'Guardar' })[1]);
+
+  await waitFor(() =>
+    expect(mockAdmin.put).toHaveBeenCalledWith(
+      '/tablets/7bf71ff0-64b0-4a1e-9f0e-000000000000', { maquina: 'Máquina 7' })
+  );
+});
+
+test('Tablets: el desplegable ofrece las máquinas del catálogo, no solo la actual', async () => {
+  render(<AdminApp />);
+  irA('Tablets');
+
+  const select = await screen.findByLabelText('Máquina de la tablet 7bf71ff0');
+  /* `Select` del sistema de diseño toma `opciones`, no children: pasarle <option> los
+     ignora en silencio y el desplegable se queda con la máquina actual y nada más. */
+  await waitFor(() =>
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(
+      expect.arrayContaining(['', 'PRUEBA', 'Máquina 7'])
+    )
+  );
+});
+
+test('Tablets: quitar del registro avisa de que volverá si el equipo sigue encendido', async () => {
+  render(<AdminApp />);
+  irA('Tablets');
+  await screen.findByText('conectada');
+
+  fireEvent.click(screen.getAllByRole('button', { name: 'Quitar del registro' })[1]);
+  expect(window.confirm.mock.calls[0][0]).toMatch(/volverá a aparecer/);
+  expect(window.confirm.mock.calls[0][0]).toMatch(/No borra ninguna producción/);
+  await waitFor(() =>
+    expect(mockAdmin.delete).toHaveBeenCalledWith('/tablets/7bf71ff0-64b0-4a1e-9f0e-000000000000')
+  );
+});
+
+test('Tablets: un ADMINPLANTA edita pero no quita del registro', async () => {
+  mockNivel = 'ADMINPLANTA';
+  render(<AdminApp />);
+  irA('Tablets');
+
+  expect(await screen.findByLabelText('Nombre de la tablet c439e96c')).not.toBeDisabled();
+  expect(screen.queryByRole('button', { name: 'Quitar del registro' })).not.toBeInTheDocument();
 });

@@ -1922,3 +1922,233 @@ def eliminar_paro(paro_id: int, db: Session = Depends(get_db),
     db.commit()
     logger.warning(f"Paro {paro_id} ELIMINADO por {ctx.get('username')} — {resumen}")
     return {"eliminado": paro_id, "detalle": resumen}
+
+
+# ----------------------------------------------------------------------------
+# Comentarios de turno y reportes de la app (2026-08-07)
+# ----------------------------------------------------------------------------
+# Los dos los escriben los operarios desde la tablet (`POST /api/comentarios_turno` y
+# `POST /api/reportes_app`). Se leían en el dashboard y por correo, pero corregir un
+# texto o borrar una prueba obligaba a entrar a MySQL.
+#
+# Los reportes además se «atienden» en vez de borrarse: el histórico de qué falló en
+# planta es justo lo que hoy se pierde en el buzón de correo.
+
+class TextoIn(BaseModel):
+    texto: str | None = None
+
+
+class ReporteAdminIn(BaseModel):
+    texto: str | None = None
+    atendido: bool | None = None
+
+
+def _feedback_publico(f, atendido=False):
+    salida = {
+        "id": f.id,
+        "sesion_id": f.session_id,
+        "maquina": f.maquina or "—",
+        "operador": f.operador or "—",
+        "texto": f.texto or "",
+        "creado_en": _fmt_dt(f.creado_en),
+    }
+    if atendido:
+        salida.update({
+            "atendido": bool(f.atendido),
+            "atendido_en": _fmt_dt(f.atendido_en),
+            "atendido_por": f.atendido_por,
+        })
+    return salida
+
+
+def _feedback_del_rango(db, modelo, desde, hasta, limite):
+    """Filas del rango por `creado_en`; sin rango, las `limite` más recientes.
+
+    Sin rango NO se cae al día de hoy, al revés que el resto del admin: un comentario o
+    un reporte es esporádico —uno por turno como mucho— y la pantalla saldría vacía casi
+    siempre. Mismo criterio que las tarjetas del dashboard.
+    """
+    q = db.query(modelo)
+    if desde or hasta:
+        ini, fin = _rango(desde, hasta)
+        q = q.filter(modelo.creado_en >= ini, modelo.creado_en < fin)
+    return q.order_by(modelo.creado_en.desc()).limit(min(max(limite or 100, 1), 500)).all()
+
+
+@router.get("/comentarios")
+def listar_comentarios(desde: str = Query(None), hasta: str = Query(None),
+                       limit: int = Query(100), db: Session = Depends(get_db),
+                       ctx=Depends(require_admin)):
+    filas = _feedback_del_rango(db, ComentarioTurnoDB, desde, hasta, limit)
+    return [_feedback_publico(f) for f in filas]
+
+
+@router.put("/comentarios/{comentario_id}")
+def editar_comentario(comentario_id: int, datos: TextoIn, db: Session = Depends(get_db),
+                      ctx=Depends(require_operativo)):
+    """Corrige el texto de un comentario de turno. Vacío no: para eso está eliminar."""
+    c = db.query(ComentarioTurnoDB).filter(ComentarioTurnoDB.id == comentario_id).first()
+    if c is None:
+        raise HTTPException(status_code=404, detail="Comentario no encontrado")
+    texto = (datos.texto or "").strip()
+    if not texto:
+        raise HTTPException(status_code=400, detail="El texto no puede quedar vacío")
+    c.texto = texto[:1000]
+    db.commit()
+    logger.info(f"Comentario de turno {comentario_id} editado (admin {ctx.get('username')})")
+    return _feedback_publico(c)
+
+
+@router.delete("/comentarios/{comentario_id}")
+def eliminar_comentario(comentario_id: int, db: Session = Depends(get_db),
+                        ctx=Depends(require_superadmin)):
+    """⚠️ Borrado físico. Solo SUPERADMIN."""
+    c = db.query(ComentarioTurnoDB).filter(ComentarioTurnoDB.id == comentario_id).first()
+    if c is None:
+        raise HTTPException(status_code=404, detail="Comentario no encontrado")
+    db.delete(c)
+    db.commit()
+    logger.warning(f"Comentario de turno {comentario_id} ELIMINADO por {ctx.get('username')}")
+    return {"eliminado": comentario_id}
+
+
+@router.get("/reportes_app")
+def listar_reportes_app(desde: str = Query(None), hasta: str = Query(None),
+                        limit: int = Query(100), solo_pendientes: bool = Query(False),
+                        db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    filas = _feedback_del_rango(db, ReporteAppDB, desde, hasta, limit)
+    if solo_pendientes:
+        filas = [f for f in filas if not f.atendido]
+    return [_feedback_publico(f, atendido=True) for f in filas]
+
+
+@router.put("/reportes_app/{reporte_id}")
+def editar_reporte_app(reporte_id: int, datos: ReporteAdminIn, db: Session = Depends(get_db),
+                       ctx=Depends(require_operativo)):
+    """Corrige el texto de un reporte y/o lo marca como atendido.
+
+    Atender **no borra nada**: deja quién y cuándo. Desmarcarlo limpia las dos marcas,
+    para que no quede un «atendido por» de algo que se volvió a abrir.
+    """
+    r = db.query(ReporteAppDB).filter(ReporteAppDB.id == reporte_id).first()
+    if r is None:
+        raise HTTPException(status_code=404, detail="Reporte no encontrado")
+
+    cuerpo = datos.model_dump(exclude_unset=True)
+    if not cuerpo:
+        raise HTTPException(status_code=400, detail="No hay nada que cambiar")
+
+    if "texto" in cuerpo:
+        texto = (cuerpo["texto"] or "").strip()
+        if not texto:
+            raise HTTPException(status_code=400, detail="El texto no puede quedar vacío")
+        r.texto = texto[:1000]
+    if "atendido" in cuerpo and cuerpo["atendido"] is not None:
+        r.atendido = bool(cuerpo["atendido"])
+        r.atendido_en = datetime.now() if r.atendido else None
+        r.atendido_por = ctx.get("username") if r.atendido else None
+
+    db.commit()
+    logger.info(f"Reporte de app {reporte_id} actualizado (admin {ctx.get('username')}): "
+                f"atendido={r.atendido}")
+    return _feedback_publico(r, atendido=True)
+
+
+@router.delete("/reportes_app/{reporte_id}")
+def eliminar_reporte_app(reporte_id: int, db: Session = Depends(get_db),
+                         ctx=Depends(require_superadmin)):
+    """⚠️ Borrado físico. Solo SUPERADMIN — para los de prueba; los reales se atienden."""
+    r = db.query(ReporteAppDB).filter(ReporteAppDB.id == reporte_id).first()
+    if r is None:
+        raise HTTPException(status_code=404, detail="Reporte no encontrado")
+    db.delete(r)
+    db.commit()
+    logger.warning(f"Reporte de app {reporte_id} ELIMINADO por {ctx.get('username')}")
+    return {"eliminado": reporte_id}
+
+
+# ----------------------------------------------------------------------------
+# Tablets registradas (2026-08-07)
+# ----------------------------------------------------------------------------
+# `estado_tablets` la escriben las propias tablets con su heartbeat, y la fila se crea
+# sola la primera vez que un dispositivo aparece. Con el tiempo se acumulan entradas de
+# equipos retirados o reinstalados —había 24 el 2026-08-07, varias sin dar señales en
+# semanas— y no había forma de limpiarlas salvo entrando a MySQL.
+#
+# **Un borrado NO es permanente si el equipo sigue vivo:** el siguiente heartbeat vuelve
+# a crear la fila (con el nombre y la máquina que mande la app). Sirve para retirar
+# equipos que ya no están, no para «desactivar» uno en uso; la UI lo advierte.
+
+class TabletAdminIn(BaseModel):
+    nombre: str | None = None
+    maquina: str | None = None
+
+
+@router.get("/tablets")
+def listar_tablets_admin(db: Session = Depends(get_db), ctx=Depends(require_admin)):
+    """Tablets registradas, de la que dio señales más recientemente a la más olvidada."""
+    ahora = datetime.now()
+    conectadas = set(tablet_manager.connections.keys())
+    filas = db.query(EstadoTabletDB).all()
+    salida = []
+    for t in filas:
+        segundos = int((ahora - t.ultimo_heartbeat).total_seconds()) if t.ultimo_heartbeat else None
+        salida.append({
+            "device_id": t.device_id,
+            "nombre": t.nombre,
+            "maquina": t.maquina,
+            "pendientes": t.pendientes or 0,
+            "ultimo_heartbeat": _fmt_dt(t.ultimo_heartbeat),
+            "ultima_sincronizacion": _fmt_dt(t.ultima_sincronizacion),
+            "segundos_desde_heartbeat": segundos,
+            # Igual que en `sesiones_activas`: conectada = WebSocket abierto ahora, que
+            # es lo único que se puede afirmar. El heartbeat llega cada 20-25 minutos.
+            "conectada": t.device_id in conectadas,
+        })
+    # Sin heartbeat al final: son las que nunca reportaron, no las más recientes.
+    salida.sort(key=lambda t: (t["segundos_desde_heartbeat"] is None,
+                               t["segundos_desde_heartbeat"] or 0))
+    return salida
+
+
+@router.put("/tablets/{device_id}")
+def editar_tablet(device_id: str, datos: TabletAdminIn, db: Session = Depends(get_db),
+                  ctx=Depends(require_operativo)):
+    """Corrige el nombre o la máquina de una tablet.
+
+    **La app los vuelve a mandar en cada heartbeat**, así que esto arregla la lista hasta
+    el siguiente latido; si el valor está mal en el equipo, hay que corregirlo allí. Sirve
+    sobre todo para entradas de tablets que ya no reportan y ensucian la lista.
+    """
+    t = db.query(EstadoTabletDB).filter(EstadoTabletDB.device_id == device_id).first()
+    if t is None:
+        raise HTTPException(status_code=404, detail="Tablet no encontrada")
+    cuerpo = datos.model_dump(exclude_unset=True)
+    if not cuerpo:
+        raise HTTPException(status_code=400, detail="No hay nada que cambiar")
+    if "nombre" in cuerpo:
+        t.nombre = (cuerpo["nombre"] or "").strip() or None
+    if "maquina" in cuerpo:
+        t.maquina = (cuerpo["maquina"] or "").strip() or None
+    db.commit()
+    logger.info(f"Tablet {device_id} editada (admin {ctx.get('username')}): "
+                f"nombre={t.nombre!r} maquina={t.maquina!r}")
+    return {"device_id": t.device_id, "nombre": t.nombre, "maquina": t.maquina}
+
+
+@router.delete("/tablets/{device_id}")
+def eliminar_tablet(device_id: str, db: Session = Depends(get_db),
+                    ctx=Depends(require_superadmin)):
+    """⚠️ Quita el registro de una tablet. Solo SUPERADMIN.
+
+    No borra nada de producción: `estado_tablets` solo guarda el estado de sincronización.
+    Si el equipo sigue encendido, su próximo heartbeat vuelve a crear la fila.
+    """
+    t = db.query(EstadoTabletDB).filter(EstadoTabletDB.device_id == device_id).first()
+    if t is None:
+        raise HTTPException(status_code=404, detail="Tablet no encontrada")
+    resumen = f"{t.nombre or '—'} / {t.maquina or '—'}"
+    db.delete(t)
+    db.commit()
+    logger.warning(f"Tablet {device_id} ({resumen}) ELIMINADA por {ctx.get('username')}")
+    return {"eliminada": device_id, "detalle": resumen}

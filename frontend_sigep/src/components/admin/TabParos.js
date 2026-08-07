@@ -216,19 +216,17 @@ export default function TabParos() {
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <Campo etiqueta="Categoría">
+                        {/* `Select` recibe `opciones` (no children) y antepone solo el
+                            valor actual si no está en la lista, así que una categoría
+                            que la app empiece a mandar no se pierde al editar. */}
                         <Select
                           value={borrador.categoria}
+                          opciones={CATEGORIAS}
+                          vacio={null}
                           onChange={(e) => setBorrador((b) => ({ ...b, categoria: e.target.value }))}
                           disabled={!editable}
                           aria-label={`Categoría del paro ${paro.id}`}
-                        >
-                          {/* La categoría actual va primero aunque no esté en la lista:
-                              si no, editar el comentario de un paro con una categoría
-                              nueva la cambiaría sin querer. */}
-                          {[paro.categoria, ...CATEGORIAS.filter((c) => c !== paro.categoria)]
-                            .filter(Boolean)
-                            .map((c) => <option key={c} value={c}>{c}</option>)}
-                        </Select>
+                        />
                       </Campo>
                       <Campo etiqueta="Comentario del operario">
                         <Input

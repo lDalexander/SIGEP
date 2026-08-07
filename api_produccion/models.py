@@ -335,6 +335,16 @@ class ReporteAppDB(Base):
     request_id = Column(String(64), unique=True, index=True, nullable=True)
     creado_en = Column(DateTime, default=lambda: datetime.now())
 
+    # Seguimiento desde /admin (2026-08-07). Columnas AÑADIDAS a una tabla que ya
+    # existía, así que `create_all` no las crea: hace falta el ALTER de
+    # `alter_reportes_atendido.sql` ANTES de desplegar este código.
+    #
+    # No se borra el reporte al atenderlo: el historial de qué falló en las tablets es
+    # justo lo que se pierde hoy en el buzón de correo.
+    atendido = Column(Boolean, nullable=False, default=False)
+    atendido_en = Column(DateTime, nullable=True)
+    atendido_por = Column(String(150), nullable=True)
+
 class ConfigCorreoDB(Base):
     """Configuración del correo saliente, editable desde /admin → Correo (2026-08-07).
 
