@@ -16,11 +16,13 @@ industriales con sincronización offline-first.
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
 capturas de `referencia_ui/`. 136 tests en verde.
 
-**Administrar desde /admin lo que antes obligaba a entrar a MySQL** (2026-08-07,
-**implementado, SIN DESPLEGAR**). Nació de un caso real: el paro 105 se borró por SQL sin
-ver de qué sesión colgaba. Cuatro bloques —**Paros**, **Insumos**, **Reportes** y
-**Tablets**— y **un `ALTER` YA APLICADO** en producción (`alter_reportes_atendido.sql`).
-Detalle abajo.
+**Administrar desde /admin lo que antes obligaba a entrar a MySQL** (2026-08-07) **ya
+está en producción** (worker `2245869`, frontend `main.022da3b5.js`), junto con el
+**reparto de pestañas por nivel de acceso**. Nació de un caso real: el paro 105 se borró
+por SQL sin ver de qué sesión colgaba. Cuatro bloques —**Paros**, **Insumos**,
+**Reportes** y **Tablets**—, el `ALTER` de `alter_reportes_atendido.sql` y las áreas por
+nivel (§3). Respaldo del build anterior:
+`~/respaldos_build_sigep/build_2026-08-07_150405`. Detalle abajo.
 
 El **panel de correo y el reporte semanal de paros** (2026-08-07) **ya están en
 producción** (worker `2230646`, frontend `main.7e508521.js`). Nueva pestaña
@@ -138,7 +140,8 @@ falta tag, y la prohibición de «limpiar» el árbol con `checkout`/`reset`/`cl
 
 Tras la reconstrucción se autorizaron **doce** excepciones a la regla de oro:
 
-- **Administración de paros, insumos, reportes y tablets** (2026-08-07, **sin desplegar**).
+- **Administración de paros, insumos, reportes y tablets, y reparto por áreas**
+  (2026-08-07, **en producción**).
   Todo lo que hasta ahora obligaba a abrir MySQL a mano.
 
   - **Paros** — `GET/PUT /admin/paros`, `POST /admin/paros/{id}/cerrar` (operativo) y
@@ -171,6 +174,10 @@ Tras la reconstrucción se autorizaron **doce** excepciones a la regla de oro:
     las crea. **Ya está ejecutado en producción**, y es aditivo: el código vigente no las
     usa. Respaldo previo:
     `backups/produccion_detg_pre_reportes_atendido_20260807_124057.sql.gz`.
+  - **Áreas por nivel** (tabla en §3): `require_operativo` desaparece y cada endpoint pasa
+    a `require_planta`, `require_planta_lectura`, `require_bodega` o `require_superadmin`.
+    Verificado con una matriz de los **57 endpoints × 5 niveles**: SUPERADMIN 57,
+    ADMINPLANTA y ADMIN 30, CONSULTA 11 (solo `GET`), ADMINBODEGA 4.
   - Verificado con `diff` 8000 vs 8001 en **23 endpoints**, idénticos byte a byte, y cada
     endpoint nuevo probado contra la BD real **dentro de una transacción revertida**.
     **Las tablets no necesitan actualización.**
