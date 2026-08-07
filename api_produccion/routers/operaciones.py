@@ -10,6 +10,7 @@ from database import get_db, logger
 from models import OperadorDB, MaquinaDB, SesionTrabajoDB, PalletDB, ParoMaquinaDB, PedidoBodegaDB, UsuarioDB, InsumoDB, RecetaProductoDB, MaquinaProductoDB, MaquinaMarcaFraganciaDB, FraganciaDB, ComentarioTurnoDB, ReporteAppDB
 from schemas import IniciarTurno, RegistrarPalletRequest, FinalizarTurno, IniciarParo, FinalizarParo, ComentarioTurnoRequest, ReporteAppRequest
 from ws_manager import manager
+from services.email_service import notificar_reporte_app
 
 # Estados de un pedido de insumo que aún están "vivos" (no terminados). Al cerrar
 # el turno del operario, estos quedarían huérfanos (el operario ya no puede
@@ -518,6 +519,30 @@ def crear_comentario_turno(datos: ComentarioTurnoRequest, db: Session = Depends(
 
 
 @router.post("/reportes_app")
-def crear_reporte_app(datos: ReporteAppRequest, db: Session = Depends(get_db)):
-    """Guarda un reporte de problema con la aplicación enviado por el operario."""
-    return _guardar_feedback(ReporteAppDB, datos, db, "Reporte de app")
+def crear_reporte_app(datos: ReporteAppRequest, background_tasks: BackgroundTasks,
+                      db: Session = Depends(get_db)):
+    """Guarda un reporte de problema con la aplicación enviado por el operario.
+
+    Desde el 2026-08-07 avisa además por correo (`services/email_service`). Dos
+    detalles que no son evidentes:
+
+    - **Solo se envía si la fila es nueva.** El endpoint es idempotente por
+      `request_id` y una tablet sin red reintenta el mismo reporte hasta que entra;
+      mandar correo también en el duplicado llenaría el buzón de copias del mismo
+      incidente. `_guardar_feedback` marca esos casos con `duplicado: True`.
+    - **Va en BackgroundTasks y el envío se traga sus propios errores**, así que un
+      SMTP caído o lento no retrasa ni rompe la respuesta a la tablet. Un reporte
+      guardado sin correo es un problema menor; una tablet colgada esperando al
+      servidor de correo, no.
+    """
+    resultado = _guardar_feedback(ReporteAppDB, datos, db, "Reporte de app")
+    if not resultado.get("duplicado"):
+        background_tasks.add_task(
+            notificar_reporte_app,
+            resultado.get("id"),
+            datos.maquina,
+            datos.operador,
+            datos.texto,
+            datos.session_id if (datos.session_id or 0) > 0 else None,
+        )
+    return resultado

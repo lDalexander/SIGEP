@@ -9,12 +9,15 @@ Configuración por variables de entorno (.env, fuera de control de versiones):
   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM,
   PEDIDOS_EMAIL_TO   (coma-separado)
   PEDIDOS_EMAIL_CC   (coma-separado)
+  REPORTES_EMAIL_TO  (coma-separado; reportes de problemas con la app)
+  REPORTES_EMAIL_CC  (coma-separado)
 """
 import os
 import smtplib
 import ssl
 from datetime import datetime
 from email.message import EmailMessage
+from html import escape
 
 from dotenv import load_dotenv
 from database import logger
@@ -33,6 +36,12 @@ SMTP_PASS = os.getenv("SMTP_PASS", "")
 SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER)
 PEDIDOS_EMAIL_TO = _lista(os.getenv("PEDIDOS_EMAIL_TO"))
 PEDIDOS_EMAIL_CC = _lista(os.getenv("PEDIDOS_EMAIL_CC"))
+
+# Los reportes de fallas de la app van a quien mantiene el sistema, no a la lista de
+# bodega: son incidencias técnicas, no operación de planta. Si no se configura nada,
+# se cae a los destinatarios de pedidos para no perder el aviso en silencio.
+REPORTES_EMAIL_TO = _lista(os.getenv("REPORTES_EMAIL_TO")) or PEDIDOS_EMAIL_TO
+REPORTES_EMAIL_CC = _lista(os.getenv("REPORTES_EMAIL_CC"))
 
 
 def _enviar(asunto, cuerpo_txt, cuerpo_html, to=None, cc=None):
@@ -74,6 +83,75 @@ def _enviar(asunto, cuerpo_txt, cuerpo_html, to=None, cc=None):
     except Exception as e:
         logger.error(f"❌ Error enviando correo '{asunto}': {e}")
         return False
+
+
+def notificar_reporte_app(reporte_id, maquina, operador, texto, sesion_id=None, fecha=None):
+    """Envía el correo de un reporte de problema con la app. Para BackgroundTasks.
+
+    Se dispara desde `POST /api/reportes_app` **solo cuando la fila es nueva**: ese
+    endpoint es idempotente por `request_id` y una tablet sin red reintenta el mismo
+    reporte varias veces; enviar en el duplicado llenaría el buzón de copias del
+    mismo incidente.
+
+    El texto llega tal cual lo escribió el operario y puede traer cualquier carácter,
+    así que en el HTML va escapado — un `<` suelto rompería la maquetación del correo.
+    """
+    fecha = fecha or datetime.now()
+    fecha_txt = fecha.strftime("%Y-%m-%d %H:%M:%S")
+    maquina = maquina or "—"
+    operador = operador or "—"
+    texto = (texto or "").strip() or "—"
+    # Sin turno abierto el reporte llega con session_id NULL: se dice, no se inventa.
+    sesion_txt = sesion_id if sesion_id else "sin turno"
+
+    asunto = f"⚠️ Problema con la app — {maquina} ({operador})"
+
+    cuerpo_txt = (
+        "Reporte de problema con la aplicación (SIGEP)\n"
+        "---------------------------------------------\n"
+        f"Reporte #:    {reporte_id}\n"
+        f"Máquina:      {maquina}\n"
+        f"Operador:     {operador}\n"
+        f"Turno:        {sesion_txt}\n"
+        f"Fecha/Hora:   {fecha_txt}\n"
+        "---------------------------------------------\n"
+        f"{texto}\n"
+        "---------------------------------------------\n"
+        "Mensaje automático — no responder."
+    )
+
+    def fila(k, v):
+        return (f'<tr><td style="padding:6px 14px;color:#5E7674;font:600 12px Arial">{k}</td>'
+                f'<td style="padding:6px 14px;color:#1c2b29;font:700 14px Arial">{escape(str(v))}</td></tr>')
+
+    cuerpo_html = f"""\
+<div style="font-family:Arial,sans-serif;background:#f3f6f5;padding:22px">
+  <div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #e2e8e6;border-radius:12px;overflow:hidden">
+    <div style="background:#0D1A1C;padding:16px 20px">
+      <span style="color:#F5A623;font-weight:800;letter-spacing:.04em;font-size:16px">SIGEP</span>
+      <span style="color:#88A19E;font-size:11px;letter-spacing:.18em;text-transform:uppercase;margin-left:8px">Reporte de la app</span>
+    </div>
+    <div style="padding:18px 20px">
+      <p style="margin:0 0 14px;color:#1c2b29;font-size:15px">
+        <b>{escape(operador)}</b> reportó un problema desde <b>{escape(maquina)}</b>.
+      </p>
+      <div style="background:#fff8ec;border:1px solid #f3dcb0;border-radius:8px;padding:12px 14px;margin-bottom:14px">
+        <p style="margin:0;color:#1c2b29;font-size:14px;line-height:1.5;white-space:pre-wrap">{escape(texto)}</p>
+      </div>
+      <table style="width:100%;border-collapse:collapse;background:#fafcfb;border:1px solid #eef2f1;border-radius:8px">
+        {fila("Reporte #", reporte_id)}
+        {fila("Máquina", maquina)}
+        {fila("Operador", operador)}
+        {fila("Turno", sesion_txt)}
+        {fila("Fecha / Hora", fecha_txt)}
+      </table>
+      <p style="margin:16px 0 0;color:#5E7674;font-size:11px">Mensaje automático generado por SIGEP — no responder.</p>
+    </div>
+  </div>
+</div>"""
+
+    return _enviar(asunto, cuerpo_txt, cuerpo_html,
+                   to=REPORTES_EMAIL_TO, cc=REPORTES_EMAIL_CC)
 
 
 def notificar_pedido_insumo(maquina, operador, detalle, cantidad, categoria, pedido_id, fecha=None):

@@ -16,6 +16,9 @@ industriales con sincronización offline-first.
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
 capturas de `referencia_ui/`. 136 tests en verde.
 
+El **aviso por correo de los reportes de la app** (2026-08-07) está **implementado y
+probado, pero SIN DESPLEGAR**: el 8000 sigue con el código anterior. Detalle abajo.
+
 El **estado de la tablet en la pestaña Mensajes** (2026-08-07) **ya está en producción**
 (worker `2225444`, frontend `main.898b7185.js`). Las cinco máquinas en turno salían
 `OFFLINE` aunque estuvieran produciendo: el chip miraba el heartbeat con el umbral de 60 s
@@ -93,6 +96,7 @@ heartbeat, sin errores en el log del servicio.
 | Tag previo al historial de pacas | `v1.8-pre-historial-pacas` (en GitHub) |
 | Tag previo a la caducidad de sesión | `v1.9-pre-caducidad-sesion` (en GitHub) |
 | Tag previo al estado real de tablet | `v1.10-pre-estado-tablet` (en GitHub) |
+| Tag previo al correo de reportes | `v1.11-pre-correo-reportes` (en GitHub) |
 | Build previo al estado de tablet | `~/respaldos_build_sigep/build_2026-08-07_104035` |
 | Build previo a la caducidad de sesión | `~/respaldos_build_sigep/build_2026-08-07_101252` |
 | Build previo a estos dos cambios | `~/respaldos_build_sigep/build_2026-08-06_164105` |
@@ -115,7 +119,34 @@ falta tag, y la prohibición de «limpiar» el árbol con `checkout`/`reset`/`cl
 
 ### Cambios de backend ya autorizados y aplicados
 
-Tras la reconstrucción se autorizaron **nueve** excepciones a la regla de oro:
+Tras la reconstrucción se autorizaron **diez** excepciones a la regla de oro:
+
+- **Aviso por correo de los reportes de la app** (2026-08-07, **implementado, sin
+  desplegar**). El botón de «reportar problema» de las tablets escribía en
+  `reportes_app` y **no lo leía nadie**: no hay vista en la web ni notificación, así que
+  un fallo reportado desde planta podía quedarse ahí semanas.
+
+  - `POST /api/reportes_app` (`routers/operaciones.py`) manda ahora un correo con
+    `services/email_service.notificar_reporte_app`. **Sin `ALTER`, sin tablas y sin rutas
+    nuevas**; la respuesta a la tablet no cambia.
+  - **La infraestructura SMTP ya existía** y funciona desde siempre para los pedidos de
+    insumos (`smtp-mail.outlook.com:587`, `no-reply@detcuador.com`). Solo se añadió la
+    función del reporte y dos variables al `.env`: `REPORTES_EMAIL_TO` (hoy
+    `agarcia@detcuador.com`) y `REPORTES_EMAIL_CC`. **Los reportes NO van a la lista de
+    pedidos**: son incidencias técnicas, no operación de bodega. Si no se configuran, se
+    cae a los destinatarios de pedidos para no perder el aviso en silencio.
+  - **Solo se envía cuando la fila es nueva.** El endpoint es idempotente por
+    `request_id` y una tablet sin red reintenta el mismo reporte hasta que entra; enviar
+    también en el duplicado llenaría el buzón de copias del mismo incidente.
+    `_guardar_feedback` marca esos casos con `duplicado: True`.
+  - Va en `BackgroundTasks` y `_enviar` se traga sus propios errores: un SMTP caído o
+    lento **no retrasa ni rompe la respuesta a la tablet**.
+  - El texto del operario va **escapado** en el HTML del correo (`html.escape`): llega tal
+    cual se escribió y un `<` suelto rompería la maquetación.
+  - Verificado con `diff` 8000 vs 8001 en **23 endpoints**, idénticos byte a byte, más el
+    contrato de `/api/reportes_app` (texto vacío sigue dando 400, cuerpo incompleto 422).
+    Correo real enviado y recibido. **Las tablets no necesitan actualización.**
+
 
 - **Estado real de la tablet en `/admin/sesiones_activas`** (2026-08-07, **en producción**).
   Un solo endpoint, admin-only, y **sin `ALTER`, sin tablas y sin rutas nuevas**.
@@ -755,6 +786,7 @@ así se evita CORS. El `App.js` heredado apunta a `http://150.36.200.252:8000/ap
 | GET | `/dashboard/opciones_filtros` | `desde`,`hasta`,`hora_desde`,`hora_hasta`,`maquina[]`,`operador[]`,`marca[]`,`presentacion[]`,`fragancia[]` | `{maquina[], operador[], marca[], presentacion[], fragancia[]}`. Sin `desde`/`hasta` es el catálogo histórico completo. Los filtros **encadenan** los menús, y a cada dimensión se le aplican los de *las otras*, **nunca el suyo** (si no, marcar un valor vaciaría su propia lista). La franja recorta por `inicio_turno` |
 | GET | `/dashboard/estadisticas` | `dim`, `rango`, `desde`, `hasta`, `hora_desde`, `hora_hasta`, `maquina[]`, `operador[]`, `marca[]`, `presentacion[]`, `fragancia[]` | `{dim, rango, total_pacas, total_sesiones, items:[{etiqueta,pacas,sesiones,pct}]}`. Los cinco filtros se añadieron el 2026-08-05 (§0); un `dim` desconocido sigue dando **400** |
 | GET | `/dashboard/paros` | `desde`,`hasta`,`hora_desde`,`hora_hasta`,`maquina[]`,`operador[]` | `{kpis, maquinas[], paros[], por_categoria[]}` — ver «Paros» más abajo |
+| POST | `/reportes_app` | `{texto, maquina?, operador?, session_id?, request_id?}` | `{id, mensaje, duplicado?}`. Lo escribe el botón «reportar problema» de la tablet. Idempotente por `request_id`. Desde el 2026-08-07 **envía un correo** (solo si la fila es nueva) a `REPORTES_EMAIL_TO`. Texto vacío → **400** |
 | GET | `/dashboard/comentarios_turno` | `desde`,`hasta` **o** `limit` (def. 30, máx. 200) | `[{id,sesion_id,maquina,operador,texto,creado_en,fecha,hora}]` desc. Sin `desde`/`hasta` devuelve los últimos `limit` sin importar la fecha |
 | GET | `/mantenimiento/checklist` | `limit` (def. 30) **o** `desde`,`hasta` | `[{id,maquina,operador,momento,codigo_turno,fecha_turno,fecha,hora,supervisor,comentarios,items:[{etiqueta,marcado}],total_items,items_ok,creado_en}]` |
 | GET | `/tablets/estado` | — | `[{device_id,nombre,maquina,pendientes,ultimo_heartbeat,ultima_sincronizacion,en_linea,segundos_desde_heartbeat}]` |
