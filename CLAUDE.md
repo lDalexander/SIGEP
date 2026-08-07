@@ -16,11 +16,14 @@ industriales con sincronización offline-first.
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
 capturas de `referencia_ui/`. 136 tests en verde.
 
-La **caducidad de la sesión admin por inactividad** (2026-08-07) está **implementada y
-probada, pero TODAVÍA NO DESPLEGADA**: el 8000 sigue con el código anterior y el build en
-producción es el de ayer. Hasta el despliegue, un `/admin` abierto sigue sin caducar.
-Qué falta: probar en el dev server, `kill -HUP` al backend y `./deploy.sh`. Detalle en
-«Cambios de backend ya autorizados» más abajo.
+La **caducidad de la sesión admin por inactividad** (2026-08-07) **ya está en producción**
+(backend con `kill -HUP`, worker nuevo `2222339`, y frontend `main.f9bcf32a.js`). Se
+comprobó antes en el dev server contra el 8001 con `ADMIN_INACTIVIDAD_MIN=1`, y después
+del despliegue que `/api/maquinas` seguía idéntica byte a byte al snapshot previo, que los
+KPIs (1771 pacas · 0 sacos) y las 5 líneas con 5 turnos activos no se movieron, y que el
+log del servicio no traía ningún error. Respaldo del build anterior:
+`~/respaldos_build_sigep/build_2026-08-07_101252`. Detalle en «Cambios de backend ya
+autorizados» más abajo.
 
 **Cerrar turno, eliminar sesión, historial editable de pacas, gestión de usuarios y
 niveles de acceso** (2026-08-06) **ya están en producción** (worker `2154040`, frontend
@@ -81,6 +84,7 @@ heartbeat, sin errores en el log del servicio.
 | Tag previo a la gestión de usuarios | `v1.7-pre-gestion-usuarios` (en GitHub) |
 | Tag previo al historial de pacas | `v1.8-pre-historial-pacas` (en GitHub) |
 | Tag previo a la caducidad de sesión | `v1.9-pre-caducidad-sesion` (en GitHub) |
+| Build previo a la caducidad de sesión | `~/respaldos_build_sigep/build_2026-08-07_101252` |
 | Build previo a estos dos cambios | `~/respaldos_build_sigep/build_2026-08-06_164105` |
 | Build previo a las fragancias | `~/respaldos_build_sigep/build_2026-08-06_130039` |
 | Build de esa versión | `~/respaldos_build_sigep/build_pre-paros_2026-08-05_*` |
@@ -103,8 +107,8 @@ falta tag, y la prohibición de «limpiar» el árbol con `checkout`/`reset`/`cl
 
 Tras la reconstrucción se autorizaron **ocho** excepciones a la regla de oro:
 
-- **Caducidad de la sesión admin por inactividad** (2026-08-07, **implementada, sin
-  desplegar**). Un token admin no caducaba nunca: solo lo mataba «Salir» o un reinicio del
+- **Caducidad de la sesión admin por inactividad** (2026-08-07, **en producción**). Un
+  token admin no caducaba nunca: solo lo mataba «Salir» o un reinicio del
   servicio, así que un navegador olvidado en `/admin` podía cerrar turnos o borrar sesiones
   días después. **Sin `ALTER`, sin tablas y sin rutas nuevas**: solo cambia el ciclo de vida
   de un `dict` que ya vivía en memoria.
