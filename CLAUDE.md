@@ -16,6 +16,12 @@ industriales con sincronización offline-first.
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
 capturas de `referencia_ui/`. 136 tests en verde.
 
+El **panel de correo y el reporte semanal de paros** (2026-08-07) **ya están en
+producción** (worker `2230646`, frontend `main.7e508521.js`). Nueva pestaña
+`/admin` → **Correo** (solo SUPERADMIN) y una tabla nueva, `config_correo`. El reporte
+sale **los viernes a las 12:00** con la semana cerrada de viernes a viernes. Respaldo del
+build anterior: `~/respaldos_build_sigep/build_2026-08-07_114148`.
+
 El **aviso por correo de los reportes de la app** (2026-08-07) **ya está en producción**
 (backend con `kill -HUP`, worker nuevo `2227985`). **No hubo despliegue de frontend**: el
 cambio es solo de API, así que el build sigue siendo `main.898b7185.js`. Detalle abajo.
@@ -98,6 +104,8 @@ heartbeat, sin errores en el log del servicio.
 | Tag previo a la caducidad de sesión | `v1.9-pre-caducidad-sesion` (en GitHub) |
 | Tag previo al estado real de tablet | `v1.10-pre-estado-tablet` (en GitHub) |
 | Tag previo al correo de reportes | `v1.11-pre-correo-reportes` (en GitHub) |
+| Tag previo al panel de correo | `v1.12-pre-config-correo` (en GitHub) |
+| Build previo al panel de correo | `~/respaldos_build_sigep/build_2026-08-07_114148` |
 | Build previo al estado de tablet | `~/respaldos_build_sigep/build_2026-08-07_104035` |
 | Build previo a la caducidad de sesión | `~/respaldos_build_sigep/build_2026-08-07_101252` |
 | Build previo a estos dos cambios | `~/respaldos_build_sigep/build_2026-08-06_164105` |
@@ -120,7 +128,47 @@ falta tag, y la prohibición de «limpiar» el árbol con `checkout`/`reset`/`cl
 
 ### Cambios de backend ya autorizados y aplicados
 
-Tras la reconstrucción se autorizaron **diez** excepciones a la regla de oro:
+Tras la reconstrucción se autorizaron **once** excepciones a la regla de oro:
+
+- **Panel de correo + reporte semanal de paros** (2026-08-07, **en producción**).
+
+  - **BD:** una tabla nueva, `config_correo`, de **fila única** (`id=1`). La crea
+    `Base.metadata.create_all()` al arrancar, así que no hizo falta migración. **Ningún
+    `ALTER`; ninguna tabla existente se tocó.**
+  - **La regla que hay que entender antes de tocar nada:** para cada campo manda el valor
+    de la BD si está puesto, y si no, el del `.env`. Una lista vacía **no** es «sin
+    destinatarios», es «usa la de siempre». Gracias a eso la tabla pudo crearse vacía y el
+    correo siguió comportándose exactamente igual que antes. La pantalla enseña el origen
+    de cada lista (*configurado aquí* / *del servidor (.env)* / *heredado*) para que nadie
+    edite el `.env` creyendo que sigue mandando.
+  - **Ventana del reporte: viernes 12:00 → viernes 12:00**, siete días completos. Un paro
+    cuenta **entero si su inicio cae dentro**, aunque termine después del corte: es el
+    criterio de `GET /dashboard/paros`, y se eligió así para que el correo y la web no
+    puedan dar cifras distintas del mismo periodo. El estado y la duración salen de
+    `_estado_paro`/`_dur_segundos` de `routers/dashboard.py`, no de una copia: son las que
+    saben acotar al fin del turno un paro «SIN CIERRE».
+  - **El programador vive en `tasks.py`**, como el recolector de turnos, y **comprueba el
+    reloj cada 10 minutos** en vez de dormir una semana: el servicio se recarga en cada
+    despliegue y un temporizador en memoria no llegaría nunca al viernes. Guarda la
+    **ventana** enviada (`semanal_ultima_ventana`), no la fecha del envío, así que no puede
+    mandar dos veces la misma semana ni perderla si el servidor estuvo apagado al mediodía
+    — saldría en cuanto vuelva. La marca se escribe **aunque el envío falle**: si no, con
+    un SMTP roto se reintentaría cada 10 minutos toda la semana.
+  - **La contraseña SMTP nunca sale por la API.** La respuesta dice si existe y de dónde
+    sale, jamás su valor; al guardar, un campo vacío significa «no la toques» (mandarla
+    vacía borraría la autenticación al editar un destinatario). Se guarda en claro porque
+    SMTP la necesita así — es la razón de que la pantalla sea solo SUPERADMIN.
+  - **Endpoints nuevos**, todos `require_superadmin`: `GET`/`PUT /admin/correo`,
+    `POST /admin/correo/prueba`, `POST /admin/correo/semanal_ahora` y
+    `GET /admin/correo/semanal_vista_previa`. `semanal_ahora` **no mueve la marca**: sirve
+    para reenviar o revisar, y el envío del viernes sigue su curso.
+  - `email_service` pasa a resolver la configuración **en cada envío** en vez de leerla al
+    importar el módulo: un cambio en la web tiene efecto en el siguiente correo, sin
+    recargar el servicio.
+  - **Ojo con la instancia paralela del 8001**: además del recolector, arranca **también
+    este programador** contra la misma BD. Si se deja levantada un viernes al mediodía,
+    será ella quien mande el reporte oficial y marque la semana como enviada.
+
 
 - **Aviso por correo de los reportes de la app** (2026-08-07, **en producción**). El botón de «reportar problema» de las tablets escribía en
   `reportes_app` y **no lo leía nadie**: no hay vista en la web ni notificación, así que
@@ -541,7 +589,8 @@ frontend_sigep/
     │       ├── AdminLogin.js
     │       ├── Ayuda.js, FiltroRango.js
     │       ├── TabOperarios / TabProduccion / TabChecklists / TabJerarquia / TabMensajes
-    │       └── TabUsuarios.js   # administradores y niveles — solo la ve un SUPERADMIN
+    │       ├── TabUsuarios.js   # administradores y niveles — solo la ve un SUPERADMIN
+    │       └── TabCorreo.js     # servidor SMTP, listas de correo y reporte semanal
     └── components/ui/           # componentes base del sistema de diseño
         ├── Label, Badge, Button, Card, StatCard (+ Cifra)
         ├── ProgressBar, Ring, Tabs, Dot, Logo
@@ -742,6 +791,11 @@ npx eslint --ext .js src/
   intacta pondría los segundos a cero—, que borrar un registro avisa de la salida no
   destructiva, y que un `ADMINPLANTA` edita pero no borra y un `CONSULTA` ve los
   campos deshabilitados.
+  De la pestaña Correo (2026-08-07): que solo existe para un `SUPERADMIN`, que la
+  contraseña **no viaja al guardar si no se escribió** (mandarla vacía la borraría), que
+  el puerto viaja como número y no como el texto del input, que añadir un destinatario
+  manda la lista completa y rechaza lo que no parece un correo, que quitar el último
+  avisa de que se vuelve al `.env`, y que cada tarjeta prueba **su** lista.
   Del estado de la tablet (2026-08-07): que el chip de Mensajes dice **cuándo verá el
   mensaje** —«AL INSTANTE» con el WebSocket abierto, «EN COLA · contacto hace 21m» si
   no— y que el aviso de cerrar turno salta también **sin conexión pero con contacto
@@ -938,6 +992,11 @@ de supervisor de las tablets) filtra por los niveles operativos, así que un usu
 | POST | `/admin/usuarios` | `{username,password,nivel_acceso}`, mínimo 6 caracteres. Reactiva si existía inactivo |
 | PUT | `/admin/usuarios/{id}` | `{password?,nivel_acceso?,activo?}`. No puedes desactivarte ni degradarte a ti mismo, ni dejar el sistema sin ningún `SUPERADMIN` activo |
 | GET | `/admin/niveles` | los niveles con su descripción, para el selector |
+| GET | `/admin/correo` | solo `SUPERADMIN`. Configuración vigente + `destinos` con el `origen_to`/`origen_cc` de cada lista (`bd`\|`env`\|`heredado`). **Nunca la contraseña**: solo `password_definida` y `password_en_bd` |
+| PUT | `/admin/correo` | solo `SUPERADMIN`. Toca únicamente los campos presentes. Lista `[]` = «vuelve a la del `.env`». `smtp_pass` vacío = **no la toques**; el literal `"-"` la borra para volver a la del `.env` |
+| POST | `/admin/correo/prueba` | `{tipo, destinatario?}`. Envía en **primer plano** (aquí interesa la respuesta del SMTP, no una promesa). **502** si el envío falla |
+| POST | `/admin/correo/semanal_ahora` | Manda el reporte de la última semana cerrada. **No mueve la marca** del programador |
+| GET | `/admin/correo/semanal_vista_previa` | Los mismos números sin enviar nada |
 | GET | `/admin/sesiones/{id}/pallets` | `[{id,cantidad_pacas,fecha_hora}]` — alimenta el desplegable del historial |
 | PUT | `/admin/pallets/{id}` | `{cantidad_pacas?, fecha_hora?}` — los dos opcionales desde el 2026-08-06 (antes `cantidad_pacas` era obligatorio, y ese cuerpo sigue valiendo). La hora acepta `AAAA-MM-DD HH:MM[:SS]` y el ISO con `T`; un valor no parseable da **400**. **Cambiar la hora mueve la producción de hora y de día** en KPIs, gráfico y Excel, que cuentan por `pallets.fecha_hora` |
 | DELETE | `/admin/pallets/{id}` | ⚠️ **borrado físico**, solo `SUPERADMIN`. Para anular sin destruir, `PUT {cantidad_pacas: 0}`, que sí puede un operativo |
@@ -1041,6 +1100,7 @@ equipo con la hora mal puesta inventaría paros de horas o duraciones negativas.
 | Jerarquía | `GET /admin/maquina_productos`, `GET /admin/maquina_fragancias`, `GET /admin/catalogos`, `POST`/`PUT`/`DELETE /admin/maquina_productos`, `POST`/`PUT /admin/maquina_fragancias`, `POST`/`PUT /admin/maquinas`, `POST /admin/marcas`, `POST /admin/presentaciones`, `POST /admin/fragancias` |
 | Mensajes | `GET /admin/sesiones_activas`, `POST /admin/mensajes/masivo` |
 | Usuarios (solo `SUPERADMIN`) | `GET/POST /admin/usuarios`, `PUT /admin/usuarios/{id}`, `GET /admin/niveles` |
+| Correo (solo `SUPERADMIN`) | `GET`/`PUT /admin/correo`, `POST /admin/correo/prueba`, `POST /admin/correo/semanal_ahora`, `GET /admin/correo/semanal_vista_previa` |
 
 ### Retirado del dashboard
 
@@ -1142,7 +1202,9 @@ números grandes en sans-serif bold.
   a perpetuidad. La vista de paros lo compensa en lectura («SIN CIERRE»), pero el
   registro sigue incompleto.
 - La instancia paralela de pruebas (`uvicorn` en el 8001) **también arranca el garbage
-  collector** y escribe en la misma BD. No es peligroso —hace exactamente lo que el
-  servicio vivo ya hace cada hora— pero conviene saberlo antes de levantarla.
+  collector y el programador del reporte semanal**, y escribe en la misma BD. Lo del
+  recolector es inocuo —hace lo que el servicio vivo ya hace cada hora—, pero lo del
+  reporte no: levantada un **viernes alrededor de las 12:00**, será ella quien mande el
+  correo oficial y marque la semana como enviada.
 - El `src/` del frontend no estaba versionado al día: solo 5 de los 10 componentes
   existían en git antes del checkpoint.
