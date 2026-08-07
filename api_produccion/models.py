@@ -334,3 +334,49 @@ class ReporteAppDB(Base):
     texto = Column(String(1000), nullable=False)
     request_id = Column(String(64), unique=True, index=True, nullable=True)
     creado_en = Column(DateTime, default=lambda: datetime.now())
+
+class ConfigCorreoDB(Base):
+    """Configuración del correo saliente, editable desde /admin → Correo (2026-08-07).
+
+    **Fila única, `id = 1`.** No es una tabla de registros: es un ajuste del sistema, y
+    tenerlo en la BD (en vez de en el `.env`) es lo que permite cambiar destinatarios sin
+    tocar el servidor ni redesplegar.
+
+    Todos los campos son NULL a propósito: un valor sin poner significa «usa el del
+    `.env`», que es de donde salía todo hasta ahora. Así la tabla puede crearse vacía y el
+    correo sigue funcionando exactamente igual que antes hasta que alguien la edite.
+
+    Las listas van como texto separado por comas, el mismo formato del `.env`, para que
+    los dos orígenes se lean con la misma función y no haya dos formatos que mantener.
+
+    OJO con `smtp_pass`: SMTP necesita la contraseña en claro para autenticarse, así que
+    no puede hashearse como las de `administradores`. Se guarda tal cual, **nunca se
+    devuelve por la API** y solo se escribe si el admin la cambia; mientras esté vacía
+    manda la del `.env`, que es el caso normal. Quien pueda leer la BD podrá leerla: es la
+    razón de que esta pantalla sea solo para SUPERADMIN.
+    """
+    __tablename__ = "config_correo"
+    id = Column(Integer, primary_key=True, index=True)
+
+    smtp_host = Column(String(200), nullable=True)
+    smtp_port = Column(Integer, nullable=True)
+    smtp_user = Column(String(200), nullable=True)
+    smtp_pass = Column(String(300), nullable=True)
+    smtp_from = Column(String(200), nullable=True)
+
+    # Una lista TO y una CC por cada tipo de correo que manda el sistema.
+    pedidos_to = Column(Text, nullable=True)
+    pedidos_cc = Column(Text, nullable=True)
+    reportes_to = Column(Text, nullable=True)
+    reportes_cc = Column(Text, nullable=True)
+    semanal_to = Column(Text, nullable=True)
+    semanal_cc = Column(Text, nullable=True)
+
+    # Reporte semanal de paros: interruptor y marca del último envío. La marca es lo que
+    # hace idempotente al programador: sobrevive a reinicios y evita el envío doble.
+    semanal_activo = Column(Boolean, nullable=False, default=True)
+    semanal_ultimo_envio = Column(DateTime, nullable=True)
+    semanal_ultima_ventana = Column(DateTime, nullable=True)  # corte de la ventana enviada
+
+    actualizado_en = Column(DateTime, nullable=True)
+    actualizado_por = Column(String(150), nullable=True)

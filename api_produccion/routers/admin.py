@@ -51,7 +51,7 @@ from routers.tablets import enviar_payload_ws, tablet_manager
 # cierre manual de un turno tiene que dejar los pedidos exactamente igual que el
 # cierre desde la tablet, y si allí cambian, aquí cambian solos.
 from routers.operaciones import ESTADOS_PEDIDO_ACTIVO, ESTADO_PEDIDO_CIERRE_TURNO
-from services import seguridad
+from services import config_correo, email_service, reporte_semanal, seguridad
 from ws_manager import manager
 
 router = APIRouter(prefix="/api/admin", tags=["Administración"])
@@ -1506,3 +1506,219 @@ def eliminar_entrega(entrega_id: int, db: Session = Depends(get_db), ctx=Depends
             logger.warning(f"No se pudo borrar la foto de la entrega {entrega_id}: {ex}")
     logger.info(f"Entrega proactiva {entrega_id} eliminada (admin {ctx.get('username')})")
     return {"eliminado": entrega_id}
+
+
+# ----------------------------------------------------------------------------
+# Servidor de correo (2026-08-07) — solo SUPERADMIN
+# ----------------------------------------------------------------------------
+# Antes todo esto vivía en el `.env`: cambiar un destinatario obligaba a entrar al
+# servidor y recargar el servicio. Ahora se administra desde /admin → Correo.
+#
+# Es SUPERADMIN porque aquí se decide quién recibe información de planta, se pueden
+# tocar las credenciales del correo corporativo y el botón de prueba manda correos de
+# verdad.
+#
+# La contraseña NUNCA sale de aquí: la respuesta dice si hay una guardada y de dónde
+# sale (BD o `.env`), nunca su valor. Al guardar, un campo de contraseña vacío significa
+# «déjala como está», no «bórrala» — si no, cualquier edición de un destinatario dejaría
+# el correo sin poder autenticarse.
+
+class CorreoIn(BaseModel):
+    smtp_host: str | None = None
+    smtp_port: int | None = None
+    smtp_user: str | None = None
+    smtp_pass: str | None = None
+    smtp_from: str | None = None
+    pedidos_to: list[str] | None = None
+    pedidos_cc: list[str] | None = None
+    reportes_to: list[str] | None = None
+    reportes_cc: list[str] | None = None
+    semanal_to: list[str] | None = None
+    semanal_cc: list[str] | None = None
+    semanal_activo: bool | None = None
+
+
+class PruebaCorreoIn(BaseModel):
+    tipo: str = "reportes"          # a qué lista mandar la prueba
+    destinatario: str | None = None  # o a una dirección suelta, sin tocar las listas
+
+
+def _correo_publico(db):
+    """La configuración tal como la ve la web: sin contraseña, con el origen de cada dato."""
+    cfg = config_correo.efectiva(db)
+    fila = config_correo.obtener_fila(db)
+    proxima = reporte_semanal.ultimo_corte() + timedelta(days=7)
+    return {
+        "smtp_host": cfg["smtp_host"],
+        "smtp_port": cfg["smtp_port"],
+        "smtp_user": cfg["smtp_user"],
+        "smtp_from": cfg["smtp_from"],
+        # Nunca el valor. Solo si existe y de dónde sale.
+        "password_definida": bool(cfg["smtp_pass"]),
+        "password_en_bd": bool(fila is not None and fila.smtp_pass),
+        "destinos": cfg["destinos"],
+        "semanal_activo": cfg["semanal_activo"],
+        "semanal_ultimo_envio": _fmt_dt(fila.semanal_ultimo_envio) if fila is not None else None,
+        "semanal_ultima_ventana": _fmt_dt(fila.semanal_ultima_ventana) if fila is not None else None,
+        "semanal_proximo_envio": _fmt_dt(proxima),
+        "actualizado_en": _fmt_dt(fila.actualizado_en) if fila is not None else None,
+        "actualizado_por": fila.actualizado_por if fila is not None else None,
+    }
+
+
+def _fmt_dt(dt):
+    return dt.strftime("%Y-%m-%d %H:%M:%S") if dt else None
+
+
+@router.get("/correo")
+def obtener_config_correo(db: Session = Depends(get_db), ctx=Depends(require_superadmin)):
+    """Configuración de correo vigente. La contraseña no se devuelve nunca."""
+    return _correo_publico(db)
+
+
+@router.put("/correo")
+def guardar_config_correo(datos: CorreoIn, db: Session = Depends(get_db),
+                          ctx=Depends(require_superadmin)):
+    """Guarda la configuración. Solo se tocan los campos presentes en el cuerpo.
+
+    Vaciar una lista de destinatarios **sí** es una operación válida (`[]`): significa
+    «vuelve a usar la del `.env`». Es la forma de deshacer un cambio sin tener que
+    recordar cuál era el valor original.
+    """
+    fila = config_correo.obtener_fila(db, crear=True)
+    cambios = datos.model_dump(exclude_unset=True)
+
+    for campo in ("smtp_host", "smtp_user", "smtp_from"):
+        if campo in cambios:
+            valor = (cambios[campo] or "").strip()
+            setattr(fila, campo, valor or None)
+    if "smtp_port" in cambios:
+        puerto = cambios["smtp_port"]
+        if puerto is not None and not (1 <= int(puerto) <= 65535):
+            raise HTTPException(status_code=400, detail="Puerto SMTP fuera de rango")
+        fila.smtp_port = int(puerto) if puerto else None
+    if "smtp_pass" in cambios:
+        # Vacío = no tocar. Para volver a la del `.env` hay que mandar el literal "-".
+        nueva = (cambios["smtp_pass"] or "").strip()
+        if nueva == "-":
+            fila.smtp_pass = None
+        elif nueva:
+            fila.smtp_pass = nueva
+    for tipo in config_correo.TIPOS:
+        for sufijo in ("to", "cc"):
+            campo = f"{tipo}_{sufijo}"
+            if campo in cambios:
+                setattr(fila, campo, config_correo.texto(cambios[campo]) or None)
+    if "semanal_activo" in cambios and cambios["semanal_activo"] is not None:
+        fila.semanal_activo = bool(cambios["semanal_activo"])
+
+    fila.actualizado_en = datetime.now()
+    fila.actualizado_por = ctx.get("username")
+    db.commit()
+    logger.info(f"Configuración de correo actualizada por {ctx.get('username')}")
+    return _correo_publico(db)
+
+
+@router.post("/correo/prueba")
+def probar_correo(datos: PruebaCorreoIn, db: Session = Depends(get_db),
+                  ctx=Depends(require_superadmin)):
+    """Manda un correo de prueba con la configuración YA GUARDADA.
+
+    Se envía en primer plano a propósito, al revés que los avisos de planta: aquí lo
+    único que se quiere es saber si el envío funciona, así que hace falta la respuesta
+    del servidor SMTP, no una promesa.
+    """
+    tipo = (datos.tipo or "reportes").strip().lower()
+    if tipo not in config_correo.TIPOS:
+        raise HTTPException(status_code=400, detail=f"Tipo de correo desconocido: {tipo}")
+
+    suelto = (datos.destinatario or "").strip()
+    to = [suelto] if suelto else None
+    cc = [] if suelto else None  # a una dirección suelta no se le mete el CC de la lista
+    cfg = config_correo.efectiva(db)
+    destino_txt = suelto or ", ".join(cfg["destinos"][tipo]["to"]) or "(sin destinatarios)"
+
+    asunto = "✅ Prueba de correo — SIGEP"
+    cuando = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    txt = (
+        "Prueba de configuración de correo (SIGEP)\n"
+        "-----------------------------------------\n"
+        f"Lanzada por: {ctx.get('username')}\n"
+        f"Fecha/Hora:  {cuando}\n"
+        f"Servidor:    {cfg['smtp_host']}:{cfg['smtp_port']} como {cfg['smtp_user']}\n"
+        f"Lista:       {tipo}\n"
+        "-----------------------------------------\n"
+        "Si lees esto, el correo saliente funciona."
+    )
+    html = f"""\
+<div style="font-family:Arial,sans-serif;background:#f3f6f5;padding:22px">
+  <div style="max-width:520px;margin:0 auto;background:#fff;border:1px solid #e2e8e6;border-radius:12px;overflow:hidden">
+    <div style="background:#0D1A1C;padding:16px 20px">
+      <span style="color:#F5A623;font-weight:800;font-size:16px">SIGEP</span>
+      <span style="color:#88A19E;font-size:11px;letter-spacing:.18em;text-transform:uppercase;margin-left:8px">Prueba de correo</span>
+    </div>
+    <div style="padding:18px 20px">
+      <p style="margin:0 0 12px;color:#1c2b29;font-size:15px">Si lees esto, el correo saliente funciona.</p>
+      <p style="margin:0;color:#5E7674;font:600 12px Arial">
+        Lanzada por {ctx.get('username')} · {cuando}<br>
+        {cfg['smtp_host']}:{cfg['smtp_port']} como {cfg['smtp_user']} · lista «{tipo}»
+      </p>
+    </div>
+  </div>
+</div>"""
+
+    enviado = email_service._enviar(asunto, txt, html, to=to, cc=cc, tipo=tipo, cfg=cfg)
+    if not enviado:
+        raise HTTPException(
+            status_code=502,
+            detail="No se pudo enviar. Revisa servidor, usuario, contraseña y destinatarios "
+                   "(el detalle exacto queda en el log del servicio).",
+        )
+    return {"enviado": True, "destino": destino_txt, "tipo": tipo}
+
+
+@router.post("/correo/semanal_ahora")
+def enviar_semanal_ahora(db: Session = Depends(get_db), ctx=Depends(require_superadmin)):
+    """Manda el reporte semanal de la última semana cerrada, sin esperar al viernes.
+
+    **No mueve la marca del programador**: sirve para revisar el contenido o reenviarlo,
+    y el envío automático del viernes sigue su curso igual.
+    """
+    enviado, datos = reporte_semanal.enviar(db, motivo=f"manual por {ctx.get('username')}")
+    if not enviado:
+        raise HTTPException(
+            status_code=502,
+            detail="El reporte se generó pero no pudo enviarse. Revisa la configuración de correo.",
+        )
+    return {
+        "enviado": True,
+        "desde": _fmt_dt(datos["desde"]),
+        "hasta": _fmt_dt(datos["hasta"]),
+        "total_paros": datos["total_paros"],
+        "total_horas": reporte_semanal._hhmm(datos["total_segundos"]),
+    }
+
+
+@router.get("/correo/semanal_vista_previa")
+def vista_previa_semanal(db: Session = Depends(get_db), ctx=Depends(require_superadmin)):
+    """Los números del reporte sin enviar nada, para verlos en pantalla."""
+    datos = reporte_semanal.calcular(db)
+    return {
+        "desde": _fmt_dt(datos["desde"]),
+        "hasta": _fmt_dt(datos["hasta"]),
+        "total_horas": reporte_semanal._hhmm(datos["total_segundos"]),
+        "total_paros": datos["total_paros"],
+        "promedio": reporte_semanal._hhmm(datos["promedio_segundos"]) if datos["promedio_segundos"] is not None else None,
+        "variacion_pct": datos["variacion_pct"],
+        "previo_horas": reporte_semanal._hhmm(datos["previo_segundos"]),
+        "sin_cierre": datos["sin_cierre"],
+        "en_curso": datos["en_curso"],
+        "por_categoria": [
+            {"etiqueta": e, "paros": n, "horas": reporte_semanal._hhmm(s)}
+            for e, n, s in datos["por_categoria"][:8]
+        ],
+        "por_maquina": [
+            {"etiqueta": e, "paros": n, "horas": reporte_semanal._hhmm(s)}
+            for e, n, s in datos["por_maquina"][:8]
+        ],
+    }

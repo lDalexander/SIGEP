@@ -7,14 +7,17 @@ import TabChecklists from './TabChecklists';
 import TabJerarquia from './TabJerarquia';
 import TabMensajes from './TabMensajes';
 import TabUsuarios from './TabUsuarios';
+import TabCorreo from './TabCorreo';
 import {
   leerSesion, registrarCaducidad, salir, esSuperadmin,
   msDeInactividad, AVISO_INACTIVIDAD,
 } from '../../lib/adminApi';
 import useInactividad from '../../lib/useInactividad';
 
-/* El orden de las cinco primeras es el de las capturas; «Usuarios» se añadió
-   después (2026-08-06) y solo la ve un SUPERADMIN — `soloSuperadmin`. */
+/* El orden de las cinco primeras es el de las capturas; «Usuarios» (2026-08-06) y
+   «Correo» (2026-08-07) se añadieron después y solo las ve un SUPERADMIN —
+   `soloSuperadmin`. Ocultarlas no es el control de acceso: sus endpoints van con
+   `require_superadmin` y responden 403 a cualquier otro nivel. */
 const PESTANAS = [
   { value: 'operarios',  label: 'Operarios',  Componente: TabOperarios },
   { value: 'produccion', label: 'Producción', Componente: TabProduccion },
@@ -22,6 +25,7 @@ const PESTANAS = [
   { value: 'jerarquia',  label: 'Jerarquía',  Componente: TabJerarquia },
   { value: 'mensajes',   label: 'Mensajes',   Componente: TabMensajes },
   { value: 'usuarios',   label: 'Usuarios',   Componente: TabUsuarios, soloSuperadmin: true },
+  { value: 'correo',     label: 'Correo',     Componente: TabCorreo,   soloSuperadmin: true },
 ];
 
 /**

@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 # Importar configuración de base de datos y modelos
 from database import engine, Base, logger
 import models
-from tasks import garbage_collector_turnos
+from tasks import garbage_collector_turnos, programador_reporte_semanal
 
 # Importar routers
 from routers import dashboard, operaciones, insumos, auth, reportes, supervisor, websocket_insumos, dispositivos, tablets, mantenimiento, admin
@@ -25,15 +25,22 @@ logger.info("Tablas de la base de datos verificadas/creadas.")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Arrancar la tarea en segundo plano del Garbage Collector
-    task = asyncio.create_task(garbage_collector_turnos())
+    # Tareas en segundo plano: el recolector de turnos colgados y el reporte semanal
+    # de paros por correo (viernes 12:00, ver tasks.py).
+    tareas = [
+        asyncio.create_task(garbage_collector_turnos()),
+        asyncio.create_task(programador_reporte_semanal()),
+    ]
     yield
-    # Al apagar la app, cancelamos la tarea amablemente
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        logger.info("♻️ Garbage Collector detenido de forma segura.")
+    # Al apagar la app, cancelamos las tareas amablemente
+    for t in tareas:
+        t.cancel()
+    for t in tareas:
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
+    logger.info("♻️ Tareas de fondo detenidas de forma segura.")
 
 # Inicializar la aplicación FastAPI
 app = FastAPI(

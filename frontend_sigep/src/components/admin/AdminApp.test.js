@@ -126,6 +126,29 @@ const CHECKLISTS = [
   },
 ];
 
+const CONFIG_CORREO = {
+  smtp_host: 'smtp-mail.outlook.com', smtp_port: 587,
+  smtp_user: 'no-reply@detcuador.com', smtp_from: 'no-reply@detcuador.com',
+  password_definida: true, password_en_bd: false,
+  destinos: {
+    semanal:  { to: ['agarcia@detcuador.com'], cc: [], origen_to: 'heredado', origen_cc: 'env' },
+    reportes: { to: ['agarcia@detcuador.com'], cc: [], origen_to: 'env', origen_cc: 'env' },
+    pedidos:  { to: ['agarcia@detcuador.com'], cc: ['bodega@detcuador.com'], origen_to: 'env', origen_cc: 'env' },
+  },
+  semanal_activo: true,
+  semanal_ultimo_envio: null, semanal_ultima_ventana: null,
+  semanal_proximo_envio: '2026-08-14 12:00:00',
+  actualizado_en: null, actualizado_por: null,
+};
+
+const VISTA_PREVIA = {
+  desde: '2026-07-24 12:00:00', hasta: '2026-07-31 12:00:00',
+  total_horas: '20h 32m', total_paros: 17, promedio: '1h 12m',
+  variacion_pct: 35.9, previo_horas: '15h 06m', sin_cierre: 0, en_curso: 0,
+  por_categoria: [{ etiqueta: 'MANTENIMIENTO', paros: 8, horas: '14h 42m' }],
+  por_maquina: [{ etiqueta: 'Máquina 9', paros: 4, horas: '10h 53m' }],
+};
+
 const SESIONES_ACTIVAS = [
   {
     sesion_id: 372, maquina: 'Máquina 16', operador: 'ROLANDO MORAN',
@@ -157,6 +180,8 @@ beforeEach(() => {
     if (url === '/sesiones/330/pallets') return Promise.resolve({ data: [] });
     if (url === '/usuarios')          return Promise.resolve({ data: USUARIOS });
     if (url === '/niveles')           return Promise.resolve({ data: NIVELES });
+    if (url === '/correo')            return Promise.resolve({ data: CONFIG_CORREO });
+    if (url === '/correo/semanal_vista_previa') return Promise.resolve({ data: VISTA_PREVIA });
     return Promise.reject(new Error(`sin mock para ${url}`));
   });
   mockAdmin.post.mockResolvedValue({ data: { ok: true } });
@@ -860,4 +885,112 @@ test('Producción: una tablet que nunca reportó no avisa (sin contacto no es co
 
   fireEvent.click(screen.getByRole('button', { name: 'CERRAR TURNO' }));
   expect(window.confirm.mock.calls[0][0]).not.toMatch(/SEÑALES DE VIDA/);
+});
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Correo (2026-08-07)
+
+   La pantalla administra el servidor de salida, las tres listas de destinatarios y
+   el reporte semanal de paros. Lo que se protege aquí: que la contraseña no viaje
+   sin querer, que un campo vacío se entienda como «usa el del .env» y no como «sin
+   destinatarios», y que la pestaña solo exista para un SUPERADMIN.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+test('Correo: la pestaña solo existe para un SUPERADMIN', async () => {
+  mockNivel = 'ADMINPLANTA';
+  render(<AdminApp />);
+  expect(screen.queryByRole('tab', { name: 'Correo' })).not.toBeInTheDocument();
+  await screen.findByText('JONATHAN VICUÑA');
+});
+
+test('Correo: muestra el servidor y de dónde sale cada lista, sin la contraseña', async () => {
+  render(<AdminApp />);
+  irA('Correo');
+
+  expect(await screen.findByLabelText('Servidor SMTP')).toHaveValue('smtp-mail.outlook.com');
+  expect(screen.getByLabelText('Puerto SMTP')).toHaveValue('587');
+  // La API nunca devuelve la contraseña: el campo arranca vacío y solo dice si existe.
+  expect(screen.getByLabelText('Contraseña SMTP')).toHaveValue('');
+  expect(screen.getByText('contraseña del .env')).toBeInTheDocument();
+
+  // El origen de cada lista es visible: sin esto se editaría el .env creyendo que manda.
+  expect(screen.getByText('heredado de reportes')).toBeInTheDocument();
+  expect(screen.getAllByText('del servidor (.env)')).toHaveLength(2);
+});
+
+test('Correo: guardar el servidor sin tocar la contraseña no la manda', async () => {
+  render(<AdminApp />);
+  irA('Correo');
+
+  const host = await screen.findByLabelText('Servidor SMTP');
+  fireEvent.change(host, { target: { value: 'smtp.office365.com' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Guardar servidor' }));
+
+  await waitFor(() => expect(mockAdmin.put).toHaveBeenCalled());
+  const [ruta, cuerpo] = mockAdmin.put.mock.calls[0];
+  expect(ruta).toBe('/correo');
+  expect(cuerpo.smtp_host).toBe('smtp.office365.com');
+  expect(cuerpo.smtp_port).toBe(587);            // número, no el texto del input
+  expect('smtp_pass' in cuerpo).toBe(false);     // lo importante: no viaja vacía
+});
+
+test('Correo: añadir un destinatario manda la lista completa, y rechaza lo que no es correo', async () => {
+  render(<AdminApp />);
+  irA('Correo');
+
+  const campo = await screen.findByLabelText('Añadir a copia de Reporte semanal de paros');
+  fireEvent.change(campo, { target: { value: 'esto-no-es-un-correo' } });
+  fireEvent.keyDown(campo, { key: 'Enter' });
+  expect(mockAdmin.put).not.toHaveBeenCalled();
+  expect(await screen.findByText(/no parece una dirección/)).toBeInTheDocument();
+
+  fireEvent.change(campo, { target: { value: 'jflorez@detcuador.com' } });
+  fireEvent.keyDown(campo, { key: 'Enter' });
+  await waitFor(() =>
+    expect(mockAdmin.put).toHaveBeenCalledWith('/correo', {
+      semanal_cc: ['jflorez@detcuador.com'],
+    })
+  );
+});
+
+test('Correo: quitar el último destinatario avisa de que se volverá al .env', async () => {
+  render(<AdminApp />);
+  irA('Correo');
+
+  const quitar = await screen.findByLabelText(
+    'Quitar agarcia@detcuador.com de destinatarios de Reporte semanal de paros'
+  );
+  fireEvent.click(quitar);
+
+  expect(window.confirm.mock.calls[0][0]).toMatch(/se volverán a usar los destinatarios/i);
+  await waitFor(() =>
+    expect(mockAdmin.put).toHaveBeenCalledWith('/correo', { semanal_to: [] })
+  );
+});
+
+test('Correo: la vista previa enseña los números que saldrían, y «enviar ahora» confirma', async () => {
+  render(<AdminApp />);
+  irA('Correo');
+
+  expect(await screen.findByText('20h 32m')).toBeInTheDocument();
+  expect(screen.getByText(/17 paro\(s\) · media 1h 12m/)).toBeInTheDocument();
+  expect(screen.getByText(/▲ 35.9% vs 15h 06m/)).toBeInTheDocument();
+  expect(screen.getByText('MANTENIMIENTO')).toBeInTheDocument();
+  expect(screen.getByText('Máquina 9')).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Enviar ahora' }));
+  expect(window.confirm.mock.calls[0][0]).toMatch(/última semana cerrada/i);
+  await waitFor(() => expect(mockAdmin.post).toHaveBeenCalledWith('/correo/semanal_ahora'));
+});
+
+test('Correo: el botón de prueba manda a la lista de esa tarjeta', async () => {
+  render(<AdminApp />);
+  irA('Correo');
+
+  const botones = await screen.findAllByRole('button', { name: 'Enviar correo de prueba' });
+  expect(botones).toHaveLength(3);          // una por lista
+  fireEvent.click(botones[0]);              // la primera tarjeta es el reporte semanal
+  await waitFor(() =>
+    expect(mockAdmin.post).toHaveBeenCalledWith('/correo/prueba', { tipo: 'semanal' })
+  );
 });

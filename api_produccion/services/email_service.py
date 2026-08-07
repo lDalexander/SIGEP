@@ -5,12 +5,17 @@ Se dispara junto con la notificación FCM/WebSocket cuando una máquina solicita
 insumos. Es tolerante a fallos: cualquier error de SMTP se registra y se ignora,
 NUNCA interrumpe el flujo del pedido (se ejecuta en un BackgroundTask).
 
-Configuración por variables de entorno (.env, fuera de control de versiones):
+Desde el 2026-08-07 la configuración vive en la tabla `config_correo` y se administra
+desde /admin → Correo; el `.env` sigue siendo el respaldo de cada campo que no esté
+puesto ahí (ver `services/config_correo.py`). Por eso **se resuelve en cada envío** y
+no al importar el módulo: un cambio en la web tiene efecto en el siguiente correo, sin
+recargar el servicio.
+
+Variables de entorno de respaldo (.env, fuera de control de versiones):
   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM,
-  PEDIDOS_EMAIL_TO   (coma-separado)
-  PEDIDOS_EMAIL_CC   (coma-separado)
-  REPORTES_EMAIL_TO  (coma-separado; reportes de problemas con la app)
-  REPORTES_EMAIL_CC  (coma-separado)
+  PEDIDOS_EMAIL_TO / _CC    (pedidos de insumos)
+  REPORTES_EMAIL_TO / _CC   (reportes de problemas con la app)
+  SEMANAL_EMAIL_TO / _CC    (reporte semanal de paros)
 """
 import os
 import smtplib
@@ -21,48 +26,37 @@ from html import escape
 
 from dotenv import load_dotenv
 from database import logger
+from services import config_correo
 
 load_dotenv()  # asegura que el .env esté cargado aunque este módulo se importe primero
 
 
-def _lista(valor):
-    return [e.strip() for e in (valor or "").replace(";", ",").split(",") if e.strip()]
-
-
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp-mail.outlook.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER", "no-reply@detcuador.com")
-SMTP_PASS = os.getenv("SMTP_PASS", "")
-SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER)
-PEDIDOS_EMAIL_TO = _lista(os.getenv("PEDIDOS_EMAIL_TO"))
-PEDIDOS_EMAIL_CC = _lista(os.getenv("PEDIDOS_EMAIL_CC"))
-
-# Los reportes de fallas de la app van a quien mantiene el sistema, no a la lista de
-# bodega: son incidencias técnicas, no operación de planta. Si no se configura nada,
-# se cae a los destinatarios de pedidos para no perder el aviso en silencio.
-REPORTES_EMAIL_TO = _lista(os.getenv("REPORTES_EMAIL_TO")) or PEDIDOS_EMAIL_TO
-REPORTES_EMAIL_CC = _lista(os.getenv("REPORTES_EMAIL_CC"))
-
-
-def _enviar(asunto, cuerpo_txt, cuerpo_html, to=None, cc=None):
+def _enviar(asunto, cuerpo_txt, cuerpo_html, to=None, cc=None, tipo="pedidos", cfg=None):
     """Envía un correo por SMTP+STARTTLS. No lanza excepciones (las registra).
 
-    `to`/`cc` en None usan los destinatarios por defecto; una lista vacía explícita
-    se respeta (permite enviar sin CC, p. ej. en pruebas)."""
+    `to`/`cc` en None usan los destinatarios configurados para `tipo`; una lista vacía
+    explícita se respeta (permite enviar sin CC, p. ej. en pruebas). `cfg` permite
+    pasar una configuración ya resuelta —la usa el botón de prueba de /admin, que
+    prueba lo que hay en el formulario antes de guardarlo.
+    """
+    cfg = cfg or config_correo.efectiva()
+    destino = cfg.get("destinos", {}).get(tipo, {})
     if to is None:
-        to = PEDIDOS_EMAIL_TO
+        to = destino.get("to", [])
     if cc is None:
-        cc = PEDIDOS_EMAIL_CC
-    if not SMTP_PASS:
-        logger.warning("📧 SMTP sin credenciales (SMTP_PASS vacío); no se envía correo.")
+        cc = destino.get("cc", [])
+
+    if not cfg.get("smtp_pass"):
+        logger.warning("📧 SMTP sin credenciales (contraseña vacía); no se envía correo.")
         return False
     if not to and not cc:
-        logger.warning("📧 Sin destinatarios configurados; no se envía correo.")
+        logger.warning(f"📧 Sin destinatarios configurados para '{tipo}'; no se envía correo.")
         return False
 
+    remitente = cfg.get("smtp_from") or cfg.get("smtp_user")
     msg = EmailMessage()
     msg["Subject"] = asunto
-    msg["From"] = SMTP_FROM
+    msg["From"] = remitente
     msg["To"] = ", ".join(to)
     if cc:
         msg["Cc"] = ", ".join(cc)
@@ -72,12 +66,12 @@ def _enviar(asunto, cuerpo_txt, cuerpo_html, to=None, cc=None):
     destinatarios = to + cc
     try:
         ctx = ssl.create_default_context()
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
+        with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"], timeout=20) as s:
             s.ehlo()
             s.starttls(context=ctx)
             s.ehlo()
-            s.login(SMTP_USER, SMTP_PASS)
-            s.send_message(msg, from_addr=SMTP_FROM, to_addrs=destinatarios)
+            s.login(cfg["smtp_user"], cfg["smtp_pass"])
+            s.send_message(msg, from_addr=remitente, to_addrs=destinatarios)
         logger.info(f"📧 Correo enviado: '{asunto}' → {len(destinatarios)} destinatario(s)")
         return True
     except Exception as e:
@@ -150,8 +144,7 @@ def notificar_reporte_app(reporte_id, maquina, operador, texto, sesion_id=None, 
   </div>
 </div>"""
 
-    return _enviar(asunto, cuerpo_txt, cuerpo_html,
-                   to=REPORTES_EMAIL_TO, cc=REPORTES_EMAIL_CC)
+    return _enviar(asunto, cuerpo_txt, cuerpo_html, tipo="reportes")
 
 
 def notificar_pedido_insumo(maquina, operador, detalle, cantidad, categoria, pedido_id, fecha=None):
