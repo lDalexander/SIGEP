@@ -13,27 +13,34 @@ import TabInsumos from './TabInsumos';
 import TabFeedback from './TabFeedback';
 import TabTablets from './TabTablets';
 import {
-  leerSesion, registrarCaducidad, salir, esSuperadmin,
+  leerSesion, registrarCaducidad, salir, tieneAcceso, nivelActual,
   msDeInactividad, AVISO_INACTIVIDAD,
+  NIVELES_VER_PLANTA, NIVELES_BODEGA, NIVELES_SISTEMA,
 } from '../../lib/adminApi';
 import useInactividad from '../../lib/useInactividad';
 
-/* El orden de las cinco primeras es el de las capturas; «Usuarios» (2026-08-06) y
-   «Correo» (2026-08-07) se añadieron después y solo las ve un SUPERADMIN —
-   `soloSuperadmin`. Ocultarlas no es el control de acceso: sus endpoints van con
-   `require_superadmin` y responden 403 a cualquier otro nivel. */
+/* El orden de las cinco primeras es el de las capturas; el resto se fue añadiendo
+   después. `niveles` es quién ve cada una — reparto acordado el 2026-08-07:
+
+     planta  (ADMINPLANTA, ADMIN, y CONSULTA en solo lectura) → las seis de operación
+     bodega  (ADMINBODEGA)                                    → solo Insumos
+     sistema (SUPERADMIN)                                     → además reportes,
+             tablets, usuarios y correo, y todo lo anterior
+
+   Ocultar una pestaña NO es el control de acceso: cada endpoint exige su nivel en el
+   backend y responde 403. Esto solo evita enseñar lo que el servidor va a rechazar. */
 const PESTANAS = [
-  { value: 'operarios',  label: 'Operarios',  Componente: TabOperarios },
-  { value: 'produccion', label: 'Producción', Componente: TabProduccion },
-  { value: 'paros',      label: 'Paros',      Componente: TabParos },
-  { value: 'checklists', label: 'Checklists', Componente: TabChecklists },
-  { value: 'jerarquia',  label: 'Jerarquía',  Componente: TabJerarquia },
-  { value: 'insumos',    label: 'Insumos',    Componente: TabInsumos },
-  { value: 'reportes',   label: 'Reportes',   Componente: TabFeedback },
-  { value: 'mensajes',   label: 'Mensajes',   Componente: TabMensajes },
-  { value: 'tablets',    label: 'Tablets',    Componente: TabTablets },
-  { value: 'usuarios',   label: 'Usuarios',   Componente: TabUsuarios, soloSuperadmin: true },
-  { value: 'correo',     label: 'Correo',     Componente: TabCorreo,   soloSuperadmin: true },
+  { value: 'operarios',  label: 'Operarios',  Componente: TabOperarios,  niveles: NIVELES_VER_PLANTA },
+  { value: 'produccion', label: 'Producción', Componente: TabProduccion, niveles: NIVELES_VER_PLANTA },
+  { value: 'paros',      label: 'Paros',      Componente: TabParos,      niveles: NIVELES_VER_PLANTA },
+  { value: 'checklists', label: 'Checklists', Componente: TabChecklists, niveles: NIVELES_VER_PLANTA },
+  { value: 'jerarquia',  label: 'Jerarquía',  Componente: TabJerarquia,  niveles: NIVELES_VER_PLANTA },
+  { value: 'insumos',    label: 'Insumos',    Componente: TabInsumos,    niveles: NIVELES_BODEGA },
+  { value: 'reportes',   label: 'Reportes',   Componente: TabFeedback,   niveles: NIVELES_SISTEMA },
+  { value: 'mensajes',   label: 'Mensajes',   Componente: TabMensajes,   niveles: NIVELES_VER_PLANTA },
+  { value: 'tablets',    label: 'Tablets',    Componente: TabTablets,    niveles: NIVELES_SISTEMA },
+  { value: 'usuarios',   label: 'Usuarios',   Componente: TabUsuarios,   niveles: NIVELES_SISTEMA },
+  { value: 'correo',     label: 'Correo',     Componente: TabCorreo,     niveles: NIVELES_SISTEMA },
 ];
 
 /**
@@ -91,8 +98,12 @@ export default function AdminApp({ onVolver = () => {} }) {
     return <AdminLogin onEntrar={entrar} onVolver={onVolver} aviso={aviso} />;
   }
 
-  const visibles = PESTANAS.filter((p) => !p.soloSuperadmin || esSuperadmin(sesion));
-  const { Componente } = visibles.find((p) => p.value === pestana) || visibles[0];
+  const visibles = PESTANAS.filter((p) => tieneAcceso(p.niveles, sesion));
+  /* La pestaña inicial es «operarios», que un ADMINBODEGA no ve: se cae a la primera
+     que le corresponda. Y si su nivel no da acceso a ninguna, se dice en vez de
+     reventar al buscar el componente. */
+  const actual = visibles.find((p) => p.value === pestana) || visibles[0];
+  const Componente = actual?.Componente;
 
   return (
     <div className="min-h-screen">
@@ -127,7 +138,14 @@ export default function AdminApp({ onVolver = () => {} }) {
         />
 
         <div className="pt-6">
-          <Componente />
+          {Componente ? (
+            <Componente />
+          ) : (
+            <p className="sig-card p-6 text-[13px] text-sig-muted">
+              Tu nivel de acceso ({nivelActual(sesion) || '—'}) no tiene ninguna sección
+              asignada en la administración. Habla con un SUPERADMIN si necesitas entrar.
+            </p>
+          )}
         </div>
       </main>
     </div>

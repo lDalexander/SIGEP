@@ -177,8 +177,35 @@ def require_nivel(*permitidos):
     return dependencia
 
 
-# Escribir (corregir sesiones, operarios, jerarquía, mensajes, cerrar turnos).
-require_operativo = require_nivel(*NIVELES_OPERATIVOS)
+# ----------------------------------------------------------------------------
+# Áreas (2026-08-07)
+# ----------------------------------------------------------------------------
+# Antes había un solo nivel «operativo»: quien podía escribir, escribía en todo. Ahora
+# cada nivel trabaja en SU área, y el reparto lo decidió el responsable:
+#
+#   SUPERADMIN   todo, incluido lo que administra el propio sistema
+#   ADMINPLANTA  planta: operarios, producción, paros, checklists, jerarquía, mensajes
+#   ADMIN        igual que ADMINPLANTA (nivel heredado)
+#   ADMINBODEGA  solo insumos: corregir pedidos y entregas
+#   CONSULTA     lee lo de planta, no escribe nada
+#
+# Esto vive en el BACKEND y no solo en las pestañas de la web, por la misma razón de
+# siempre: con el token en la mano, cualquiera llama al endpoint a mano.
+#
+# Reportes de la app, comentarios, tablets, usuarios y correo quedan **solo para
+# SUPERADMIN**: no son operación diaria, son administración del sistema.
+
+NIVELES_PLANTA = {NIVEL_SUPERADMIN, "ADMINPLANTA", "ADMIN"}
+NIVELES_BODEGA = {NIVEL_SUPERADMIN, "ADMINBODEGA"}
+
+# Ya no existe un `require_operativo` global: cada área tiene el suyo. Si vuelve a hacer
+# falta uno transversal, es señal de que el endpoint no está en el área correcta.
+# Escribir en planta (corregir sesiones, operarios, jerarquía, paros, mensajes).
+require_planta = require_nivel(*NIVELES_PLANTA)
+# Leer lo de planta: lo mismo más CONSULTA, que ve pero no toca.
+require_planta_lectura = require_nivel(*NIVELES_PLANTA, NIVEL_CONSULTA)
+# Corregir insumos (pedidos y entregas de bodega).
+require_bodega = require_nivel(*NIVELES_BODEGA)
 # Acciones irreversibles o de administración del propio sistema.
 require_superadmin = require_nivel(NIVEL_SUPERADMIN)
 
@@ -246,7 +273,7 @@ class OperadorUpdate(BaseModel):
 
 
 @router.get("/operadores")
-def listar_operadores(tipo: str = Query(None), db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def listar_operadores(tipo: str = Query(None), db: Session = Depends(get_db), ctx=Depends(require_planta_lectura)):
     """Lista los operarios. Con `tipo` se limita a los de esa línea."""
     q = db.query(OperadorDB)
     if tipo:
@@ -256,7 +283,7 @@ def listar_operadores(tipo: str = Query(None), db: Session = Depends(get_db), ct
 
 
 @router.post("/operadores")
-def crear_operador(datos: OperadorIn, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
+def crear_operador(datos: OperadorIn, db: Session = Depends(get_db), ctx=Depends(require_planta)):
     nombre = (datos.nombre or "").strip()
     if not nombre:
         raise HTTPException(status_code=400, detail="El nombre es obligatorio")
@@ -280,7 +307,7 @@ def crear_operador(datos: OperadorIn, db: Session = Depends(get_db), ctx=Depends
 
 
 @router.put("/operadores/{operador_id}")
-def actualizar_operador(operador_id: int, datos: OperadorUpdate, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
+def actualizar_operador(operador_id: int, datos: OperadorUpdate, db: Session = Depends(get_db), ctx=Depends(require_planta)):
     op = db.query(OperadorDB).filter(OperadorDB.id == operador_id).first()
     if not op:
         raise HTTPException(status_code=404, detail="Operario no encontrado")
@@ -348,7 +375,7 @@ class PalletUpdate(BaseModel):
 
 
 @router.get("/sesiones")
-def listar_sesiones(desde: str = Query(None), hasta: str = Query(None), db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def listar_sesiones(desde: str = Query(None), hasta: str = Query(None), db: Session = Depends(get_db), ctx=Depends(require_planta_lectura)):
     """Lista sesiones del rango (default hoy) con su total de pacas y nº de registros."""
     ini, fin = _rango(desde, hasta)
     sesiones = (
@@ -373,7 +400,7 @@ def listar_sesiones(desde: str = Query(None), hasta: str = Query(None), db: Sess
 
 
 @router.put("/sesiones/{sesion_id}")
-def actualizar_sesion(sesion_id: int, datos: SesionUpdate, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
+def actualizar_sesion(sesion_id: int, datos: SesionUpdate, db: Session = Depends(get_db), ctx=Depends(require_planta)):
     s = db.query(SesionTrabajoDB).filter(SesionTrabajoDB.id == sesion_id).first()
     if not s:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
@@ -397,7 +424,7 @@ def actualizar_sesion(sesion_id: int, datos: SesionUpdate, db: Session = Depends
 
 @router.post("/sesiones/{sesion_id}/cerrar")
 def cerrar_sesion(sesion_id: int, background_tasks: BackgroundTasks,
-                  db: Session = Depends(get_db), ctx=Depends(require_operativo)):
+                  db: Session = Depends(get_db), ctx=Depends(require_planta)):
     """Cierra un turno que quedó abierto, dejando constancia de quién lo hizo.
 
     Hace lo MISMO que el `POST /api/finalizar_turno` que usa la tablet
@@ -519,14 +546,14 @@ def eliminar_sesion(sesion_id: int, db: Session = Depends(get_db), ctx=Depends(r
 
 
 @router.get("/sesiones/{sesion_id}/pallets")
-def listar_pallets(sesion_id: int, db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def listar_pallets(sesion_id: int, db: Session = Depends(get_db), ctx=Depends(require_planta_lectura)):
     pallets = db.query(PalletDB).filter(PalletDB.session_id == sesion_id).order_by(PalletDB.id.asc()).all()
     return [{"id": p.id, "cantidad_pacas": p.cantidad_pacas,
              "fecha_hora": p.fecha_hora.strftime("%Y-%m-%d %H:%M:%S") if p.fecha_hora else ""} for p in pallets]
 
 
 @router.put("/pallets/{pallet_id}")
-def actualizar_pallet(pallet_id: int, datos: PalletUpdate, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
+def actualizar_pallet(pallet_id: int, datos: PalletUpdate, db: Session = Depends(get_db), ctx=Depends(require_planta)):
     """Corrige un registro de pacas: la cantidad, la hora, o las dos.
 
     La hora se admite desde el 2026-08-06. No es cosmética: el dashboard cuenta la
@@ -618,7 +645,7 @@ class ChecklistUpdate(BaseModel):
 
 
 @router.get("/checklists")
-def listar_checklists(desde: str = Query(None), hasta: str = Query(None), db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def listar_checklists(desde: str = Query(None), hasta: str = Query(None), db: Session = Depends(get_db), ctx=Depends(require_planta_lectura)):
     ini, fin = _rango(desde, hasta)
     d, h = ini.date(), (fin - timedelta(days=1)).date()
     checklists = (
@@ -641,7 +668,7 @@ def listar_checklists(desde: str = Query(None), hasta: str = Query(None), db: Se
 
 
 @router.put("/checklists/{checklist_id}")
-def actualizar_checklist(checklist_id: int, datos: ChecklistUpdate, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
+def actualizar_checklist(checklist_id: int, datos: ChecklistUpdate, db: Session = Depends(get_db), ctx=Depends(require_planta)):
     c = db.query(MantenimientoChecklistDB).filter(MantenimientoChecklistDB.id == checklist_id).first()
     if not c:
         raise HTTPException(status_code=404, detail="Checklist no encontrado")
@@ -681,7 +708,7 @@ class MaquinaProductoUpdate(BaseModel):
 
 
 @router.get("/catalogos")
-def catalogos_jerarquia(db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def catalogos_jerarquia(db: Session = Depends(get_db), ctx=Depends(require_planta_lectura)):
     """Catálogos para poblar los selectores del editor: máquinas activas + las
     listas maestras de marcas y presentaciones (tablas sin modelo SQLAlchemy)."""
     maquinas = db.query(MaquinaDB).filter(MaquinaDB.activa.is_(True)).order_by(MaquinaDB.id).all()
@@ -706,7 +733,7 @@ def catalogos_jerarquia(db: Session = Depends(get_db), ctx=Depends(require_admin
 
 
 @router.get("/maquina_productos")
-def listar_maquina_productos(db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def listar_maquina_productos(db: Session = Depends(get_db), ctx=Depends(require_planta_lectura)):
     """Matriz completa agrupada por máquina (incluye filas inactivas)."""
     maquinas = db.query(MaquinaDB).order_by(MaquinaDB.id).all()
     filas = db.query(MaquinaProductoDB).order_by(MaquinaProductoDB.marca, MaquinaProductoDB.presentacion).all()
@@ -723,7 +750,7 @@ def listar_maquina_productos(db: Session = Depends(get_db), ctx=Depends(require_
 
 
 @router.post("/maquina_productos")
-def crear_maquina_producto(datos: MaquinaProductoIn, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
+def crear_maquina_producto(datos: MaquinaProductoIn, db: Session = Depends(get_db), ctx=Depends(require_planta)):
     maquina = db.query(MaquinaDB).filter(MaquinaDB.id == datos.maquina_id).first()
     if not maquina:
         raise HTTPException(status_code=404, detail="Máquina no encontrada")
@@ -753,7 +780,7 @@ def crear_maquina_producto(datos: MaquinaProductoIn, db: Session = Depends(get_d
 
 
 @router.put("/maquina_productos/{fila_id}")
-def actualizar_maquina_producto(fila_id: int, datos: MaquinaProductoUpdate, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
+def actualizar_maquina_producto(fila_id: int, datos: MaquinaProductoUpdate, db: Session = Depends(get_db), ctx=Depends(require_planta)):
     fila = db.query(MaquinaProductoDB).filter(MaquinaProductoDB.id == fila_id).first()
     if not fila:
         raise HTTPException(status_code=404, detail="Combinación no encontrada")
@@ -828,7 +855,7 @@ def _marca_de_la_maquina(db, maquina_id, marca):
 
 
 @router.get("/maquina_fragancias")
-def listar_maquina_fragancias(db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def listar_maquina_fragancias(db: Session = Depends(get_db), ctx=Depends(require_planta_lectura)):
     """Matriz máquina → marca → fragancias, para el editor de la jerarquía.
 
     Las marcas de cada máquina son la unión de las que produce (`maquina_productos`
@@ -876,7 +903,7 @@ def listar_maquina_fragancias(db: Session = Depends(get_db), ctx=Depends(require
 
 
 @router.post("/maquina_fragancias")
-def crear_maquina_fragancia(datos: MaquinaFraganciaIn, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
+def crear_maquina_fragancia(datos: MaquinaFraganciaIn, db: Session = Depends(get_db), ctx=Depends(require_planta)):
     """Asigna una fragancia a (máquina, marca). Reactiva si existía dada de baja."""
     maquina = db.query(MaquinaDB).filter(MaquinaDB.id == datos.maquina_id).first()
     if not maquina:
@@ -909,7 +936,7 @@ def crear_maquina_fragancia(datos: MaquinaFraganciaIn, db: Session = Depends(get
 
 
 @router.put("/maquina_fragancias/{fila_id}")
-def actualizar_maquina_fragancia(fila_id: int, datos: MaquinaFraganciaUpdate, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
+def actualizar_maquina_fragancia(fila_id: int, datos: MaquinaFraganciaUpdate, db: Session = Depends(get_db), ctx=Depends(require_planta)):
     """Baja lógica (`{activo:false}`) o cambio de fragancia. Es lo que usa la web:
     borrar físicamente dejaría el histórico de sesiones sin su referencia."""
     fila = db.query(MaquinaMarcaFraganciaDB).filter(MaquinaMarcaFraganciaDB.id == fila_id).first()
@@ -996,7 +1023,7 @@ def _crear_o_reactivar(db, modelo, campo_activo, nombre, etiqueta, ctx):
 
 
 @router.post("/maquinas")
-def crear_maquina(datos: MaquinaIn, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
+def crear_maquina(datos: MaquinaIn, db: Session = Depends(get_db), ctx=Depends(require_planta)):
     """Crea (o reactiva) una máquina con su tipo de línea (SOLIDO por defecto)."""
     nombre = (datos.nombre or "").strip()
     if not nombre:
@@ -1020,7 +1047,7 @@ def crear_maquina(datos: MaquinaIn, db: Session = Depends(get_db), ctx=Depends(r
 
 
 @router.put("/maquinas/{maquina_id}")
-def actualizar_maquina(maquina_id: int, datos: MaquinaUpdate, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
+def actualizar_maquina(maquina_id: int, datos: MaquinaUpdate, db: Session = Depends(get_db), ctx=Depends(require_planta)):
     maq = db.query(MaquinaDB).filter(MaquinaDB.id == maquina_id).first()
     if not maq:
         raise HTTPException(status_code=404, detail="Máquina no encontrada")
@@ -1042,17 +1069,17 @@ def actualizar_maquina(maquina_id: int, datos: MaquinaUpdate, db: Session = Depe
 
 
 @router.post("/marcas")
-def crear_marca(datos: NombreIn, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
+def crear_marca(datos: NombreIn, db: Session = Depends(get_db), ctx=Depends(require_planta)):
     return _crear_o_reactivar(db, MarcaDB, "activa", datos.nombre, "Marca", ctx)
 
 
 @router.post("/presentaciones")
-def crear_presentacion(datos: NombreIn, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
+def crear_presentacion(datos: NombreIn, db: Session = Depends(get_db), ctx=Depends(require_planta)):
     return _crear_o_reactivar(db, PresentacionDB, "activa", datos.nombre, "Presentación", ctx)
 
 
 @router.post("/fragancias")
-def crear_fragancia(datos: NombreIn, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
+def crear_fragancia(datos: NombreIn, db: Session = Depends(get_db), ctx=Depends(require_planta)):
     """Alta en el catálogo maestro de fragancias (Floral, Limón, ...).
 
     El catálogo es la lista de la que se eligen las fragancias de cada máquina+marca;
@@ -1223,7 +1250,7 @@ def actualizar_usuario(usuario_id: int, datos: UsuarioAdminUpdate,
 
 
 @router.get("/niveles")
-def listar_niveles(ctx=Depends(require_admin)):
+def listar_niveles(ctx=Depends(require_superadmin)):
     """Niveles disponibles y qué implica cada uno, para el selector de la web."""
     return [
         {"nivel": NIVEL_SUPERADMIN, "descripcion": "Todo, incluidos usuarios y eliminar sesiones"},
@@ -1248,7 +1275,7 @@ class MensajeAdminIn(BaseModel):
 
 
 @router.get("/sesiones_activas")
-def listar_sesiones_activas(db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def listar_sesiones_activas(db: Session = Depends(get_db), ctx=Depends(require_planta_lectura)):
     """Sesiones de producción activas (turno abierto) + si su tablet recibiría ya.
 
     `tablet_online` responde a UNA pregunta concreta: ¿este mensaje sale al instante?
@@ -1341,7 +1368,7 @@ def _push_ws_mensaje(db, msg):
 
 
 @router.post("/mensajes")
-def enviar_mensaje(datos: MensajeAdminIn, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
+def enviar_mensaje(datos: MensajeAdminIn, db: Session = Depends(get_db), ctx=Depends(require_planta)):
     """Envía un mensaje a la sesión/tablet de producción indicada (individual)."""
     texto = (datos.texto or "").strip()
     if not texto:
@@ -1379,7 +1406,7 @@ class MensajeMasivoIn(BaseModel):
 
 
 @router.post("/mensajes/masivo")
-def enviar_mensaje_masivo(datos: MensajeMasivoIn, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
+def enviar_mensaje_masivo(datos: MensajeMasivoIn, db: Session = Depends(get_db), ctx=Depends(require_planta)):
     """Envía la MISMA alerta a varias sesiones activas a la vez.
 
     - `sesion_ids` vacío o nulo  -> a TODAS las sesiones activas (alerta general).
@@ -1428,7 +1455,7 @@ class PedidoCorreccionIn(BaseModel):
 
 
 @router.put("/pedidos/{pedido_id}")
-def corregir_pedido(pedido_id: int, datos: PedidoCorreccionIn, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
+def corregir_pedido(pedido_id: int, datos: PedidoCorreccionIn, db: Session = Depends(get_db), ctx=Depends(require_bodega)):
     p = db.query(PedidoBodegaDB).filter(PedidoBodegaDB.id == pedido_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Pedido no encontrado")
@@ -1473,7 +1500,7 @@ class EntregaCorreccionIn(BaseModel):
 
 
 @router.put("/entregas/{entrega_id}")
-def corregir_entrega(entrega_id: int, datos: EntregaCorreccionIn, db: Session = Depends(get_db), ctx=Depends(require_operativo)):
+def corregir_entrega(entrega_id: int, datos: EntregaCorreccionIn, db: Session = Depends(get_db), ctx=Depends(require_bodega)):
     """Corrige la cantidad de una entrega proactiva."""
     e = db.query(EntregaProactivaDB).filter(EntregaProactivaDB.id == entrega_id).first()
     if not e:
@@ -1789,7 +1816,7 @@ def _paro_publico(p, sesion=None):
 
 @router.get("/paros")
 def listar_paros_admin(desde: str = Query(None), hasta: str = Query(None),
-                       db: Session = Depends(get_db), ctx=Depends(require_admin)):
+                       db: Session = Depends(get_db), ctx=Depends(require_planta_lectura)):
     """Paros del rango (por `inicio_paro`), del más reciente al más antiguo.
 
     Mismo criterio de rango que `GET /dashboard/paros`, para que las dos listas no
@@ -1812,7 +1839,7 @@ def listar_paros_admin(desde: str = Query(None), hasta: str = Query(None),
 
 @router.put("/paros/{paro_id}")
 def editar_paro(paro_id: int, datos: ParoIn, db: Session = Depends(get_db),
-                ctx=Depends(require_operativo)):
+                ctx=Depends(require_planta)):
     """Corrige motivo y/o tiempos de un paro. Solo se toca lo que venga en el cuerpo.
 
     **Cambiar los tiempos mueve el reporte semanal y la vista de paros**, que cuentan
@@ -1878,7 +1905,7 @@ def editar_paro(paro_id: int, datos: ParoIn, db: Session = Depends(get_db),
 
 @router.post("/paros/{paro_id}/cerrar")
 def cerrar_paro(paro_id: int, datos: CerrarParoIn = None, db: Session = Depends(get_db),
-                ctx=Depends(require_operativo)):
+                ctx=Depends(require_planta)):
     """Cierra un paro que quedó abierto. Sin `fin_paro`, se cierra ahora mismo.
 
     Existe por el agujero conocido: el recolector de `tasks.py` cierra los turnos
@@ -1978,14 +2005,14 @@ def _feedback_del_rango(db, modelo, desde, hasta, limite):
 @router.get("/comentarios")
 def listar_comentarios(desde: str = Query(None), hasta: str = Query(None),
                        limit: int = Query(100), db: Session = Depends(get_db),
-                       ctx=Depends(require_admin)):
+                       ctx=Depends(require_superadmin)):
     filas = _feedback_del_rango(db, ComentarioTurnoDB, desde, hasta, limit)
     return [_feedback_publico(f) for f in filas]
 
 
 @router.put("/comentarios/{comentario_id}")
 def editar_comentario(comentario_id: int, datos: TextoIn, db: Session = Depends(get_db),
-                      ctx=Depends(require_operativo)):
+                      ctx=Depends(require_superadmin)):
     """Corrige el texto de un comentario de turno. Vacío no: para eso está eliminar."""
     c = db.query(ComentarioTurnoDB).filter(ComentarioTurnoDB.id == comentario_id).first()
     if c is None:
@@ -2015,7 +2042,7 @@ def eliminar_comentario(comentario_id: int, db: Session = Depends(get_db),
 @router.get("/reportes_app")
 def listar_reportes_app(desde: str = Query(None), hasta: str = Query(None),
                         limit: int = Query(100), solo_pendientes: bool = Query(False),
-                        db: Session = Depends(get_db), ctx=Depends(require_admin)):
+                        db: Session = Depends(get_db), ctx=Depends(require_superadmin)):
     filas = _feedback_del_rango(db, ReporteAppDB, desde, hasta, limit)
     if solo_pendientes:
         filas = [f for f in filas if not f.atendido]
@@ -2024,7 +2051,7 @@ def listar_reportes_app(desde: str = Query(None), hasta: str = Query(None),
 
 @router.put("/reportes_app/{reporte_id}")
 def editar_reporte_app(reporte_id: int, datos: ReporteAdminIn, db: Session = Depends(get_db),
-                       ctx=Depends(require_operativo)):
+                       ctx=Depends(require_superadmin)):
     """Corrige el texto de un reporte y/o lo marca como atendido.
 
     Atender **no borra nada**: deja quién y cuándo. Desmarcarlo limpia las dos marcas,
@@ -2085,7 +2112,7 @@ class TabletAdminIn(BaseModel):
 
 
 @router.get("/tablets")
-def listar_tablets_admin(db: Session = Depends(get_db), ctx=Depends(require_admin)):
+def listar_tablets_admin(db: Session = Depends(get_db), ctx=Depends(require_superadmin)):
     """Tablets registradas, de la que dio señales más recientemente a la más olvidada."""
     ahora = datetime.now()
     conectadas = set(tablet_manager.connections.keys())
@@ -2113,7 +2140,7 @@ def listar_tablets_admin(db: Session = Depends(get_db), ctx=Depends(require_admi
 
 @router.put("/tablets/{device_id}")
 def editar_tablet(device_id: str, datos: TabletAdminIn, db: Session = Depends(get_db),
-                  ctx=Depends(require_operativo)):
+                  ctx=Depends(require_superadmin)):
     """Corrige el nombre o la máquina de una tablet.
 
     **La app los vuelve a mandar en cada heartbeat**, así que esto arregla la lista hasta

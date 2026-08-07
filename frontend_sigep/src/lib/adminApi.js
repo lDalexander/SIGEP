@@ -106,10 +106,26 @@ export async function salir() {
 }
 
 /* ── Niveles de acceso ────────────────────────────────────────────────────────
-   Espejo de `NIVELES_OPERATIVOS` en `routers/admin.py`. Sirve solo para no
-   enseñar controles que el servidor va a rechazar: quien decide es el backend,
-   que exige el nivel en cada endpoint (403). Ocultar un botón no es un permiso. */
+   Espejo de las áreas de `routers/admin.py`. Sirve solo para no enseñar controles
+   que el servidor va a rechazar: quien decide es el backend, que exige el nivel en
+   cada endpoint (403). Ocultar un botón no es un permiso.
+
+   Reparto acordado el 2026-08-07:
+     SUPERADMIN   todo
+     ADMINPLANTA  planta: operarios, producción, paros, checklists, jerarquía, mensajes
+     ADMIN        igual que ADMINPLANTA (nivel heredado)
+     ADMINBODEGA  solo insumos
+     CONSULTA     ve lo de planta, no escribe nada */
 export const NIVELES_OPERATIVOS = ['SUPERADMIN', 'ADMIN', 'ADMINPLANTA', 'ADMINBODEGA'];
+
+/** Quién trabaja en planta (escritura). */
+export const NIVELES_PLANTA = ['SUPERADMIN', 'ADMINPLANTA', 'ADMIN'];
+/** Quién VE lo de planta: los de arriba más CONSULTA, que mira sin tocar. */
+export const NIVELES_VER_PLANTA = [...NIVELES_PLANTA, 'CONSULTA'];
+/** Quién corrige insumos. */
+export const NIVELES_BODEGA = ['SUPERADMIN', 'ADMINBODEGA'];
+/** Administración del propio sistema: reportes, tablets, usuarios y correo. */
+export const NIVELES_SISTEMA = ['SUPERADMIN'];
 
 export function nivelActual(sesion = leerSesion()) {
   return String(sesion?.nivel || '').toUpperCase();
@@ -123,6 +139,11 @@ export function esSuperadmin(sesion) {
 /** ¿Puede modificar datos? Falso para CONSULTA, que es de solo lectura. */
 export function puedeEditar(sesion) {
   return NIVELES_OPERATIVOS.includes(nivelActual(sesion));
+}
+
+/** ¿Este nivel entra en esa área? `niveles` sale de las constantes de arriba. */
+export function tieneAcceso(niveles, sesion) {
+  return niveles.includes(nivelActual(sesion));
 }
 
 /** Extrae el mensaje de error que devuelve FastAPI en `detail`. */

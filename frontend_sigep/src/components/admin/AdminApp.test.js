@@ -31,8 +31,13 @@ jest.mock('../../lib/adminApi', () => ({
   AVISO_INACTIVIDAD: 'Sesión cerrada por inactividad. Vuelve a iniciar sesión.',
   mensajeDeError: (err, porDefecto) => err?.response?.data?.detail || porDefecto || 'error',
   NIVELES_OPERATIVOS: ['SUPERADMIN', 'ADMIN', 'ADMINPLANTA', 'ADMINBODEGA'],
+  NIVELES_PLANTA: ['SUPERADMIN', 'ADMINPLANTA', 'ADMIN'],
+  NIVELES_VER_PLANTA: ['SUPERADMIN', 'ADMINPLANTA', 'ADMIN', 'CONSULTA'],
+  NIVELES_BODEGA: ['SUPERADMIN', 'ADMINBODEGA'],
+  NIVELES_SISTEMA: ['SUPERADMIN'],
   nivelActual: () => mockNivel,
   esSuperadmin: () => mockNivel === 'SUPERADMIN',
+  tieneAcceso: (niveles) => niveles.includes(mockNivel),
   puedeEditar: () =>
     ['SUPERADMIN', 'ADMIN', 'ADMINPLANTA', 'ADMINBODEGA'].includes(mockNivel),
 }));
@@ -1265,14 +1270,17 @@ test('Insumos: corregir una entrega proactiva manda su cantidad', async () => {
   await waitFor(() => expect(mockAdmin.put).toHaveBeenCalledWith('/entregas/7', { cantidad: 4 }));
 });
 
-test('Insumos: un CONSULTA no puede tocar nada', async () => {
-  mockNivel = 'CONSULTA';
+test('Insumos: un ADMINBODEGA corrige cantidades pero no borra registros', async () => {
+  /* Desde el reparto de áreas, Insumos es de bodega y de SUPERADMIN: un CONSULTA ni
+     siquiera ve la pestaña (lo cubren los tests de niveles). */
+  mockNivel = 'ADMINBODEGA';
   render(<AdminApp />);
   irA('Insumos');
 
   await screen.findByText(/Bobina · Máquina 7/);
-  expect(screen.getByLabelText('Cantidad recibida del pedido 51')).toBeDisabled();
-  expect(screen.queryByRole('button', { name: 'Guardar' })).not.toBeInTheDocument();
+  expect(screen.getByLabelText('Cantidad recibida del pedido 51')).not.toBeDisabled();
+  expect(screen.getAllByRole('button', { name: 'Guardar' }).length).toBeGreaterThan(0);
+  expect(screen.queryByRole('button', { name: 'Eliminar' })).not.toBeInTheDocument();
 });
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -1346,14 +1354,15 @@ test('Reportes: corregir el texto no admite dejarlo vacío', async () => {
   );
 });
 
-test('Reportes: un CONSULTA no ve ninguna acción', async () => {
-  mockNivel = 'CONSULTA';
-  render(<AdminApp />);
-  irA('Reportes');
-
-  await screen.findByText('No permite ingresar pacas');
-  expect(screen.queryByRole('button', { name: 'Marcar atendido' })).not.toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: 'Corregir texto' })).not.toBeInTheDocument();
+test('Reportes: la pestaña es solo de SUPERADMIN', async () => {
+  /* Reportes, Tablets, Usuarios y Correo son administración del sistema, no operación
+     diaria: ni planta ni bodega los ven, y el backend responde 403 a sus endpoints. */
+  for (const nivel of ['ADMINPLANTA', 'ADMINBODEGA', 'CONSULTA']) {
+    mockNivel = nivel;
+    const { unmount } = render(<AdminApp />);
+    expect(screen.queryByRole('tab', { name: 'Reportes' })).not.toBeInTheDocument();
+    unmount();
+  }
 });
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -1420,11 +1429,79 @@ test('Tablets: quitar del registro avisa de que volverá si el equipo sigue ence
   );
 });
 
-test('Tablets: un ADMINPLANTA edita pero no quita del registro', async () => {
+test('Tablets: la pestaña es solo de SUPERADMIN', async () => {
   mockNivel = 'ADMINPLANTA';
   render(<AdminApp />);
-  irA('Tablets');
+  expect(screen.queryByRole('tab', { name: 'Tablets' })).not.toBeInTheDocument();
+});
 
-  expect(await screen.findByLabelText('Nombre de la tablet c439e96c')).not.toBeDisabled();
-  expect(screen.queryByRole('button', { name: 'Quitar del registro' })).not.toBeInTheDocument();
+/* ─────────────────────────────────────────────────────────────────────────────
+   Reparto de pestañas por nivel (2026-08-07)
+
+   Cada nivel trabaja en su área. Ocultar la pestaña no es el permiso —el backend
+   exige el nivel y responde 403— pero sí es lo que evita ofrecer a alguien una
+   sección que no le corresponde.
+   ───────────────────────────────────────────────────────────────────────────── */
+const PESTANAS_PLANTA = ['Operarios', 'Producción', 'Paros', 'Checklists', 'Jerarquía', 'Mensajes'];
+const PESTANAS_SISTEMA = ['Insumos', 'Reportes', 'Tablets', 'Usuarios', 'Correo'];
+
+/* Las pestañas del admin son el PRIMER tablist de la página: los componentes de dentro
+   traen los suyos (el filtro por línea de Operarios son otros tres `role="tab"`). */
+const pestanas = () => within(screen.getAllByRole('tablist')[0]).getAllByRole('tab')
+  .map((t) => t.textContent);
+
+test('Niveles: un SUPERADMIN ve las once pestañas', async () => {
+  render(<AdminApp />);
+  expect(pestanas()).toEqual([
+    'Operarios', 'Producción', 'Paros', 'Checklists', 'Jerarquía',
+    'Insumos', 'Reportes', 'Mensajes', 'Tablets', 'Usuarios', 'Correo',
+  ]);
+  await screen.findByText('JONATHAN VICUÑA');
+});
+
+test('Niveles: un ADMINPLANTA ve solo las seis de planta', async () => {
+  mockNivel = 'ADMINPLANTA';
+  render(<AdminApp />);
+
+  expect(pestanas()).toEqual(PESTANAS_PLANTA);
+  PESTANAS_SISTEMA.forEach((p) =>
+    expect(screen.queryByRole('tab', { name: p })).not.toBeInTheDocument()
+  );
+  await screen.findByText('JONATHAN VICUÑA');
+});
+
+test('Niveles: ADMIN se comporta como ADMINPLANTA', async () => {
+  mockNivel = 'ADMIN';
+  render(<AdminApp />);
+  expect(pestanas()).toEqual(PESTANAS_PLANTA);
+  expect(screen.queryByRole('tab', { name: 'Insumos' })).not.toBeInTheDocument();
+  await screen.findByText('JONATHAN VICUÑA');
+});
+
+test('Niveles: un ADMINBODEGA solo ve Insumos, y es la que se abre', async () => {
+  mockNivel = 'ADMINBODEGA';
+  render(<AdminApp />);
+
+  expect(pestanas()).toEqual(['Insumos']);
+  /* La pestaña inicial del contenedor es «operarios», que este nivel no ve: tiene que
+     caer en la primera suya en vez de quedarse en blanco. */
+  expect(await screen.findByText(/Bobina · Máquina 7/)).toBeInTheDocument();
+});
+
+test('Niveles: un CONSULTA ve las de planta pero sin acciones', async () => {
+  mockNivel = 'CONSULTA';
+  render(<AdminApp />);
+
+  expect(pestanas()).toEqual(PESTANAS_PLANTA);
+  expect(screen.queryByRole('tab', { name: 'Usuarios' })).not.toBeInTheDocument();
+  await screen.findByText('JONATHAN VICUÑA');
+  expect(screen.queryByRole('button', { name: 'Añadir' })).not.toBeInTheDocument();
+});
+
+test('Niveles: un nivel sin áreas lo dice en vez de romperse', async () => {
+  mockNivel = 'INVENTADO';
+  render(<AdminApp />);
+
+  expect(screen.queryAllByRole('tab')).toHaveLength(0);
+  expect(screen.getByText(/no tiene ninguna sección asignada/)).toBeInTheDocument();
 });

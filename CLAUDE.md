@@ -849,6 +849,12 @@ npx eslint --ext .js src/
   intacta pondría los segundos a cero—, que borrar un registro avisa de la salida no
   destructiva, y que un `ADMINPLANTA` edita pero no borra y un `CONSULTA` ve los
   campos deshabilitados.
+  Del reparto por áreas (2026-08-07): que un SUPERADMIN ve las once pestañas, un
+  `ADMINPLANTA` y un `ADMIN` solo las seis de planta, un `ADMINBODEGA` solo Insumos —y
+  que esa es la que se abre, porque la inicial del contenedor es «operarios», que no
+  ve—, un `CONSULTA` las seis sin controles de escritura, y que un nivel desconocido lo
+  dice en vez de romperse al buscar el componente. Las pestañas del admin son el
+  **primer** `tablist` de la página: los componentes de dentro traen los suyos.
   De la pestaña Correo (2026-08-07): que solo existe para un `SUPERADMIN`, que la
   contraseña **no viaja al guardar si no se escribió** (mandarla vacía la borraría), que
   el puerto viaja como número y no como el texto del input, que añadir un destinatario
@@ -1025,11 +1031,26 @@ no hizo falta ningún `UPDATE`. Aplica a los dos logins: el de la web y el
 `require_nivel` los exige **en el backend**, endpoint por endpoint; la web solo oculta
 los controles, que no es lo mismo.
 
-| Nivel | Puede |
-|---|---|
-| `SUPERADMIN` | todo, incluidos usuarios, `DELETE` de sesión y los borrados físicos |
-| `ADMINPLANTA` · `ADMINBODEGA` · `ADMIN` | operación diaria: corregir, cerrar turnos, catálogos, mensajes |
-| `CONSULTA` | **solo lectura**: los `GET` responden, cualquier escritura da **403** |
+**Reparto por áreas** (2026-08-07): antes había un solo nivel «operativo» y quien
+escribía, escribía en todo. Ahora cada nivel trabaja en la suya, y **`require_operativo`
+ya no existe**: si vuelve a hacer falta uno transversal, es señal de que el endpoint está
+en el área equivocada.
+
+| Nivel | Área | Ve en `/admin` |
+|---|---|---|
+| `SUPERADMIN` | todo | las 11 pestañas |
+| `ADMINPLANTA` · `ADMIN` | planta | Operarios, Producción, Paros, Checklists, Jerarquía, Mensajes |
+| `ADMINBODEGA` | insumos | solo Insumos |
+| `CONSULTA` | lectura de planta | las 6 de planta, sin ningún control de escritura |
+
+`ADMIN` es el nivel heredado y se comporta como `ADMINPLANTA`. **Reportes, Tablets,
+Usuarios y Correo son solo de `SUPERADMIN`**: no son operación diaria sino administración
+del propio sistema. Los borrados físicos y el `DELETE` de sesión siguen siendo suyos también.
+
+**Cuidado con `ADMINBODEGA`**: su pestaña lee del endpoint **público**
+`/api/insumos/dashboard`, así que por la API de admin solo puede llamar a `PUT /pedidos` y
+`PUT /entregas` (4 endpoints contando login y logout). Si algún día se protege ese
+endpoint público, bodega se queda sin poder leer nada.
 
 Los `GET` siguen pidiendo solo token válido. Un nivel insuficiente da **403**, no 401:
 la sesión es buena, lo que falta es permiso. `GET /api/admin/supervisores` (el selector
@@ -1157,6 +1178,10 @@ equipo con la hora mal puesta inventaría paros de horas o duraciones negativas.
 | Checklists | `GET /admin/checklists`, `PUT /admin/checklists/{id}` |
 | Jerarquía | `GET /admin/maquina_productos`, `GET /admin/maquina_fragancias`, `GET /admin/catalogos`, `POST`/`PUT`/`DELETE /admin/maquina_productos`, `POST`/`PUT /admin/maquina_fragancias`, `POST`/`PUT /admin/maquinas`, `POST /admin/marcas`, `POST /admin/presentaciones`, `POST /admin/fragancias` |
 | Mensajes | `GET /admin/sesiones_activas`, `POST /admin/mensajes/masivo` |
+| Paros | `GET`/`PUT /admin/paros`, `POST /admin/paros/{id}/cerrar`, `DELETE /admin/paros/{id}` |
+| Insumos (solo `ADMINBODEGA` y `SUPERADMIN`) | lectura del público `/api/insumos/dashboard`; `PUT`/`DELETE` de `/admin/pedidos/{id}` y `/admin/entregas/{id}` |
+| Reportes (solo `SUPERADMIN`) | `GET`/`PUT`/`DELETE` de `/admin/reportes_app` y `/admin/comentarios` |
+| Tablets (solo `SUPERADMIN`) | `GET`/`PUT`/`DELETE /admin/tablets` |
 | Usuarios (solo `SUPERADMIN`) | `GET/POST /admin/usuarios`, `PUT /admin/usuarios/{id}`, `GET /admin/niveles` |
 | Correo (solo `SUPERADMIN`) | `GET`/`PUT /admin/correo`, `POST /admin/correo/prueba`, `POST /admin/correo/semanal_ahora`, `GET /admin/correo/semanal_vista_previa` |
 
