@@ -53,3 +53,8 @@ frontend_sigep/.build-nuevo/
 
 # Skills de agentes: 73 MB / 4.3k archivos ajenos al proyecto
 agents/
+
+# Archivos de intercambio de vim (una sesión mal cerrada deja uno huérfano y
+# bloquea deploy.sh, que exige el árbol limpio).
+*.swp
+*.swo
