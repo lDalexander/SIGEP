@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Card, Button, Textarea, Checkbox, Estado, Aviso, useAviso, Label } from '../ui';
 import useApi from '../../lib/useApi';
+import { antiguedad } from '../../lib/format';
 import { admin, mensajeDeError } from '../../lib/adminApi';
 
 /* Plantillas que rellenan el textarea con un toque. */
@@ -149,16 +150,39 @@ export default function TabMensajes() {
                     </Label>
                   </div>
 
-                  <span
-                    className={`shrink-0 text-[13px] font-semibold ${
-                      s.tablet_online ? 'text-sig-ok' : 'text-sig-muted'
-                    }`}
-                  >
-                    {s.tablet_online ? 'ONLINE' : 'OFFLINE'}
-                  </span>
+                  {/* No dice si la tablet «está encendida» —eso no lo sabe nadie—
+                      sino cuándo verá el mensaje, que es lo que se decide aquí. El
+                      ONLINE/OFFLINE anterior salía del heartbeat con un umbral de
+                      60 s, y como los latidos llegan cada 20 minutos marcaba OFFLINE
+                      a máquinas que estaban produciendo. */}
+                  <div className="shrink-0 text-right">
+                    <span
+                      className={`text-[12px] font-semibold tracking-tight ${
+                        s.tablet_online ? 'text-sig-ok' : 'text-sig-muted'
+                      }`}
+                    >
+                      {s.tablet_online ? 'AL INSTANTE' : 'EN COLA'}
+                    </span>
+                    <Label className="block mt-1 text-sig-dim">
+                      {s.tablet_online
+                        ? 'conectada'
+                        : s.segundos_desde_contacto === null ||
+                          s.segundos_desde_contacto === undefined
+                          ? 'sin contacto'
+                          : `contacto hace ${antiguedad(s.segundos_desde_contacto)}`}
+                    </Label>
+                  </div>
                 </li>
               ))}
             </ul>
+          )}
+
+          {sesiones.length > 0 && (
+            <p className="sig-meta border-t border-sig-line px-5 py-3 text-sig-dim">
+              «En cola» no es un fallo: el mensaje se guarda y la tablet lo recibe en
+              cuanto vuelve a conectar. «Al instante» significa que su conexión está
+              abierta ahora mismo.
+            </p>
           )}
         </Card>
       </div>

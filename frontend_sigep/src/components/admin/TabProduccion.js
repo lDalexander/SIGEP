@@ -201,18 +201,26 @@ export default function TabProduccion() {
     }
   };
 
-  /* ¿La tablet de esta sesión sigue en línea? Solo lo sabemos de las activas. */
-  const tabletEnLinea = (sesion) =>
-    Boolean(
-      (Array.isArray(activas.datos) ? activas.datos : []).find(
-        (a) => a.sesion_id === sesion.id,
-      )?.tablet_online,
+  /* ¿Hay alguien todavía trabajando en esa tablet? Solo lo sabemos de las activas.
+     Aquí NO basta con `tablet_online` (que es tener el WebSocket abierto ahora): una
+     tablet puede estar produciendo con la conexión caída y sus pacas siguen llegando,
+     que es justo el caso en que cerrar el turno hace daño. Por eso cuenta también el
+     último contacto reciente, aunque ahora mismo no esté conectada. */
+  const CONTACTO_RECIENTE_S = 30 * 60;
+  const tabletEnLinea = (sesion) => {
+    const activa = (Array.isArray(activas.datos) ? activas.datos : []).find(
+      (a) => a.sesion_id === sesion.id,
     );
+    if (!activa) return false;
+    if (activa.tablet_online) return true;
+    const contacto = activa.segundos_desde_contacto;
+    return typeof contacto === 'number' && contacto <= CONTACTO_RECIENTE_S;
+  };
 
   const cerrarTurno = async (sesion) => {
     const enLinea = tabletEnLinea(sesion);
     const aviso = enLinea
-      ? '\n\n⚠ LA TABLET DE ESTA MÁQUINA SIGUE CONECTADA.\nSi hay alguien trabajando, sus pacas se seguirán registrando en un turno ya cerrado y su botón de finalizar dará error. Ciérralo solo si el turno quedó abandonado.'
+      ? '\n\n⚠ ESTA TABLET HA DADO SEÑALES DE VIDA HACE POCO.\nSi hay alguien trabajando, sus pacas se seguirán registrando en un turno ya cerrado y su botón de finalizar dará error. Ciérralo solo si el turno quedó abandonado.'
       : '';
     if (!window.confirm(
       `¿Cerrar el turno de ${sesion.operador} en ${sesion.maquina}?\n\n` +

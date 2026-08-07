@@ -130,10 +130,12 @@ const SESIONES_ACTIVAS = [
   {
     sesion_id: 372, maquina: 'Máquina 16', operador: 'ROLANDO MORAN',
     producto: 'TORBELLINO · 1 KG · Limón', inicio: '09:30', tablet_online: false,
+    segundos_desde_contacto: 1260,
   },
   {
     sesion_id: 376, maquina: 'Máquina 7', operador: 'WILSON BAYAS',
     producto: 'TORBELLINO · 1 KG · Floral', inicio: '07:33', tablet_online: true,
+    segundos_desde_contacto: 40,
   },
 ];
 
@@ -454,7 +456,7 @@ test('Producción: cerrar un turno con la tablet conectada avisa antes', async (
   fireEvent.click(screen.getByRole('button', { name: 'CERRAR TURNO' }));
 
   // La sesión 330 no está en SESIONES_ACTIVAS, así que no debe salir el aviso...
-  expect(window.confirm.mock.calls[0][0]).not.toMatch(/SIGUE CONECTADA/);
+  expect(window.confirm.mock.calls[0][0]).not.toMatch(/SEÑALES DE VIDA/);
   expect(window.confirm.mock.calls[0][0]).toMatch(/paro abierto y los pedidos/);
   await waitFor(() => expect(mockAdmin.post).toHaveBeenCalled());
 });
@@ -698,8 +700,14 @@ test('Mensajes: sin selección no se puede enviar, y «a todas» omite sesion_id
   irA('Mensajes');
 
   expect(await screen.findByText(/MÁQUINA 16 · ROLANDO MORAN/i)).toBeInTheDocument();
-  expect(screen.getByText('OFFLINE')).toBeInTheDocument();
-  expect(screen.getByText('ONLINE')).toBeInTheDocument();
+  /* El chip dice cuándo verá el mensaje, no si la tablet «está encendida»: con el
+     WebSocket abierto sale al instante, y si no, queda en cola con la antigüedad del
+     último contacto. El ONLINE/OFFLINE anterior salía del heartbeat con un umbral de
+     60 s y marcaba OFFLINE a máquinas que estaban produciendo. */
+  expect(screen.getByText('EN COLA')).toBeInTheDocument();
+  expect(screen.getByText('contacto hace 21m')).toBeInTheDocument();
+  expect(screen.getByText('AL INSTANTE')).toBeInTheDocument();
+  expect(screen.getByText('conectada')).toBeInTheDocument();
 
   const aSeleccionadas = screen.getByRole('button', { name: 'Enviar a seleccionadas' });
   expect(aSeleccionadas).toBeDisabled();
@@ -797,4 +805,59 @@ test('Inactividad: el 401 del backend explica el motivo en el login', async () =
 
   expect(screen.getByRole('button', { name: 'Entrar' })).toBeInTheDocument();
   expect(screen.getByRole('status')).toHaveTextContent(/inactividad/i);
+});
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Estado de la tablet (2026-08-07)
+
+   `tablet_online` pasó a significar «tiene el WebSocket abierto», que es lo que
+   decide si un mensaje sale al instante. Para cerrar un turno a mano hace falta
+   otra cosa: saber si queda alguien trabajando, y eso incluye a una tablet que
+   produce con la conexión caída. Por eso ahí cuenta también el último contacto.
+   ───────────────────────────────────────────────────────────────────────────── */
+function activasCon(extra) {
+  mockAdmin.get.mockImplementation((url) => {
+    if (url === '/sesiones_activas') {
+      return Promise.resolve({ data: [{
+        sesion_id: 330, maquina: 'Máquina 8', operador: 'KEVIN SORIANO',
+        producto: 'ULTREX · 500 GR · Limón', inicio: '11:19', ...extra,
+      }] });
+    }
+    if (url === '/sesiones')   return Promise.resolve({ data: SESIONES });
+    if (url === '/catalogos')  return Promise.resolve({ data: CATALOGOS });
+    if (url === '/operadores') return Promise.resolve({ data: OPERARIOS });
+    return Promise.reject(new Error(`sin mock para ${url}`));
+  });
+}
+
+test('Producción: una tablet sin conexión pero con contacto reciente también avisa', async () => {
+  // Sin WebSocket, pero dio señales hace 5 minutos: puede haber alguien produciendo.
+  activasCon({ tablet_online: false, segundos_desde_contacto: 300 });
+  render(<AdminApp />);
+  irA('Producción');
+  await screen.findByText(/Sesión #330/);
+
+  fireEvent.click(screen.getByRole('button', { name: 'CERRAR TURNO' }));
+  expect(window.confirm.mock.calls[0][0]).toMatch(/SEÑALES DE VIDA/);
+});
+
+test('Producción: una tablet con el último contacto muy antiguo no avisa', async () => {
+  // Dos horas sin dar señales: el turno está abandonado, cerrarlo no pisa a nadie.
+  activasCon({ tablet_online: false, segundos_desde_contacto: 7200 });
+  render(<AdminApp />);
+  irA('Producción');
+  await screen.findByText(/Sesión #330/);
+
+  fireEvent.click(screen.getByRole('button', { name: 'CERRAR TURNO' }));
+  expect(window.confirm.mock.calls[0][0]).not.toMatch(/SEÑALES DE VIDA/);
+});
+
+test('Producción: una tablet que nunca reportó no avisa (sin contacto no es contacto 0)', async () => {
+  activasCon({ tablet_online: false, segundos_desde_contacto: null });
+  render(<AdminApp />);
+  irA('Producción');
+  await screen.findByText(/Sesión #330/);
+
+  fireEvent.click(screen.getByRole('button', { name: 'CERRAR TURNO' }));
+  expect(window.confirm.mock.calls[0][0]).not.toMatch(/SEÑALES DE VIDA/);
 });

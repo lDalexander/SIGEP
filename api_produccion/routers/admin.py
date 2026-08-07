@@ -46,7 +46,7 @@ from models import (
     ComentarioTurnoDB,
     ReporteAppDB,
 )
-from routers.tablets import enviar_payload_ws, UMBRAL_OFFLINE_SEGUNDOS
+from routers.tablets import enviar_payload_ws, tablet_manager
 # Los estados de pedido se importan de `operaciones` en vez de repetirlos aquí: el
 # cierre manual de un turno tiene que dejar los pedidos exactamente igual que el
 # cierre desde la tablet, y si allí cambian, aquí cambian solos.
@@ -1248,23 +1248,51 @@ class MensajeAdminIn(BaseModel):
 
 @router.get("/sesiones_activas")
 def listar_sesiones_activas(db: Session = Depends(get_db), ctx=Depends(require_admin)):
-    """Sesiones de producción activas (turno abierto) + si su tablet está online."""
+    """Sesiones de producción activas (turno abierto) + si su tablet recibiría ya.
+
+    `tablet_online` responde a UNA pregunta concreta: ¿este mensaje sale al instante?
+    Por eso mira el **WebSocket abierto** (`tablet_manager.connections`) y no el
+    heartbeat.
+
+    Antes usaba el heartbeat con el umbral de 60 s de `/api/tablets/estado`, y era
+    engañoso: medido el 2026-08-07 sobre las cinco máquinas en turno, los latidos
+    llegaban cada 20-25 minutos (hoy: 7, 8, 20, 36 min y 2 h 45), así que el chip
+    decía OFFLINE casi siempre aunque la tablet estuviera produciendo. Un OFFLINE
+    permanente no informa de nada y hace dudar de la lista entera.
+
+    `segundos_desde_contacto` se mantiene aparte porque responde a otra pregunta —
+    ¿hay alguien ahí?— y es la que importa al cerrar un turno a mano: una tablet
+    puede estar trabajando con el WebSocket caído (el 2026-08-07 hubo 79 cierres de
+    WS en una jornada) y sus pacas siguen llegando.
+
+    Ojo si algún día el servicio pasa de `-w 1`: el registro de WebSockets vive en la
+    memoria de cada worker, así que una conexión atendida por otro proceso no se
+    vería desde aquí y saldría como «en cola». Se entregaría igual —los mensajes no
+    leídos viajan en la respuesta del heartbeat—, pero el rótulo se quedaría corto.
+    """
     sesiones = (
         db.query(SesionTrabajoDB)
         .filter(SesionTrabajoDB.fin_turno.is_(None))
         .order_by(SesionTrabajoDB.maquina.asc())
         .all()
     )
-    # Estado de tablets por máquina, para indicar si el mensaje llegará al instante.
     ahora = datetime.now()
     tablets = db.query(EstadoTabletDB).all()
-    online_por_maquina: dict[str, bool] = {}
+    conectadas = set(tablet_manager.connections.keys())
+    ws_por_maquina: dict[str, bool] = {}
+    contacto_por_maquina: dict[str, int] = {}
     for t in tablets:
         if not t.maquina:
             continue
-        en_linea = bool(t.en_linea_reportado) and t.ultimo_heartbeat is not None and \
-            (ahora - t.ultimo_heartbeat).total_seconds() <= UMBRAL_OFFLINE_SEGUNDOS
-        online_por_maquina[t.maquina] = online_por_maquina.get(t.maquina, False) or en_linea
+        if t.device_id in conectadas:
+            ws_por_maquina[t.maquina] = True
+        if t.ultimo_heartbeat is not None:
+            segundos = int((ahora - t.ultimo_heartbeat).total_seconds())
+            # Una máquina puede tener varias tablets registradas (recambios, bajas):
+            # vale la más reciente, que es la que de verdad está en la línea.
+            previo = contacto_por_maquina.get(t.maquina)
+            if previo is None or segundos < previo:
+                contacto_por_maquina[t.maquina] = segundos
 
     out = []
     for s in sesiones:
@@ -1275,7 +1303,10 @@ def listar_sesiones_activas(db: Session = Depends(get_db), ctx=Depends(require_a
             "operador": s.operador,
             "producto": producto,
             "inicio": s.inicio_turno.strftime("%H:%M") if s.inicio_turno else "",
-            "tablet_online": online_por_maquina.get(s.maquina, False),
+            "tablet_online": ws_por_maquina.get(s.maquina, False),
+            # None = esa tablet no ha reportado nunca. No es 0: pintarlo como «hace 0s»
+            # sería decir que acaba de conectarse.
+            "segundos_desde_contacto": contacto_por_maquina.get(s.maquina),
         })
     return out
 
