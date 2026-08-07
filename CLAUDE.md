@@ -16,6 +16,14 @@ industriales con sincronización offline-first.
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
 capturas de `referencia_ui/`. 136 tests en verde.
 
+El **estado de la tablet en la pestaña Mensajes** (2026-08-07) **ya está en producción**
+(worker `2225444`, frontend `main.898b7185.js`). Las cinco máquinas en turno salían
+`OFFLINE` aunque estuvieran produciendo: el chip miraba el heartbeat con el umbral de 60 s
+y **los latidos llegan cada 20-25 minutos** (medido: en 6 minutos de muestreo sobre las
+cinco, solo dos renovaron; una tablet cumple el umbral **1 minuto de cada 20**). Ahora sale
+del WebSocket abierto. Detalle abajo. Respaldo del build anterior:
+`~/respaldos_build_sigep/build_2026-08-07_104035`.
+
 La **caducidad de la sesión admin por inactividad** (2026-08-07) **ya está en producción**
 (backend con `kill -HUP`, worker nuevo `2222339`, y frontend `main.f9bcf32a.js`). Se
 comprobó antes en el dev server contra el 8001 con `ADMIN_INACTIVIDAD_MIN=1`, y después
@@ -84,6 +92,8 @@ heartbeat, sin errores en el log del servicio.
 | Tag previo a la gestión de usuarios | `v1.7-pre-gestion-usuarios` (en GitHub) |
 | Tag previo al historial de pacas | `v1.8-pre-historial-pacas` (en GitHub) |
 | Tag previo a la caducidad de sesión | `v1.9-pre-caducidad-sesion` (en GitHub) |
+| Tag previo al estado real de tablet | `v1.10-pre-estado-tablet` (en GitHub) |
+| Build previo al estado de tablet | `~/respaldos_build_sigep/build_2026-08-07_104035` |
 | Build previo a la caducidad de sesión | `~/respaldos_build_sigep/build_2026-08-07_101252` |
 | Build previo a estos dos cambios | `~/respaldos_build_sigep/build_2026-08-06_164105` |
 | Build previo a las fragancias | `~/respaldos_build_sigep/build_2026-08-06_130039` |
@@ -105,7 +115,32 @@ falta tag, y la prohibición de «limpiar» el árbol con `checkout`/`reset`/`cl
 
 ### Cambios de backend ya autorizados y aplicados
 
-Tras la reconstrucción se autorizaron **ocho** excepciones a la regla de oro:
+Tras la reconstrucción se autorizaron **nueve** excepciones a la regla de oro:
+
+- **Estado real de la tablet en `/admin/sesiones_activas`** (2026-08-07, **en producción**).
+  Un solo endpoint, admin-only, y **sin `ALTER`, sin tablas y sin rutas nuevas**.
+
+  - **El problema no era el chip, era lo que medía.** `tablet_online` exigía un heartbeat
+    de menos de 60 s (`UMBRAL_OFFLINE_SEGUNDOS`), y las tablets laten cada 20-25 min:
+    medido el 2026-08-07 sobre las cinco máquinas en turno, los últimos latidos eran de
+    hace 7, 8, 20, 36 min y 2 h 45, y en 6 minutos de muestreo cada 30 s **solo dos
+    renovaron**. Con ese umbral una tablet sale `ONLINE` **1 minuto de cada 20**, así que
+    el chip decía `OFFLINE` casi siempre y hacía dudar de la lista entera. Los nombres de
+    máquina casaban bien; no era un problema de emparejamiento.
+  - **`tablet_online` pasa a ser «tiene el WebSocket abierto»** (`tablet_manager.connections`,
+    en `routers/tablets.py`), que es la respuesta exacta a lo que el chip quiere decir:
+    si hay WS, el mensaje sale ya.
+  - **`segundos_desde_contacto` es una clave nueva** y responde a otra pregunta distinta:
+    ¿queda alguien ahí? Una tablet puede producir con el WS caído (79 cierres de WS en la
+    jornada del 2026-08-07), y esa es la que importa antes de cerrar un turno a mano.
+  - **Ojo si el servicio deja de ser `-w 1`**: el registro de WebSockets vive en la memoria
+    de cada worker, así que una conexión atendida por otro proceso se leería como «en cola».
+    El mensaje se entregaría igual —los no leídos viajan en el heartbeat—, pero el rótulo
+    se quedaría corto.
+  - Verificado con `diff` 8000 vs 8001 en **23 endpoints**, idénticos byte a byte, y la
+    función nueva probada contra la BD real (simulando el WS de la tablet de Máquina 7,
+    solo esa fila pasa a conectada). **Las tablets no necesitan actualización.**
+
 
 - **Caducidad de la sesión admin por inactividad** (2026-08-07, **en producción**). Un
   token admin no caducaba nunca: solo lo mataba «Salir» o un reinicio del
@@ -669,6 +704,11 @@ npx eslint --ext .js src/
   intacta pondría los segundos a cero—, que borrar un registro avisa de la salida no
   destructiva, y que un `ADMINPLANTA` edita pero no borra y un `CONSULTA` ve los
   campos deshabilitados.
+  Del estado de la tablet (2026-08-07): que el chip de Mensajes dice **cuándo verá el
+  mensaje** —«AL INSTANTE» con el WebSocket abierto, «EN COLA · contacto hace 21m» si
+  no— y que el aviso de cerrar turno salta también **sin conexión pero con contacto
+  reciente** (es el caso peligroso: alguien produciendo con el WS caído), no salta con
+  dos horas de silencio, y no confunde «nunca reportó» con «contacto hace 0s».
   De la caducidad por inactividad (2026-08-07): que a los 15 minutos sin tocar nada se
   vuelve al login **y se llama a `salir()`** —revocar el token en el servidor es la mitad
   del cambio; limpiar el estado local solo, no sirve—, que cualquier tecla reinicia la
@@ -877,7 +917,7 @@ de supervisor de las tablets) filtra por los niveles operativos, así que un usu
 | PUT | `/admin/maquinas/{id}` | `{nombre?, tipo?, activa?}` → alternar tipo y desactivar |
 | POST | `/admin/marcas` | `{nombre}` |
 | POST | `/admin/presentaciones` | `{nombre}` |
-| GET | `/admin/sesiones_activas` | `[{sesion_id,maquina,operador,producto,inicio,tablet_online}]` |
+| GET | `/admin/sesiones_activas` | `[{sesion_id,maquina,operador,producto,inicio,tablet_online,segundos_desde_contacto}]`. **`tablet_online` es «tiene el WebSocket abierto ahora»**, no el heartbeat: los latidos llegan cada 20-25 min y contra el umbral de 60 s de `/api/tablets/estado` una tablet en producción salía OFFLINE 19 de cada 20 minutos. `segundos_desde_contacto` (nuevo, 2026-08-07) es el último latido de la tablet más reciente de esa máquina, o `null` si nunca reportó |
 | POST | `/admin/mensajes` | `{sesion_id, texto}` — individual, máx. 500 caracteres |
 | POST | `/admin/mensajes/masivo` | `{texto, sesion_ids?}` — **lista vacía/ausente ⇒ TODAS las activas** |
 | PUT/DELETE | `/admin/pedidos/{id}`, `/admin/entregas/{id}` | corrección de cantidades de insumos |
