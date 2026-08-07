@@ -16,8 +16,9 @@ industriales con sincronización offline-first.
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
 capturas de `referencia_ui/`. 136 tests en verde.
 
-El **aviso por correo de los reportes de la app** (2026-08-07) está **implementado y
-probado, pero SIN DESPLEGAR**: el 8000 sigue con el código anterior. Detalle abajo.
+El **aviso por correo de los reportes de la app** (2026-08-07) **ya está en producción**
+(backend con `kill -HUP`, worker nuevo `2227985`). **No hubo despliegue de frontend**: el
+cambio es solo de API, así que el build sigue siendo `main.898b7185.js`. Detalle abajo.
 
 El **estado de la tablet en la pestaña Mensajes** (2026-08-07) **ya está en producción**
 (worker `2225444`, frontend `main.898b7185.js`). Las cinco máquinas en turno salían
@@ -121,8 +122,7 @@ falta tag, y la prohibición de «limpiar» el árbol con `checkout`/`reset`/`cl
 
 Tras la reconstrucción se autorizaron **diez** excepciones a la regla de oro:
 
-- **Aviso por correo de los reportes de la app** (2026-08-07, **implementado, sin
-  desplegar**). El botón de «reportar problema» de las tablets escribía en
+- **Aviso por correo de los reportes de la app** (2026-08-07, **en producción**). El botón de «reportar problema» de las tablets escribía en
   `reportes_app` y **no lo leía nadie**: no hay vista en la web ni notificación, así que
   un fallo reportado desde planta podía quedarse ahí semanas.
 
@@ -146,6 +146,13 @@ Tras la reconstrucción se autorizaron **diez** excepciones a la regla de oro:
   - Verificado con `diff` 8000 vs 8001 en **23 endpoints**, idénticos byte a byte, más el
     contrato de `/api/reportes_app` (texto vacío sigue dando 400, cuerpo incompleto 422).
     Correo real enviado y recibido. **Las tablets no necesitan actualización.**
+  - **Ojo con el `.env` y los `HUP`**: `sigep.service` lo carga con `EnvironmentFile`, que
+    systemd solo lee **al arrancar el servicio**, así que una variable añadida al `.env` no
+    llega a los workers de un `kill -HUP` por esa vía. Aquí funcionó porque
+    `email_service.py` llama a `load_dotenv()` al importarse y el `WorkingDirectory` del
+    unit es `api_produccion/`; se comprobó antes de recargar, reproduciendo el entorno
+    exacto del master. Para una variable que se consulte con `os.getenv` fuera de ese
+    módulo haría falta `systemctl restart`.
 
 
 - **Estado real de la tablet en `/admin/sesiones_activas`** (2026-08-07, **en producción**).
