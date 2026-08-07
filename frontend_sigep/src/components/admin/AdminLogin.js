@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Label, Button, Logo, Campo, Input } from '../ui';
+import { Label, Button, Logo, Campo, Input, Dot } from '../ui';
 import { entrar, mensajeDeError } from '../../lib/adminApi';
 
 /**
@@ -43,11 +43,25 @@ export default function AdminLogin({ onEntrar, onVolver, aviso = null }) {
 
         {/* Por qué se volvió al login sin que el usuario pulsara «Salir»: inactividad,
             o un reinicio del servicio que se llevó los tokens por delante. Se oculta
-            en cuanto hay un error del intento actual, que es más reciente. */}
+            en cuanto hay un error del intento actual, que es más reciente.
+
+            Va en un bloque ámbar y no como texto atenuado: en un tema oscuro, un
+            párrafo tenue más entre otros pasa desapercibido, y este mensaje aparece
+            sin que nadie lo espere — quien lo vea acaba de perder lo que estuviera
+            haciendo. El ámbar tintado al 12% es el mismo del resto de la UI
+            (`Badge` variante amber, chips de los segmentadores). */}
         {aviso && !error && (
-          <p role="status" className="sig-meta mt-6 -mb-1 text-sig-dim">
-            {aviso}
-          </p>
+          <div
+            role="status"
+            className="mt-6 flex items-start gap-2.5 rounded-xl border border-sig-amber/30
+                       bg-sig-amber/[0.12] px-3.5 py-3"
+          >
+            <Dot tono="amber" className="mt-[5px]" />
+            <div>
+              <Label className="block text-sig-amber">Sesión finalizada</Label>
+              <p className="mt-1.5 text-[13px] leading-snug text-sig-text">{aviso}</p>
+            </div>
+          </div>
         )}
 
         <div className="mt-7 space-y-4">
