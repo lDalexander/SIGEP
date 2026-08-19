@@ -97,16 +97,57 @@ export default function TabParos() {
     }
   };
 
+  /* Cerrar un paro EN CURSO y cerrar uno SIN CIERRE se parecen en la pantalla y no son
+     lo mismo, así que el aviso tampoco lo es. «SIN CIERRE» es para lo que se hizo este
+     botón: el turno ya acabó y el paro se quedó colgado. «EN CURSO» significa que hay
+     una tablet con el paro abierto AHORA, y su estado de paro es local: no se enterará
+     de este cierre y se quedará sin poder reanudar. Pasó el 2026-08-19 con la Máquina 7
+     —una hora sin registrar producción— y es la razón de que este aviso exista. */
   const cerrar = async (paro) => {
-    if (!window.confirm(
-      `¿Cerrar el paro #${paro.id} (${paro.categoria}) ahora mismo?\n\n` +
-      'Se registrará la hora actual como fin y se calculará su duración. ' +
-      'Si conoces la hora real, edítala en su lugar.'
-    )) return;
+    const enVivo = paro.estado === 'EN CURSO';
+    const texto = enVivo
+      ? `El paro #${paro.id} está EN CURSO en una tablet.\n\n` +
+        `${paro.categoria} · ${paro.maquina} · ${paro.operador}\n\n` +
+        'Lo normal es que lo cierre el operario desde la tablet. Si lo cierras aquí, la ' +
+        'tablet no se entera: su botón se queda en verde y al pulsar «reanudar» le dirá ' +
+        'que no hay paro activo.\n\n' +
+        'Ciérralo desde aquí solo si esa tablet ya no va a hacerlo. Si el operario sigue ' +
+        'trabajando, avísale de que cierre la app y la vuelva a abrir, o reabre el paro ' +
+        'después para que pueda reanudar él.\n\n' +
+        `¿Cerrar el paro #${paro.id} de todas formas?`
+      : `¿Cerrar el paro #${paro.id} (${paro.categoria}) ahora mismo?\n\n` +
+        'Se registrará la hora actual como fin y se calculará su duración. ' +
+        'Si conoces la hora real, edítala en su lugar.';
+    if (!window.confirm(texto)) return;
     setOcupado(paro.id);
     try {
       await admin.post(`/paros/${paro.id}/cerrar`, {});
       ok(`Paro #${paro.id} cerrado`);
+      recargar();
+    } catch (err) {
+      fallo(mensajeDeError(err));
+    } finally {
+      setOcupado(null);
+    }
+  };
+
+  /* Reabrir = `PUT {fin_paro: ''}`, que el backend entiende como «déjalo abierto otra
+     vez». Ya se podía hacer vaciando el campo «Fin» y guardando, pero eso hay que
+     adivinarlo, y es justo la maniobra que hace falta con prisa: es la contingencia
+     cuando una tablet se quedó atascada porque su paro se cerró por detrás. */
+  const reabrir = async (paro) => {
+    if (!window.confirm(
+      `¿Reabrir el paro #${paro.id} (${paro.categoria} · ${paro.maquina})?\n\n` +
+      'Vuelve a quedar sin hora de fin y sin duración, como si siguiera en curso.\n\n' +
+      'Sirve para desatascar una tablet que se quedó con el botón verde de reanudar y ' +
+      'responde «no hay paro activo»: al reabrirlo, el operario reanuda desde la tablet ' +
+      'y la hora de fin queda registrada con la real.'
+    )) return;
+    setOcupado(paro.id);
+    try {
+      await admin.put(`/paros/${paro.id}`, { fin_paro: '' });
+      ok(`Paro #${paro.id} reabierto · que el operario reanude desde la tablet`);
+      setAbierto(null);
       recargar();
     } catch (err) {
       fallo(mensajeDeError(err));
@@ -142,7 +183,8 @@ export default function TabParos() {
       <div className="flex items-start justify-between gap-4 mb-5">
         <Label caja="normal" className="text-sig-dim">
           Corregir lo que registraron las tablets · cambiar la hora de inicio mueve el
-          paro de día y de semana en los KPIs y en el reporte
+          paro de día y de semana en los KPIs y en el reporte · si una tablet dice «no hay
+          paro activo» al reanudar, reabre aquí su paro o pídele que reinicie la app
         </Label>
       </div>
 
@@ -213,6 +255,13 @@ export default function TabParos() {
                         del turno. Ciérralo para dejarla registrada.
                       </Label>
                     )}
+                    {paro.estado === 'EN CURSO' && (
+                      <Label className="block mb-3 text-sig-amber">
+                        La tablet tiene este paro abierto ahora mismo y su botón de
+                        reanudar es local: no se entera si lo cierras aquí. Deja que lo
+                        cierre el operario salvo que esa tablet ya no vaya a hacerlo.
+                      </Label>
+                    )}
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <Campo etiqueta="Categoría">
@@ -272,9 +321,13 @@ export default function TabParos() {
                         >
                           Guardar cambios
                         </Button>
-                        {paro.estado !== 'CERRADO' && (
+                        {paro.estado !== 'CERRADO' ? (
                           <Button onClick={() => cerrar(paro)} disabled={ocupado === paro.id}>
                             Cerrar ahora
+                          </Button>
+                        ) : (
+                          <Button onClick={() => reabrir(paro)} disabled={ocupado === paro.id}>
+                            Reabrir
                           </Button>
                         )}
                         {puedeBorrar && (

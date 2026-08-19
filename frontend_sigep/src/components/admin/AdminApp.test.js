@@ -193,7 +193,15 @@ const INSUMOS = {
 
 const PAROS = [
   /* Uno cerrado normal, uno sin cerrar con el turno ya cerrado (el caso «SIN CIERRE»
-     que dejaba el recolector) y uno con categoría que no está en la lista fija. */
+     que dejaba el recolector), uno con categoría que no está en la lista fija, y uno
+     EN CURSO: ese es el que tiene una tablet detrás con el botón verde puesto. */
+  {
+    id: 142, sesion_id: 531, maquina: 'Máquina 7', operador: 'CRISTHIAN CEDEÑO',
+    categoria: 'BODEGA', comentario: 'materia prima',
+    motivo: '[Bodega] - materia prima',
+    inicio_paro: '2026-08-19 15:01:28', fin_paro: null,
+    duracion_segundos: 900, duracion_estimada: false, estado: 'EN CURSO', sesion_existe: true,
+  },
   {
     id: 130, sesion_id: 447, maquina: 'Máquina 7', operador: 'CRISTHIAN CEDEÑO',
     categoria: 'ALMUERZO', comentario: null, motivo: 'ALMUERZO',
@@ -1194,6 +1202,81 @@ test('Paros: un ADMINPLANTA edita pero no borra; un CONSULTA no edita', async ()
   fireEvent.click(await screen.findByRole('button', { name: 'Paro 130' }));
   expect(screen.queryByRole('button', { name: 'Guardar cambios' })).not.toBeInTheDocument();
   expect(screen.getByLabelText('Comentario del paro 130')).toBeDisabled();
+});
+
+/* El incidente del 2026-08-19: un supervisor cerró desde aquí el paro 237, que estaba
+   vivo en la tablet de la Máquina 7. La tablet guarda su estado de paro en local y solo
+   lo apaga cuando el servidor le contesta bien, así que se quedó con el botón verde y
+   «no hay paro activo» al pulsarlo: una hora sin registrar producción. Lo que se protege
+   abajo es lo único que puede evitarlo desde la web —avisar antes— y la salida cuando ya
+   ha pasado: reabrir el paro de un clic. */
+
+test('Paros: un paro EN CURSO avisa de que hay una tablet detrás', async () => {
+  render(<AdminApp />);
+  irA('Paros');
+  fireEvent.click(await screen.findByRole('button', { name: 'Paro 142' }));
+
+  expect(screen.getByText(/su botón de reanudar es local/)).toBeInTheDocument();
+});
+
+test('Paros: cerrar un paro EN CURSO avisa de que la tablet se queda sin reanudar', async () => {
+  render(<AdminApp />);
+  irA('Paros');
+  fireEvent.click(await screen.findByRole('button', { name: 'Paro 142' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Cerrar ahora' }));
+
+  /* Lo que importa del texto: que nombra la consecuencia concreta (el «no hay paro
+     activo» que verá el operario) y la salida. Un «¿estás seguro?» genérico no habría
+     frenado el cierre del 2026-08-19. */
+  const texto = window.confirm.mock.calls[0][0];
+  expect(texto).toMatch(/no hay paro activo/);
+  expect(texto).toMatch(/vuelva a abrir/);
+  await waitFor(() => expect(mockAdmin.post).toHaveBeenCalledWith('/paros/142/cerrar', {}));
+});
+
+test('Paros: cerrar un SIN CIERRE no habla de tablets, que ahí ya no hay ninguna', async () => {
+  render(<AdminApp />);
+  irA('Paros');
+  fireEvent.click(await screen.findByRole('button', { name: 'Paro 118' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Cerrar ahora' }));
+
+  const texto = window.confirm.mock.calls[0][0];
+  expect(texto).toMatch(/Se registrará la hora actual/);
+  expect(texto).not.toMatch(/tablet/);
+});
+
+test('Paros: «Reabrir» manda fin_paro vacío, que es lo que deja el paro abierto', async () => {
+  render(<AdminApp />);
+  irA('Paros');
+  fireEvent.click(await screen.findByRole('button', { name: 'Paro 130' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Reabrir' }));
+
+  expect(window.confirm.mock.calls[0][0]).toMatch(/no hay paro activo/);
+  /* Cadena vacía, NO ausencia de la clave: el backend distingue «déjalo abierto» de
+     «no toques el fin», y mandar la clave fuera dejaría el paro cerrado igual. */
+  await waitFor(() => expect(mockAdmin.put).toHaveBeenCalledWith('/paros/130', { fin_paro: '' }));
+});
+
+test('Paros: «Reabrir» y «Cerrar ahora» nunca salen a la vez', async () => {
+  render(<AdminApp />);
+  irA('Paros');
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Paro 142' }));
+  expect(screen.getByRole('button', { name: 'Cerrar ahora' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Reabrir' })).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Paro 130' }));
+  expect(screen.getByRole('button', { name: 'Reabrir' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Cerrar ahora' })).not.toBeInTheDocument();
+});
+
+test('Paros: un CONSULTA no puede reabrir', async () => {
+  mockNivel = 'CONSULTA';
+  render(<AdminApp />);
+  irA('Paros');
+  fireEvent.click(await screen.findByRole('button', { name: 'Paro 130' }));
+
+  expect(screen.queryByRole('button', { name: 'Reabrir' })).not.toBeInTheDocument();
 });
 
 test('Paros: eliminar avisa de que es definitivo y sugiere corregir las horas', async () => {

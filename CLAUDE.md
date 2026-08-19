@@ -12,9 +12,66 @@ industriales con sincronización offline-first.
 
 ## 0. Estado actual
 
-**Última sesión: 2026-08-07.** El frontend está reconstruido y **desplegado en producción**
+**Última sesión: 2026-08-19.** El frontend está reconstruido y **desplegado en producción**
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
-capturas de `referencia_ui/`. 136 tests en verde.
+capturas de `referencia_ui/`. 182 tests en verde.
+
+**Contingencia de paros: la tablet que se queda sin poder reanudar** (2026-08-19).
+**Escrito y validado en el 8001; NO desplegado todavía** — falta el `kill -HUP` y el
+`./deploy.sh`. Tag previo: `v1.14-pre-contingencia-paros`.
+
+Salió de un incidente real de ese mismo día, y conviene leerlo antes de tocar esta parte:
+
+1. 15:01:28 — la tablet de **Máquina 7** (sesión 531) abre el paro **237**
+   (`[Mantenimiento] - desembobinador`).
+2. 15:19:43 — el admin `jvalle` (ADMINPLANTA) lo cierra desde **/admin → Paros**
+   (`POST /admin/paros/237/cerrar`). En la BD queda cerrado con 18m 16s.
+3. **Nada avisa a la tablet.** Su estado de paro es un flag en memoria de `MainActivity`,
+   y la app solo lo apaga dentro del callback de éxito de `/api/paro/finalizar`
+   (`llamarApiFinalizarParo$aplicarReanudacion` en el dex). El botón se queda en verde.
+4. Al pulsar «reanudar», `/api/paro/finalizar` no encuentra ninguna fila con `fin_paro`
+   NULL y responde **404 «No hay paro activo»** → la app **no** apaga el flag → bloqueo
+   permanente. La Máquina 7 estuvo **desde las 14:57 hasta las 16:20 sin registrar un
+   pallet**, y a las 16:06 el operario lo reportó desde la app (reporte id 4).
+
+Tres cosas que se aprendieron y que el arreglo da por sentadas:
+
+- **La app no persiste el estado de paro.** Se comprobó desensamblando
+  `static/sigep_latest.apk`: sus claves de preferencias son `sesion_activa`,
+  `turno_maquina`, `turno_operador` y `turno_pendiente_crear` — **ninguna de paro**. Por
+  eso **cerrar la app y volver a abrirla desatasca la tablet** y es la salida más rápida
+  en planta; el turno se restaura de `sesion_activa`.
+- **El 404 era invisible.** No dejaba ni una línea en el journal, así que nadie supo que
+  una máquina llevaba una hora atascada hasta que el operario lo reportó. El camino nuevo
+  loguea `warning`.
+- **Reabrir un paro ya se podía** (`PUT /admin/paros/{id} {fin_paro: ""}`, vaciando el
+  campo «Fin»), pero había que adivinarlo. Ahora es un botón.
+
+Qué se cambió:
+
+- **Backend** — `POST /api/paro/finalizar` (`routers/operaciones.py`) deja de dar 404
+  cuando la sesión **sí** tuvo paros y ninguno está abierto: responde **200 con los datos
+  reales del último paro** (`paro_id`, `duracion_segundos` registrada) más
+  `ya_cerrado: true`. El estado que la tablet quiere conseguir —no estar en paro— ya se
+  cumple, así que negarlo solo la bloquea. Cubre además la doble pulsación y el reintento
+  de la cola offline cuya respuesta se perdió. **Si la sesión no tuvo ningún paro sigue
+  dando 404**: un 200 ahí tendría que inventarse un `paro_id` y una duración.
+  **El camino normal no cambia una línea** —lo único que el `diff` borra es el `raise` del
+  404, que se movió dentro del caso nuevo— y **la clave `ya_cerrado` no se añade a la
+  respuesta del camino feliz**, para que siga siendo idéntica byte a byte.
+- **Frontend** — `/admin` → **Paros**: cerrar un paro **EN CURSO** y cerrar uno
+  **SIN CIERRE** se parecían en la pantalla y no son lo mismo. Ahora el paro EN CURSO
+  avisa en el desplegable de que hay una tablet detrás con su botón local, y su
+  confirmación nombra la consecuencia concreta («le dirá que no hay paro activo») y la
+  salida. Un «¿estás seguro?» genérico no habría frenado el cierre del 2026-08-19.
+  Botón **«Reabrir»** de un clic en los paros cerrados, que manda `{fin_paro: ""}`.
+- Verificado con `diff` 8000 vs 8001 en **24 endpoints**, todos idénticos byte a byte, y
+  el caso nuevo probado **contra la sesión 531 real** (el 8000 reproduce el 404, el 8001
+  responde 200 con el paro 237 y su duración de 1095.66 s). Es una llamada de solo
+  lectura cuando no hay paro abierto, así que no escribió nada: se comprobó después que el
+  paro 237 seguía cerrado a las 15:19:44 y los KPIs intactos. Cuerpo incompleto sigue
+  dando 422. **Las tablets no necesitan actualización** — de hecho el arreglo existe
+  precisamente para no depender de eso.
 
 **Administrar desde /admin lo que antes obligaba a entrar a MySQL** (2026-08-07) **ya
 está en producción** (worker `2245869`, frontend `main.022da3b5.js`), junto con el
@@ -114,6 +171,7 @@ heartbeat, sin errores en el log del servicio.
 | Tag previo al correo de reportes | `v1.11-pre-correo-reportes` (en GitHub) |
 | Tag previo al panel de correo | `v1.12-pre-config-correo` (en GitHub) |
 | Tag previo a excluir el almuerzo | `v1.13-pre-excluir-almuerzo` (en GitHub) |
+| Tag previo a la contingencia de paros | `v1.14-pre-contingencia-paros` (en GitHub) |
 | BD previa al `ALTER` de reportes | `backups/produccion_detg_pre_reportes_atendido_20260807_124057.sql.gz` |
 | Build previo al panel de correo | `~/respaldos_build_sigep/build_2026-08-07_114148` |
 | Build previo al estado de tablet | `~/respaldos_build_sigep/build_2026-08-07_104035` |
@@ -138,7 +196,11 @@ falta tag, y la prohibición de «limpiar» el árbol con `checkout`/`reset`/`cl
 
 ### Cambios de backend ya autorizados y aplicados
 
-Tras la reconstrucción se autorizaron **doce** excepciones a la regla de oro:
+Tras la reconstrucción se autorizaron **trece** excepciones a la regla de oro:
+
+- **Contingencia de paros** (2026-08-19, **escrito y validado, sin desplegar**).
+  `POST /api/paro/finalizar` tolera que el paro ya estuviera cerrado. Detalle arriba, en
+  «Contingencia de paros: la tablet que se queda sin poder reanudar».
 
 - **Administración de paros, insumos, reportes y tablets, y reparto por áreas**
   (2026-08-07, **en producción**).
@@ -460,20 +522,27 @@ Tras la reconstrucción se autorizaron **doce** excepciones a la regla de oro:
    `(máquina, marca, presentación)` pero **no** la fragancia, a propósito: activarla antes
    de que todas las tablets lean `/api/fragancias` rechazaría turnos legítimos. Cuando la
    app esté actualizada se puede añadir, con autorización aparte.
-3. **Paros sin cerrar** — el garbage collector de `tasks.py` cierra los turnos colgados a
+3. **`POST /api/paro/iniciar` tiene el desajuste simétrico y NO se ha tocado** (falta
+   autorización). Si ya existe un paro abierto responde **409** y la app, que solo entra en
+   modo paro en el callback de éxito, se queda creyendo que produce mientras la web la
+   muestra parada. Es alcanzable justo con la contingencia nueva: si el operario reinicia
+   la app y pulsa «registrar paro» sobre un paro reabierto desde `/admin`, verá un error.
+   El arreglo sería el mismo criterio que en `finalizar`: devolver 200 con el paro que ya
+   está abierto, sin sobrescribir su motivo.
+4. **Paros sin cerrar** — el garbage collector de `tasks.py` cierra los turnos colgados a
    las 13 h pero **no cierra los paros abiertos de esa sesión**, así que quedan con
    `fin_paro` NULL para siempre (hay 1 de 78 así: el paro 105). La vista de paros los
    distingue con el estado «SIN CIERRE» en vez de contarlos como paros en curso, pero el
    arreglo de fondo está en el backend y **no se ha tocado** (haría falta autorización).
-4. **Máquinas de línea líquida** — ya hay dos dadas de alta (`Máquina 3` y `Maquina 12`),
+5. **Máquinas de línea líquida** — ya hay dos dadas de alta (`Máquina 3` y `Maquina 12`),
    sin producción registrada todavía. Total: 8 máquinas activas, una de ellas `PRUEBA`.
-5. **Logo provisional** — `public/logo192.png` es el de Create React App. El de la cabecera
+6. **Logo provisional** — `public/logo192.png` es el de Create React App. El de la cabecera
    es un SVG hecho a partir de las capturas (`components/ui/Logo.js`); si aparece el
    original, se sustituye por un `<img>`.
-6. **Botón «Insumos» de la cabecera** — aparece en las capturas pero no hay ninguna captura
+7. **Botón «Insumos» de la cabecera** — aparece en las capturas pero no hay ninguna captura
    ni especificación de esa vista. Hoy muestra un aviso de «vista sin especificación de
    referencia». Falta decidir qué debe contener, o quitar el botón.
-7. **El total de estadísticas no cuadra con el KPI de producción**, y es **de siempre**, no
+8. **El total de estadísticas no cuadra con el KPI de producción**, y es **de siempre**, no
    de la segmentación: el rango de fechas de `estadisticas` filtra por `inicio_turno` de la
    sesión mientras `kpis` cuenta por `pallets.fecha_hora`. Sin ningún filtro, el 2026-08-05
    daban 1801 y 2767 pacas respectivamente. Con los segmentadores puestos la diferencia se
@@ -650,7 +719,7 @@ frontend_sigep/
     │       ├── AdminLogin.js
     │       ├── Ayuda.js, FiltroRango.js
     │       ├── TabOperarios / TabProduccion / TabChecklists / TabJerarquia / TabMensajes
-    │       ├── TabParos.js      # corregir, cerrar y borrar paros
+    │       ├── TabParos.js      # corregir, cerrar, reabrir y borrar paros
     │       ├── TabInsumos.js    # cantidades de pedidos y entregas
     │       ├── TabFeedback.js   # reportes de la app (se atienden) y comentarios
     │       ├── TabTablets.js    # registro de dispositivos
@@ -862,6 +931,14 @@ npx eslint --ext .js src/
   ve—, un `CONSULTA` las seis sin controles de escritura, y que un nivel desconocido lo
   dice en vez de romperse al buscar el componente. Las pestañas del admin son el
   **primer** `tablist` de la página: los componentes de dentro traen los suyos.
+  De la contingencia de paros (2026-08-19): que un paro **EN CURSO** avisa de que hay una
+  tablet detrás con su botón local, que su confirmación de cierre nombra la consecuencia
+  concreta —el «no hay paro activo» que verá el operario— y la salida, mientras la de un
+  **SIN CIERRE** ni menciona tablets porque ahí ya no hay ninguna, que «Reabrir» manda
+  `{fin_paro: ''}` —**cadena vacía, no la clave ausente**: el backend distingue «déjalo
+  abierto» de «no toques el fin»—, que «Reabrir» y «Cerrar ahora» nunca salen a la vez, y
+  que un `CONSULTA` no puede reabrir. El fixture `PAROS` incluye un paro EN CURSO por
+  esto.
   De la pestaña Correo (2026-08-07): que solo existe para un `SUPERADMIN`, que la
   contraseña **no viaja al guardar si no se escribió** (mandarla vacía la borraría), que
   el puerto viaja como número y no como el texto del input, que añadir un destinatario
@@ -974,6 +1051,14 @@ Opcionales en los cinco endpoints con rango. Formato `HH:MM` (también valen `HH
 Lo escriben las tablets con `POST /api/paro/iniciar` (`{sesion_id, motivo}`) y
 `POST /api/paro/finalizar`; **este endpoint solo lee** la tabla `paros_maquina`.
 El rango filtra por `inicio_paro`.
+
+**`POST /api/paro/finalizar` tolera que el paro ya esté cerrado** (2026-08-19). Con paro
+abierto se comporta exactamente igual que siempre. Si la sesión tuvo paros y **ninguno
+está abierto**, en vez de 404 devuelve **200** con el último paro (`paro_id`,
+`duracion_segundos` **registrada**, no recalculada) y `ya_cerrado: true`; esa clave **no
+aparece** en la respuesta del camino normal. Si la sesión **no tuvo ningún paro**, sigue
+dando **404**. El motivo está en §0: el estado de paro de la tablet es local y solo se
+apaga con una respuesta buena, así que el 404 la dejaba bloqueada sin poder producir.
 
 Respuesta: `{kpis, maquinas, paros, por_categoria}`.
 
@@ -1287,6 +1372,12 @@ números grandes en sans-serif bold.
 - Contraseñas de administrador en **texto plano** en la tabla `administradores`
   (`auth.py` compara con `==`; hay un `NOTA DE SEGURIDAD` en el código).
 - Tokens de sesión admin en memoria: se pierden al reiniciar el servicio.
+- **El estado de paro de la tablet y el de la BD pueden separarse, y la tablet no tiene
+  forma de resincronizarse.** Su flag vive en memoria de `MainActivity` y ninguna respuesta
+  del servidor se lo corrige: no hay endpoint que diga «esta sesión tiene un paro abierto»,
+  ni el heartbeat lo trae. El 2026-08-19 se tapó el lado que bloqueaba producción
+  (`/paro/finalizar` ya no da 404), pero el desajuste sigue existiendo y la salida en
+  planta sigue siendo reiniciar la app. El arreglo de fondo es de la app.
 - El garbage collector de turnos (`tasks.py`) cierra las sesiones colgadas a las 13 h
   pero **no cierra los paros abiertos de esas sesiones**, que quedan con `fin_paro` NULL
   a perpetuidad. La vista de paros lo compensa en lectura («SIN CIERRE»), pero el

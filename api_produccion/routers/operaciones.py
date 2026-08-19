@@ -458,9 +458,52 @@ def iniciar_paro(datos: IniciarParo, db: Session = Depends(get_db)):
 
 @router.post("/paro/finalizar")
 def finalizar_paro(datos: FinalizarParo, db: Session = Depends(get_db)):
+    """Cierra el paro abierto de la sesión y devuelve su duración.
+
+    **Tolera que el paro ya estuviera cerrado** (2026-08-19). El estado de paro de la
+    tablet es local: la app solo apaga su botón verde cuando esta llamada responde bien,
+    así que el 404 de antes la dejaba bloqueada *para siempre* si el paro se había cerrado
+    por otra vía — un supervisor desde `/admin` → Paros, una doble pulsación, o un
+    reintento de la cola offline cuya respuesta se perdió. Pasó con la Máquina 7 el
+    2026-08-19: el paro 237 se cerró desde la web a las 15:19 y la máquina estuvo 1 h sin
+    poder registrar producción, con el operario reportándolo por la app.
+
+    Cuando ya no hay paro abierto se responde **200 con los datos reales del último paro**
+    en vez de 404: el estado que la tablet quiere conseguir —no estar en paro— ya se
+    cumple, así que negarlo solo la bloquea. La clave `ya_cerrado` distingue el caso; el
+    camino normal **no la lleva**, para que su respuesta siga siendo idéntica a la de
+    siempre.
+    """
     paro = db.query(ParoMaquinaDB).filter(ParoMaquinaDB.session_id == datos.sesion_id, ParoMaquinaDB.fin_paro.is_(None)).order_by(ParoMaquinaDB.inicio_paro.desc()).first()
     if not paro:
-        raise HTTPException(status_code=404, detail="No hay paro activo")
+        # Si ningún paro de la sesión está abierto, el más reciente está cerrado por
+        # definición: se contesta con SU duración registrada, nunca con una inventada.
+        ultimo = (
+            db.query(ParoMaquinaDB)
+            .filter(ParoMaquinaDB.session_id == datos.sesion_id)
+            .order_by(ParoMaquinaDB.inicio_paro.desc())
+            .first()
+        )
+        if ultimo is None:
+            # La sesión no tuvo ningún paro. Aquí un 200 tendría que inventarse un
+            # `paro_id` y una duración que no existen, así que se mantiene el 404.
+            raise HTTPException(status_code=404, detail="No hay paro activo")
+        duracion = ultimo.duracion_segundos
+        if duracion is None and ultimo.fin_paro and ultimo.inicio_paro:
+            duracion = round((ultimo.fin_paro - ultimo.inicio_paro).total_seconds(), 2)
+        # Este log es la única traza del desajuste: el 404 de antes era invisible en el
+        # journal, y por eso nadie supo que la Máquina 7 llevaba una hora atascada.
+        logger.warning(
+            f"Reanudación sobre un paro ya cerrado: paro {ultimo.id} — sesión "
+            f"{datos.sesion_id}. La tablet lo tenía abierto en local; se responde OK "
+            "para desbloquearla."
+        )
+        return {
+            "paro_id": ultimo.id,
+            "mensaje": "El paro ya estaba cerrado",
+            "duracion_segundos": duracion,
+            "ya_cerrado": True,
+        }
     try:
         paro.fin_paro = datetime.now()
         paro.duracion_segundos = round((paro.fin_paro - paro.inicio_paro).total_seconds(), 2)
