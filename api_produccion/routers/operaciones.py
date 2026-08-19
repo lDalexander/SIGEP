@@ -2,13 +2,15 @@
 Router para los endpoints operacionales en piso de producción.
 Maneja el inicio de turnos, registro de pallets, y paros de máquina.
 """
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
+import os
+
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, File, UploadFile
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 
 from database import get_db, logger
-from models import OperadorDB, MaquinaDB, SesionTrabajoDB, PalletDB, ParoMaquinaDB, PedidoBodegaDB, UsuarioDB, InsumoDB, RecetaProductoDB, MaquinaProductoDB, MaquinaMarcaFraganciaDB, FraganciaDB, ComentarioTurnoDB, ReporteAppDB
-from schemas import IniciarTurno, RegistrarPalletRequest, FinalizarTurno, IniciarParo, FinalizarParo, ComentarioTurnoRequest, ReporteAppRequest
+from models import OperadorDB, MaquinaDB, SesionTrabajoDB, PalletDB, ParoMaquinaDB, PedidoBodegaDB, UsuarioDB, InsumoDB, RecetaProductoDB, MaquinaProductoDB, MaquinaMarcaFraganciaDB, FraganciaDB, ComentarioTurnoDB, ReporteAppDB, VelocidadMaquinaDB
+from schemas import IniciarTurno, RegistrarPalletRequest, FinalizarTurno, IniciarParo, FinalizarParo, ComentarioTurnoRequest, ReporteAppRequest, RegistrarVelocidad
 from ws_manager import manager
 from services.email_service import notificar_reporte_app
 
@@ -37,6 +39,22 @@ def _orden_presentacion(p: str):
 # Aplica incluso cuando el cliente no envía request_id (compatibilidad con apps viejas).
 # Un operador real registra 1 pallet cada 30-60 segundos, así que más de 3 inserts
 # en 5 segundos a la misma sesión es siempre anomalía.
+# Fotos de paro. Mismo sitio y mismos límites que las de entregas de insumo, que llevan
+# funcionando desde antes: se guarda el archivo en disco y en la BD solo su ruta.
+PAROS_FOTO_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static", "paros"
+)
+os.makedirs(PAROS_FOTO_DIR, exist_ok=True)
+FOTO_TIPOS = {"image/jpeg": "jpg", "image/png": "png"}
+FOTO_MAX_BYTES = 5 * 1024 * 1024
+
+# Rango aceptable de velocidad, en fundas/min. No es una preferencia estética: el campo lo
+# teclea una persona con guantes en una tablet, y un 0 o un 4500 por un dedo torcido
+# ensuciarían para siempre la media del turno. Los límites son generosos a propósito —se
+# trata de descartar erratas, no de imponer un ritmo.
+VELOCIDAD_MIN = 0.1
+VELOCIDAD_MAX = 1000.0
+
 ANTI_RAFAGA_VENTANA_SEG = 5
 ANTI_RAFAGA_MAX_INSERTS = 3
 
@@ -513,6 +531,186 @@ def finalizar_paro(datos: FinalizarParo, db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         logger.error(f"Error en /api/paro/finalizar: {e}")
+        raise HTTPException(status_code=500, detail="Error interno")
+
+
+# ============================================================================
+# CAMBIO 6 — Estado del paro, foto del paro y velocidad de máquina (2026-08-19)
+# ============================================================================
+# Las tres piezas salen del mismo sitio: la tablet lleva estado propio que el servidor no
+# puede corregir. `/paro/estado` es lo que le permite dejar de adivinar.
+
+
+def _paro_resumen(p):
+    """Forma mínima de un paro para que la tablet decida qué botón enseñar."""
+    return {
+        "paro_id": p.id,
+        "sesion_id": p.session_id,
+        "motivo": p.motivo or "",
+        "inicio_paro": p.inicio_paro.strftime("%Y-%m-%d %H:%M:%S") if p.inicio_paro else None,
+        "fin_paro": p.fin_paro.strftime("%Y-%m-%d %H:%M:%S") if p.fin_paro else None,
+        "duracion_segundos": p.duracion_segundos,
+        "abierto": p.fin_paro is None,
+        "tiene_foto": bool(p.foto_path),
+    }
+
+
+@router.get("/paro/estado")
+def estado_paro(sesion_id: int = Query(...), db: Session = Depends(get_db)):
+    """¿Tiene esta sesión un paro abierto ahora mismo?
+
+    Existe por el incidente del 2026-08-19: el estado de paro de la tablet vive en su
+    memoria y **nada se lo corrige**. Si el paro se cierra por otra vía —un supervisor
+    desde `/admin`, un reintento cuya respuesta se perdió— la tablet se queda con el botón
+    verde puesto y sin forma de enterarse. Con esto puede preguntar al arrancar y antes de
+    reanudar, y ajustar el botón a la verdad del servidor en vez de a lo que recuerda.
+
+    **Es de solo lectura y no cambia nada.** `paro_abierto` es `null` cuando la máquina no
+    está en paro: eso ya es la respuesta, no un error. `ultimo_paro` va aparte para que la
+    tablet pueda reconocer el paro que tenía cacheado y saber que se cerró y cuándo.
+    """
+    sesion = db.query(SesionTrabajoDB).filter(SesionTrabajoDB.id == sesion_id).first()
+    if not sesion:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+
+    abierto = (
+        db.query(ParoMaquinaDB)
+        .filter(ParoMaquinaDB.session_id == sesion_id, ParoMaquinaDB.fin_paro.is_(None))
+        .order_by(ParoMaquinaDB.inicio_paro.desc())
+        .first()
+    )
+    ultimo = (
+        db.query(ParoMaquinaDB)
+        .filter(ParoMaquinaDB.session_id == sesion_id)
+        .order_by(ParoMaquinaDB.inicio_paro.desc())
+        .first()
+    )
+    return {
+        "sesion_id": sesion_id,
+        "turno_abierto": sesion.fin_turno is None,
+        "en_paro": abierto is not None,
+        "paro_abierto": _paro_resumen(abierto) if abierto else None,
+        "ultimo_paro": _paro_resumen(ultimo) if ultimo else None,
+    }
+
+
+@router.post("/paro/{paro_id}/foto")
+def subir_foto_paro(
+    paro_id: int,
+    foto: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """Adjunta la evidencia fotográfica de un paro. **Opcional**: un paro sin foto es
+    normal y no se rechaza en ningún sitio.
+
+    Va en una ruta aparte y no dentro de `/paro/iniciar` **a propósito**: `iniciar` recibe
+    JSON y pasarlo a multipart rompería a todas las tablets que hay hoy en planta. Así la
+    app puede subir la foto cuando la tenga —al abrir el paro, al cerrarlo o más tarde— y
+    encolarla por separado si no hay red, sin bloquear el registro del paro, que es el dato
+    que de verdad no se puede perder.
+
+    Se puede sustituir volviendo a llamar: el operario que sale desenfocado necesita poder
+    repetirla. El archivo anterior se borra para no dejar huérfanos en `static/paros/`.
+    """
+    paro = db.query(ParoMaquinaDB).filter(ParoMaquinaDB.id == paro_id).first()
+    if paro is None:
+        raise HTTPException(status_code=404, detail="Paro no encontrado")
+
+    ext = FOTO_TIPOS.get(foto.content_type)
+    if not ext:
+        raise HTTPException(status_code=400, detail="La foto debe ser JPG o PNG")
+    contenido = foto.file.read()
+    if not contenido:
+        raise HTTPException(status_code=400, detail="La foto llegó vacía")
+    if len(contenido) > FOTO_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="La foto no debe superar 5 MB")
+
+    try:
+        anterior = paro.foto_path
+        sello = datetime.now().strftime("%Y%m%d%H%M%S")
+        nombre = f"{paro.id}_{paro.session_id or 0}_{sello}.{ext}"
+        with open(os.path.join(PAROS_FOTO_DIR, nombre), "wb") as f:
+            f.write(contenido)
+        paro.foto_path = f"/static/paros/{nombre}"
+        db.commit()
+
+        # Solo después de que la fila apunte al archivo nuevo: si se borrara antes y el
+        # commit fallara, el paro quedaría apuntando a un archivo que ya no existe.
+        if anterior and anterior != paro.foto_path:
+            try:
+                os.remove(os.path.join(PAROS_FOTO_DIR, os.path.basename(anterior)))
+            except OSError:
+                pass    # que no se pueda borrar el viejo no invalida la foto nueva
+
+        logger.info(f"📸 Foto de paro {paro.id} guardada ({len(contenido)} bytes)")
+        return {"paro_id": paro.id, "foto_url": paro.foto_path, "mensaje": "Foto guardada"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error en /api/paro/{paro_id}/foto: {e}")
+        raise HTTPException(status_code=500, detail="Error interno")
+
+
+@router.post("/velocidad")
+def registrar_velocidad(datos: RegistrarVelocidad, db: Session = Depends(get_db)):
+    """Guarda la velocidad a la que trabaja la máquina, en **fundas/min**, tal como la
+    teclea el operario.
+
+    Una fila por lectura: el ritmo cambia durante el turno y lo que sirve para medir
+    eficiencia es la serie, no el último valor. Idempotente por `request_id` con el mismo
+    criterio que los pallets —incluida la normalización del `""` que manda Gson, que en una
+    columna UNIQUE colisiona con el siguiente y revienta en 500.
+    """
+    rid = (datos.request_id or "").strip() or None
+    if rid:
+        ya = db.query(VelocidadMaquinaDB).filter(VelocidadMaquinaDB.request_id == rid).first()
+        if ya:
+            logger.info(
+                f"Velocidad duplicada ignorada: RID {rid} ya registrado "
+                f"(id {ya.id}, sesión {ya.session_id})"
+            )
+            return {
+                "mensaje": "Velocidad ya registrada previamente (idempotencia)",
+                "velocidad_id": ya.id,
+                "duplicado": True,
+            }
+
+    if not (VELOCIDAD_MIN <= datos.velocidad <= VELOCIDAD_MAX):
+        raise HTTPException(
+            status_code=400,
+            detail=f"La velocidad debe estar entre {VELOCIDAD_MIN} y {VELOCIDAD_MAX} fundas/min",
+        )
+
+    sesion = db.query(SesionTrabajoDB).filter(SesionTrabajoDB.id == datos.sesion_id).first()
+    if not sesion:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+    if sesion.fin_turno is not None:
+        raise HTTPException(status_code=400, detail="No se puede registrar en un turno finalizado")
+
+    try:
+        registro = VelocidadMaquinaDB(
+            session_id=datos.sesion_id,
+            velocidad=datos.velocidad,
+            fecha_hora=datetime.now(),
+            request_id=rid,
+        )
+        db.add(registro)
+        db.commit()
+        db.refresh(registro)
+        logger.info(
+            f"VELOCIDAD: {datos.velocidad} fundas/min — {sesion.maquina} "
+            f"({sesion.operador}) · sesión {datos.sesion_id}"
+        )
+        return {
+            "velocidad_id": registro.id,
+            "mensaje": "Velocidad registrada",
+            "velocidad": registro.velocidad,
+            "duplicado": False,
+        }
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error en /api/velocidad: {e}")
         raise HTTPException(status_code=500, detail="Error interno")
 
 

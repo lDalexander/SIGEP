@@ -25,11 +25,13 @@ from sqlalchemy.orm import Session
 
 from database import get_db, logger
 from sqlalchemy import text
+from routers.operaciones import PAROS_FOTO_DIR
 from models import (
     OperadorDB,
     AdministradorDB,
     SesionTrabajoDB,
     PalletDB,
+    VelocidadMaquinaDB,
     MantenimientoChecklistDB,
     MantenimientoChecklistItemDB,
     MaquinaDB,
@@ -388,6 +390,15 @@ def listar_sesiones(desde: str = Query(None), hasta: str = Query(None), db: Sess
     for s in sesiones:
         total = int(db.query(func.coalesce(func.sum(PalletDB.cantidad_pacas), 0)).filter(PalletDB.session_id == s.id).scalar() or 0)
         n = db.query(func.count(PalletDB.id)).filter(PalletDB.session_id == s.id).scalar() or 0
+        # Velocidad del turno (2026-08-19), en fundas/min. Promedio y nº de lecturas van
+        # juntos a propósito: una media de una sola lectura no describe un turno de ocho
+        # horas, y sin el contador nadie podría saberlo.
+        vel = (
+            db.query(func.avg(VelocidadMaquinaDB.velocidad), func.count(VelocidadMaquinaDB.id))
+            .filter(VelocidadMaquinaDB.session_id == s.id)
+            .first()
+        )
+        vel_prom, vel_n = (vel or (None, 0))
         out.append({
             "id": s.id, "maquina": s.maquina, "operador": s.operador,
             "marca": s.marca, "presentacion": s.presentacion, "fragancia": s.fragancia,
@@ -395,6 +406,8 @@ def listar_sesiones(desde: str = Query(None), hasta: str = Query(None), db: Sess
             "fin": s.fin_turno.strftime("%H:%M") if s.fin_turno else None,
             "estado": "Finalizado" if s.fin_turno else "Activo",
             "total_pacas": total, "n_registros": int(n),
+            "velocidad_promedio": round(float(vel_prom), 1) if vel_prom is not None else None,
+            "velocidad_lecturas": int(vel_n or 0),
         })
     return out
 
@@ -1809,6 +1822,9 @@ def _paro_publico(p, sesion=None):
         "duracion_segundos": _dur_segundos(p, fin_efectivo),
         "duracion_estimada": estimada,
         "estado": estado,
+        # Evidencia fotográfica opcional (2026-08-19): la ruta servida, o None. La web la
+        # enseña en el desplegable y ofrece quitarla si salió mal.
+        "foto_url": p.foto_path,
         # Un paro cuyo turno ya no existe: se puede corregir igual, pero conviene verlo.
         "sesion_existe": sesion is not None,
     }
@@ -1927,6 +1943,37 @@ def cerrar_paro(paro_id: int, datos: CerrarParoIn = None, db: Session = Depends(
     db.commit()
     logger.info(f"Paro {paro_id} cerrado manualmente en {fin:%Y-%m-%d %H:%M:%S} "
                 f"(admin {ctx.get('username')})")
+    sesion = db.query(SesionTrabajoDB).filter(SesionTrabajoDB.id == p.session_id).first()
+    return _paro_publico(p, sesion)
+
+
+@router.delete("/paros/{paro_id}/foto")
+def borrar_foto_paro(paro_id: int, db: Session = Depends(get_db), ctx=Depends(require_planta)):
+    """Quita la evidencia fotográfica de un paro, dejando el paro intacto.
+
+    Hace falta porque la foto la toma una persona con prisa: sale movida, sale la pared, o
+    sale alguien que no tiene por qué salir. Borrar el paro entero para arreglar eso sería
+    perder el registro del tiempo parado, que es el dato que importa.
+
+    Borra también el archivo de `static/paros/`: dejarlo huérfano lo mantendría accesible
+    por URL, y como `/static` se sirve sin autenticación eso no sería un borrado de verdad.
+    """
+    p = db.query(ParoMaquinaDB).filter(ParoMaquinaDB.id == paro_id).first()
+    if p is None:
+        raise HTTPException(status_code=404, detail="Paro no encontrado")
+    if not p.foto_path:
+        raise HTTPException(status_code=400, detail="Ese paro no tiene foto")
+
+    ruta_rel = p.foto_path
+    p.foto_path = None
+    db.commit()
+    try:
+        os.remove(os.path.join(PAROS_FOTO_DIR, os.path.basename(ruta_rel)))
+    except OSError as e:
+        # La fila ya no la referencia, que es lo que cuenta; el archivo suelto se
+        # informa en el log para poder limpiarlo a mano.
+        logger.warning(f"Foto de paro {paro_id} desreferenciada pero no borrada: {e}")
+    logger.info(f"Foto del paro {paro_id} eliminada (admin {ctx.get('username')})")
     sesion = db.query(SesionTrabajoDB).filter(SesionTrabajoDB.id == p.session_id).first()
     return _paro_publico(p, sesion)
 

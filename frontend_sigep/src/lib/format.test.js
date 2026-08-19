@@ -1,6 +1,6 @@
 import {
   num, pct, duracion, antiguedad, fechaCorta, fechaISO, turnoActual, etiquetaTablet, plural,
-  fechaEje, fechaLegible,
+  fechaEje, fechaLegible, velocidad,
 } from './format';
 
 describe('num — separador de miles es-EC', () => {
@@ -16,6 +16,27 @@ describe('num — separador de miles es-EC', () => {
 
   test.each([null, undefined, '', 'abc'])('num(%p) devuelve el guion largo', (entrada) => {
     expect(num(entrada)).toBe('—');
+  });
+});
+
+describe('velocidad — fundas/min, un decimal', () => {
+  test.each([
+    [45.5, '45,5'],
+    [45, '45'],
+    [43.266, '43,3'],   // se redondea, no se enseña la precisión falsa del promedio
+    [120, '120'],
+  ])('velocidad(%p) -> %p', (entrada, salida) => {
+    expect(velocidad(entrada)).toBe(salida);
+  });
+
+  /* Lo importante de este bloque: sin lectura NO sale un cero. Un «0 fundas/min» es una
+     cifra creíble —una máquina detenida— y aquí significaría solo que nadie la anotó. */
+  test.each([null, undefined, '', 'abc'])('velocidad(%p) no inventa un cero', (entrada) => {
+    expect(velocidad(entrada)).toBe('—');
+  });
+
+  test('un cero registrado de verdad sí se enseña', () => {
+    expect(velocidad(0)).toBe('0');
   });
 });
 

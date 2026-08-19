@@ -157,6 +157,20 @@ class PalletDB(Base):
     fecha_hora = Column(DateTime, default=lambda: datetime.now())
     request_id = Column(String(50), unique=True, index=True, nullable=True)
 
+class VelocidadMaquinaDB(Base):
+    """Velocidad a la que trabaja la máquina, en fundas/min, según la registra el operario.
+
+    Una fila por lectura y no una columna en la sesión: el ritmo cambia durante el turno y
+    lo que hace falta para medir eficiencia es la serie, no el último valor. `request_id`
+    es UNIQUE por lo mismo que en los pallets — las tablets reintentan hasta que entra.
+    """
+    __tablename__ = "registro_velocidad"
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, index=True)
+    velocidad = Column(Float)
+    fecha_hora = Column(DateTime, default=lambda: datetime.now())
+    request_id = Column(String(50), unique=True, index=True, nullable=True)
+
 class ParoMaquinaDB(Base):
     """Registro de los tiempos muertos o paros de máquina durante una sesión."""
     __tablename__ = "paros_maquina"
@@ -166,6 +180,13 @@ class ParoMaquinaDB(Base):
     inicio_paro = Column(DateTime, default=lambda: datetime.now())
     fin_paro = Column(DateTime, nullable=True)
     duracion_segundos = Column(Float, nullable=True)
+    # Evidencia fotográfica OPCIONAL (2026-08-19). Se guarda la ruta servida
+    # (`/static/paros/...`), nunca la imagen: mismo criterio que
+    # `entregas_proactivas.foto_path`, para que los dumps de `backups/` sigan pesando
+    # kilobytes. NULL = sin foto, que es el caso normal.
+    # Requiere el ALTER de `alter_paros_foto_velocidad.sql`: create_all() no añade
+    # columnas a una tabla que ya existe.
+    foto_path = Column(String(500), nullable=True)
 
 class PedidoBodegaDB(Base):
     """Tabla exclusiva para el MES: Solicitudes de operarios al Insumista"""

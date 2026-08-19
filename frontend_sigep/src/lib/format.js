@@ -10,6 +10,20 @@ export function num(v) {
   return Number.isFinite(n) ? n.toLocaleString('es-EC') : '—';
 }
 
+/**
+ * Velocidad de máquina -> "45,5" (fundas/min). Un decimal como máximo.
+ *
+ * Sin lectura devuelve «—» y NO cero: una máquina sin velocidad registrada no va a cero
+ * fundas/min, es que nadie la anotó. Mismo criterio que el resto de `format`, y aquí
+ * importa más porque el cero sería una cifra creíble.
+ */
+export function velocidad(v) {
+  if (v === null || v === undefined || v === '') return '—';
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '—';
+  return n.toLocaleString('es-EC', { maximumFractionDigits: 1 });
+}
+
 /** 28.23 -> "28.2%". Un decimal, como en las capturas. */
 export function pct(v) {
   const n = Number(v);

@@ -57,6 +57,18 @@ class FinalizarParo(BaseModel):
     """Esquema para registrar el fin de un paro activo."""
     sesion_id: int
 
+class RegistrarVelocidad(BaseModel):
+    """Velocidad de trabajo de la máquina, en fundas/min, tal como la teclea el operario.
+
+    `request_id` es opcional igual que en los pallets: cuando la tablet lo manda (UUID
+    generado al encolar la lectura), el backend garantiza que un reintento no crea una
+    segunda fila. Sin él no se puede distinguir un reintento de dos lecturas seguidas
+    iguales, que también son legítimas.
+    """
+    sesion_id: int
+    velocidad: float
+    request_id: Optional[str] = None
+
 class NuevoPedidoRequest(BaseModel):
     """Esquema para que los operadores soliciten insumos a bodega."""
     sesion_id: int

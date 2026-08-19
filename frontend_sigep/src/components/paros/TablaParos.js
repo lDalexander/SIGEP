@@ -133,6 +133,29 @@ export default function TablaParos({
                       />
                     </dl>
 
+                    {/* Evidencia fotográfica, si el operario la adjuntó (2026-08-19).
+                        La miniatura abre la imagen completa en otra pestaña: dentro de
+                        esta fila no cabe a un tamaño en el que se vea una pieza rota. */}
+                    {p.foto_url && (
+                      <div className="mt-3">
+                        <Label className="block mb-1.5">Evidencia fotográfica</Label>
+                        <a
+                          href={p.foto_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-block rounded-sig border border-sig-line overflow-hidden hover:border-sig-amber/60 transition-colors"
+                          title="Abrir la foto a tamaño completo"
+                        >
+                          <img
+                            src={p.foto_url}
+                            alt={`Evidencia del paro ${p.id}`}
+                            className="block h-28 w-auto max-w-full object-cover"
+                            loading="lazy"
+                          />
+                        </a>
+                      </div>
+                    )}
+
                     {p.estado === 'SIN CIERRE' && (
                       /* No se afirma que la máquina siga parada: el paro se quedó abierto
                          y el turno lo cerró el sistema. Se dice tal cual. */

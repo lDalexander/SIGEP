@@ -156,6 +156,27 @@ export default function TabParos() {
     }
   };
 
+  /* La foto la toma una persona con prisa: sale movida, sale la pared, o sale alguien que
+     no tiene por qué salir. Borrar el paro entero para arreglar eso perdería el registro
+     del tiempo parado, que es el dato que importa. */
+  const quitarFoto = async (paro) => {
+    if (!window.confirm(
+      `¿Quitar la foto del paro #${paro.id}?\n\n` +
+      'El paro y su duración se quedan como están; solo desaparece la imagen, también del ' +
+      'servidor. No se puede recuperar.'
+    )) return;
+    setOcupado(paro.id);
+    try {
+      await admin.delete(`/paros/${paro.id}/foto`);
+      ok(`Foto del paro #${paro.id} eliminada`);
+      recargar();
+    } catch (err) {
+      fallo(mensajeDeError(err));
+    } finally {
+      setOcupado(null);
+    }
+  };
+
   const eliminar = async (paro) => {
     if (!window.confirm(
       `¿ELIMINAR el paro #${paro.id}?\n\n` +
@@ -306,6 +327,26 @@ export default function TabParos() {
                       </Campo>
                     </div>
 
+                    {paro.foto_url && (
+                      <div className="mt-4">
+                        <Label className="block mb-1.5">Evidencia fotográfica</Label>
+                        <a
+                          href={paro.foto_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-block rounded-sig border border-sig-line overflow-hidden hover:border-sig-amber/60 transition-colors"
+                          title="Abrir la foto a tamaño completo"
+                        >
+                          <img
+                            src={paro.foto_url}
+                            alt={`Evidencia del paro ${paro.id}`}
+                            className="block h-28 w-auto max-w-full object-cover"
+                            loading="lazy"
+                          />
+                        </a>
+                      </div>
+                    )}
+
                     <Label className="block mt-3 text-sig-dim">
                       Turno {paro.sesion_id ?? '—'} · {paro.operador} · motivo original:{' '}
                       {paro.motivo || '—'}
@@ -328,6 +369,11 @@ export default function TabParos() {
                         ) : (
                           <Button onClick={() => reabrir(paro)} disabled={ocupado === paro.id}>
                             Reabrir
+                          </Button>
+                        )}
+                        {paro.foto_url && (
+                          <Button onClick={() => quitarFoto(paro)} disabled={ocupado === paro.id}>
+                            Quitar foto
                           </Button>
                         )}
                         {puedeBorrar && (

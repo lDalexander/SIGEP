@@ -29,10 +29,14 @@ const RESPUESTAS = {
     { hora: '08:00', pallets: 150, detalle: [{ maquina: 'Máquina 7', operario: 'X', producto: 'ULTREX', pacas: 150 }] },
   ],
   '/api/dashboard/estado_operativo': [
+    /* La 7 registró velocidad; la 9 no. Las dos filas conviven a propósito: son los dos
+       casos que la tabla tiene que distinguir sin inventarse un cero. */
     { sesion_id: 376, maquina: 'Máquina 7', operador: 'ANTHONY MERCADO', producto: 'ULTREX - Floral - 1 KG',
-      inicio_turno: '10:19:45', tiempo_transcurrido: 288, total_pacas: 300, estado: 'Activo' },
+      inicio_turno: '10:19:45', tiempo_transcurrido: 288, total_pacas: 300, estado: 'Activo',
+      velocidad_ultima: 45.5, velocidad_promedio: 43.2, velocidad_lecturas: 6, velocidad_hora: '15:04:11' },
     { sesion_id: 375, maquina: 'Máquina 9', operador: 'ALEX VALENZUELA', producto: 'TORBELLINO - Floral - 1 KG',
-      inicio_turno: '09:19:11', tiempo_transcurrido: 50, total_pacas: 150, estado: 'Finalizado' },
+      inicio_turno: '09:19:11', tiempo_transcurrido: 50, total_pacas: 150, estado: 'Finalizado',
+      velocidad_ultima: null, velocidad_promedio: null, velocidad_lecturas: 0, velocidad_hora: null },
   ],
   '/api/dashboard/top_produccion': [{ name: 'TORBELLINO', value: 1547 }],
   '/api/dashboard/estadisticas': {
@@ -87,7 +91,8 @@ const RESPUESTAS = {
         motivo: 'ALMUERZO', inicio: '2026-08-05 12:00:00', fin: '2026-08-05 12:15:00',
         fin_estimado: null, estado: 'CERRADO', en_curso: false, duracion_segundos: 900,
         duracion_estimada: false, inicio_turno: '2026-08-05 07:20:59',
-        fin_turno: '2026-08-05 16:00:00' },
+        fin_turno: '2026-08-05 16:00:00',
+        foto_url: '/static/paros/107_419_20260805120500.jpg' },
       { id: 105, sesion_id: 416, maquina: 'Máquina 16', operador: 'ROLANDO MORAN',
         producto: 'ULTREX · 1 KG · Floral', categoria: 'BODEGA', comentario: 'producto',
         motivo: '[Bodega] - producto', inicio: '2026-08-04 19:22:39', fin: null,
@@ -842,4 +847,56 @@ test('un valor filtrado que ya no está en el rango sigue visible y se puede qui
   await waitFor(() => expect(paramsDe('kpis')).toMatchObject({ desde: '2026-07-01', maquina: ['Máquina 7'] }));
   fireEvent.click(screen.getByRole('button', { name: 'Quitar Máquina Máquina 7' }));
   await waitFor(() => expect(paramsDe('kpis')).not.toHaveProperty('maquina'));
+});
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Velocidad de máquina y foto del paro (2026-08-19)
+
+   La velocidad la teclea el operario en la tablet (fundas/min) y aquí se lee. Lo
+   que se protege: que una sesión SIN lecturas no salga con un cero —sería una
+   máquina detenida, y solo significa que nadie la anotó— y que la foto, que es
+   opcional, no deje hueco cuando no está.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+test('la tabla de líneas enseña la velocidad y no inventa un cero sin lecturas', async () => {
+  render(<App />);
+  const tabla = await screen.findByRole('region', { name: 'Estado operativo · líneas' });
+
+  // La Máquina 7 registró 6 lecturas: sale la última, en formato es-EC.
+  expect(within(tabla).getByText('45,5')).toBeInTheDocument();
+  expect(within(tabla).getAllByText('Fundas/min').length).toBe(2);
+
+  /* La Máquina 9 no registró ninguna. Su celda es «—», y el título lo explica en vez
+     de dejar al supervisor adivinando si la máquina fue lentísima o si nadie anotó. */
+  const celdaSinVelocidad = within(tabla).getByTitle(/no registró ninguna velocidad/i);
+  expect(within(celdaSinVelocidad).getByText('—')).toBeInTheDocument();
+});
+
+test('el promedio y el número de lecturas van en el título, no como cifra principal', async () => {
+  render(<App />);
+  const tabla = await screen.findByRole('region', { name: 'Estado operativo · líneas' });
+
+  /* Una media de una sola lectura no describe un turno, así que el recuento viaja
+     pegado al promedio siempre, y en el mismo título que la hora de la última lectura. */
+  const celda = within(tabla).getByTitle(/promedio 43,2 de 6 lecturas/);
+  expect(celda).toHaveAttribute('title', expect.stringContaining('15:04:11'));
+  expect(within(celda).getByText('45,5')).toBeInTheDocument();
+});
+
+test('un paro con foto la enseña y enlaza a la imagen completa; sin foto no deja hueco', async () => {
+  await irAParos();
+
+  // El paro 107 (ALMUERZO) trae foto en el fixture.
+  fireEvent.click(await screen.findByRole('button', { name: /Máquina 7 · ALMUERZO · 12:00 · CERRADO/ }));
+  const foto = await screen.findByAltText('Evidencia del paro 107');
+  expect(foto).toHaveAttribute('src', '/static/paros/107_419_20260805120500.jpg');
+  /* Abre en otra pestaña: dentro de la fila no cabe a un tamaño en el que se vea una
+     pieza rota. */
+  const enlace = screen.getByRole('link', { name: 'Evidencia del paro 107' });
+  expect(enlace).toHaveAttribute('href', '/static/paros/107_419_20260805120500.jpg');
+  expect(enlace).toHaveAttribute('target', '_blank');
+
+  // El paro en curso no trae foto: no aparece el rótulo ni un recuadro vacío.
+  fireEvent.click(screen.getByRole('button', { name: /Máquina 7 · MANTENIMIENTO · 10:00 · EN CURSO/ }));
+  expect(screen.queryByAltText('Evidencia del paro 108')).not.toBeInTheDocument();
 });

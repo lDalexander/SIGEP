@@ -90,6 +90,7 @@ const SESIONES = [
     id: 330, maquina: 'Máquina 8', operador: 'KEVIN SORIANO', marca: 'ULTREX',
     presentacion: '500 GR', fragancia: 'Limón', inicio: '2026-07-23 11:19',
     fin: null, estado: 'Activo', total_pacas: 0, n_registros: 0,
+    velocidad_promedio: 43.2, velocidad_lecturas: 6,
   },
   /* Finalizada y con producción: no debe ofrecer «CERRAR TURNO», y su borrado
      exige teclear el número por tener pacas registradas. */
@@ -97,6 +98,8 @@ const SESIONES = [
     id: 331, maquina: 'Máquina 7', operador: 'PEDRO SARABIA', marca: 'PQP',
     presentacion: '25 KG', fragancia: 'Floral', inicio: '2026-07-23 07:10',
     fin: '15:40', estado: 'Finalizado', total_pacas: 480, n_registros: 12,
+    /* Sin ninguna lectura: las sesiones anteriores a este cambio nunca tendrán. */
+    velocidad_promedio: null, velocidad_lecturas: 0,
   },
 ];
 
@@ -207,6 +210,7 @@ const PAROS = [
     categoria: 'ALMUERZO', comentario: null, motivo: 'ALMUERZO',
     inicio_paro: '2026-08-07 11:52:21', fin_paro: '2026-08-07 12:31:54',
     duracion_segundos: 2373, duracion_estimada: false, estado: 'CERRADO', sesion_existe: true,
+    foto_url: '/static/paros/130_447_20260807115300.jpg',
   },
   {
     id: 118, sesion_id: 440, maquina: 'Máquina 9', operador: 'ROSENDO VALENZUELA',
@@ -1277,6 +1281,51 @@ test('Paros: un CONSULTA no puede reabrir', async () => {
   fireEvent.click(await screen.findByRole('button', { name: 'Paro 130' }));
 
   expect(screen.queryByRole('button', { name: 'Reabrir' })).not.toBeInTheDocument();
+});
+
+/* Foto del paro y velocidad de máquina (2026-08-19). Las dos son datos que las tablets
+   empiezan a mandar; lo que se protege aquí es que la web no finja tenerlos cuando no
+   están, y que quitar una foto no se lleve por delante el registro del paro. */
+
+test('Paros: la foto del paro se enseña y enlaza a la imagen completa', async () => {
+  render(<AdminApp />);
+  irA('Paros');
+  fireEvent.click(await screen.findByRole('button', { name: 'Paro 130' }));
+
+  expect(screen.getByAltText('Evidencia del paro 130'))
+    .toHaveAttribute('src', '/static/paros/130_447_20260807115300.jpg');
+  const enlace = screen.getByRole('link', { name: 'Evidencia del paro 130' });
+  expect(enlace).toHaveAttribute('href', '/static/paros/130_447_20260807115300.jpg');
+  expect(enlace).toHaveAttribute('target', '_blank');
+});
+
+test('Paros: «Quitar foto» solo sale si hay foto, y no toca el paro', async () => {
+  render(<AdminApp />);
+  irA('Paros');
+
+  // El 118 no tiene foto: no ofrece quitarla ni deja un recuadro vacío.
+  fireEvent.click(await screen.findByRole('button', { name: 'Paro 118' }));
+  expect(screen.queryByRole('button', { name: 'Quitar foto' })).not.toBeInTheDocument();
+  expect(screen.queryByAltText('Evidencia del paro 118')).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Paro 130' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Quitar foto' }));
+
+  /* Va a la subruta /foto, NO al paro: borrar el paro para arreglar una foto movida
+     perdería el registro del tiempo parado. */
+  expect(window.confirm.mock.calls[0][0]).toMatch(/El paro y su duración se quedan como están/);
+  await waitFor(() => expect(mockAdmin.delete).toHaveBeenCalledWith('/paros/130/foto'));
+});
+
+test('Producción: la velocidad media sale solo cuando hay lecturas', async () => {
+  render(<AdminApp />);
+  irA('Producción');
+
+  // La sesión 330 tiene 6 lecturas: promedio y recuento juntos, que es lo que da contexto.
+  expect(await screen.findByText(/43,2 fundas\/min · 6 lecturas/)).toBeInTheDocument();
+  /* La 331 no tiene ninguna, y no se pinta un «—» permanente: las sesiones anteriores al
+     cambio nunca van a tener lecturas y sería ruido en cada fila. */
+  expect(screen.queryByText(/0 lecturas/)).not.toBeInTheDocument();
 });
 
 test('Paros: eliminar avisa de que es definitivo y sugiere corregir las horas', async () => {

@@ -13,7 +13,7 @@ from io import BytesIO
 from fastapi.responses import StreamingResponse
 
 from database import get_db, logger
-from models import PalletDB, SesionTrabajoDB, ParoMaquinaDB, MaquinaDB, ComentarioTurnoDB
+from models import PalletDB, SesionTrabajoDB, ParoMaquinaDB, MaquinaDB, ComentarioTurnoDB, VelocidadMaquinaDB
 
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
@@ -283,6 +283,54 @@ def obtener_estado_operativo(desde: str = Query(None), hasta: str = Query(None),
         q = _aplicar_filtros(q, maquina, operador, marca, presentacion, fragancia)
         q = _aplicar_horas(q, SesionTrabajoDB.inicio_turno, hora_desde, hora_hasta)
         sesiones = q.order_by(SesionTrabajoDB.inicio_turno.desc()).all()
+
+        # Velocidad de cada sesión (2026-08-19), en una sola consulta agrupada y no una
+        # por fila: son hasta 21 tablets y esto se repinta cada 15 segundos.
+        # Se dan las tres cifras porque responden a preguntas distintas: la ÚLTIMA es a
+        # qué ritmo va ahora, el PROMEDIO cómo fue el turno, y el número de LECTURAS es
+        # lo que dice si el promedio significa algo — una media de una sola lectura
+        # tomada al arrancar la máquina no describe el turno.
+        vel_por_sesion = {}
+        if sesiones:
+            ids = [s.id for s in sesiones]
+            filas_vel = (
+                db.query(
+                    VelocidadMaquinaDB.session_id,
+                    func.avg(VelocidadMaquinaDB.velocidad),
+                    func.count(VelocidadMaquinaDB.id),
+                    func.max(VelocidadMaquinaDB.fecha_hora),
+                )
+                .filter(VelocidadMaquinaDB.session_id.in_(ids))
+                .group_by(VelocidadMaquinaDB.session_id)
+                .all()
+            )
+            ultimas = {}
+            if filas_vel:
+                # La última lectura de cada sesión: `max(fecha_hora)` da la hora, no el
+                # valor, así que hace falta traer esas filas.
+                for sid, fecha in [(f[0], f[3]) for f in filas_vel]:
+                    if fecha is None:
+                        continue
+                    reg = (
+                        db.query(VelocidadMaquinaDB.velocidad)
+                        .filter(
+                            VelocidadMaquinaDB.session_id == sid,
+                            VelocidadMaquinaDB.fecha_hora == fecha,
+                        )
+                        .order_by(VelocidadMaquinaDB.id.desc())
+                        .first()
+                    )
+                    if reg:
+                        ultimas[sid] = (float(reg[0]), fecha)
+            for sid, promedio, lecturas, _ in filas_vel:
+                ultima, ultima_hora = ultimas.get(sid, (None, None))
+                vel_por_sesion[sid] = {
+                    "velocidad_ultima": ultima,
+                    "velocidad_promedio": round(float(promedio), 1) if promedio is not None else None,
+                    "velocidad_lecturas": int(lecturas or 0),
+                    "velocidad_hora": ultima_hora.strftime("%H:%M:%S") if ultima_hora else None,
+                }
+
         resultados = []
         for s in sesiones:
             pallets_sesion = db.query(func.coalesce(func.sum(PalletDB.cantidad_pacas), 0)).filter(PalletDB.session_id == s.id).scalar()
@@ -298,7 +346,14 @@ def obtener_estado_operativo(desde: str = Query(None), hasta: str = Query(None),
             resultados.append({
                 "sesion_id": s.id, "maquina": s.maquina, "operador": s.operador, "producto": producto,
                 "inicio_turno": s.inicio_turno.strftime("%H:%M:%S") if s.inicio_turno else "",
-                "tiempo_transcurrido": tiempo_transcurrido, "total_pacas": int(pallets_sesion), "estado": estado
+                "tiempo_transcurrido": tiempo_transcurrido, "total_pacas": int(pallets_sesion), "estado": estado,
+                # Las cuatro claves van siempre, con None cuando la sesión no tiene
+                # ninguna lectura: así la web distingue «no registraron velocidad» de
+                # «registraron 0», que con un cero por defecto serían la misma cosa.
+                **vel_por_sesion.get(s.id, {
+                    "velocidad_ultima": None, "velocidad_promedio": None,
+                    "velocidad_lecturas": 0, "velocidad_hora": None,
+                })
             })
         return resultados
     except Exception as e:
@@ -628,6 +683,9 @@ def obtener_paros(desde: str = Query(None), hasta: str = Query(None),
                 "duracion_estimada": estimada,
                 "inicio_turno": _fmt(s.inicio_turno) if s is not None else None,
                 "fin_turno": _fmt(s.fin_turno) if s is not None else None,
+                # Ruta servida por StaticFiles, o None si el operario no adjuntó nada —
+                # que es el caso normal: la foto es opcional (2026-08-19).
+                "foto_url": p.foto_path,
             })
             a = acum_maq.setdefault(nombre_maq, {"paros": 0, "segundos": 0.0})
             a["paros"] += 1

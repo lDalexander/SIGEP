@@ -16,9 +16,62 @@ industriales con sincronización offline-first.
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
 capturas de `referencia_ui/`. 182 tests en verde.
 
+**Foto del paro, velocidad de máquina y `GET /api/paro/estado`** (2026-08-19).
+**Escrito, con tests y lint en verde; NO desplegado, y el `ALTER` está PENDIENTE de
+ejecutar.** Tag previo: `v1.15-pre-foto-velocidad`.
+
+⚠️ **Antes de recargar el backend hay que ejecutar `alter_paros_foto_velocidad.sql`.**
+`models.py` ya declara `paros_maquina.foto_path` y la columna **todavía no existe en
+MySQL**, así que un `kill -HUP` ahora dejaría toda lectura de paros dando error 500. El
+servicio vivo no corre peligro porque tiene el código anterior cargado en memoria.
+
+**La tabla `registro_velocidad` ya está creada**, y no la creó nadie a mano: la creó
+`Base.metadata.create_all()` al importar el modelo para una comprobación. Es exactamente
+lo que este archivo ya advertía que pasa con las tablas nuevas. Es aditiva y está vacía, así
+que es inocua; la columna `foto_path` **no** se creó sola, porque `create_all` nunca altera
+una tabla que ya existe.
+
+- **Foto opcional en cada paro.** Copia el patrón que ya funciona en las entregas de
+  insumo: se guarda la **ruta** (`/static/paros/...`) y nunca la imagen, para que los dumps
+  de `backups/` sigan pesando kilobytes y restaurar la BD siga siendo cosa de segundos.
+  JPG/PNG, máximo 5 MB. La app **ya tiene cámara** («TOMAR FOTO», `fotoUri`, `fotoPart`):
+  esto es reutilizar esa pantalla, no construirla.
+  `POST /api/paro/{paro_id}/foto` es **ruta nueva y aparte de `/paro/iniciar` a
+  propósito**: `iniciar` recibe JSON y pasarlo a multipart rompería a todas las tablets de
+  la planta. Se ve en `/paros` y en `/admin` → Paros, y desde allí se puede quitar
+  (`DELETE /admin/paros/{id}/foto`), que hace falta porque la foto la toma alguien con
+  prisa y borrar el paro entero para arreglarla perdería el tiempo parado.
+  **Ojo:** `/static/` se sirve **sin autenticación**, igual que las fotos de entregas.
+- **Velocidad de máquina, en fundas/min.** Botón nuevo en la tablet debajo de «REGISTRAR
+  PALLET». Es **una fila por lectura** (`registro_velocidad`) y no una columna en la
+  sesión: el ritmo cambia durante el turno y para medir eficiencia hace falta la serie, no
+  el último valor. `POST /api/velocidad`, idempotente por `request_id` con el mismo
+  criterio que los pallets —incluida la normalización del `""` de Gson, que en una columna
+  UNIQUE colisiona y revienta en 500. Rango aceptado 0.1–1000: no es estética, es que el
+  campo lo teclea alguien con guantes y un 4500 por un dedo torcido ensuciaría la media
+  para siempre.
+  Se lee en la tabla de líneas del dashboard (última lectura, con promedio y nº de lecturas
+  en el título) y en `/admin` → Producción (promedio · lecturas). **El promedio nunca va
+  solo**: una media de una sola lectura no describe un turno de ocho horas.
+- **`GET /api/paro/estado?sesion_id=`** — ruta nueva, de solo lectura, para que la tablet
+  deje de adivinar. Devuelve `en_paro`, `paro_abierto` y `ultimo_paro`. Es la mitad de la
+  contingencia que le toca a la app: el arreglo del 404 evita el bloqueo, pero solo esto
+  permite que el botón nazca correcto al arrancar. Contrato completo en
+  `CAMBIO_ANDROID_paro_estado_foto_velocidad.md`.
+- **Sin lectura no se inventa un cero.** `velocidad()` en `lib/format.js` devuelve «—»
+  cuando no hay dato, y las cuatro claves de velocidad viajan siempre con `null`: un cero
+  por defecto sería indistinguible de una máquina detenida.
+- **Dos respuestas existentes cambian de forma** (no las consume ninguna tablet, solo esta
+  web): `/dashboard/paros` y `/admin/paros` añaden `foto_url`; `/dashboard/estado_operativo`
+  añade las cuatro claves de velocidad y `/admin/sesiones` dos. Mismo criterio con el que se
+  añadió `fragancias` a `/admin/catalogos`.
+
 **Contingencia de paros: la tablet que se queda sin poder reanudar** (2026-08-19).
-**Escrito y validado en el 8001; NO desplegado todavía** — falta el `kill -HUP` y el
-`./deploy.sh`. Tag previo: `v1.14-pre-contingencia-paros`.
+**Ya está en producción** (worker `3127121`, frontend `main.d737d2e6.js`). Se recargó
+aprovechando una ventana con **0 turnos activos**, y se comprobó después que
+`/api/maquinas` seguía idéntica byte a byte al snapshot previo y que los KPIs (3288 pacas ·
+50 sacos) no se movieron. Tag previo: `v1.14-pre-contingencia-paros`; respaldo del build
+anterior: `~/respaldos_build_sigep/build_2026-08-19_165958`.
 
 Salió de un incidente real de ese mismo día, y conviene leerlo antes de tocar esta parte:
 
@@ -172,6 +225,8 @@ heartbeat, sin errores en el log del servicio.
 | Tag previo al panel de correo | `v1.12-pre-config-correo` (en GitHub) |
 | Tag previo a excluir el almuerzo | `v1.13-pre-excluir-almuerzo` (en GitHub) |
 | Tag previo a la contingencia de paros | `v1.14-pre-contingencia-paros` (en GitHub) |
+| Tag previo a la foto y la velocidad | `v1.15-pre-foto-velocidad` (en GitHub) |
+| Build previo a la contingencia de paros | `~/respaldos_build_sigep/build_2026-08-19_165958` |
 | BD previa al `ALTER` de reportes | `backups/produccion_detg_pre_reportes_atendido_20260807_124057.sql.gz` |
 | Build previo al panel de correo | `~/respaldos_build_sigep/build_2026-08-07_114148` |
 | Build previo al estado de tablet | `~/respaldos_build_sigep/build_2026-08-07_104035` |
@@ -518,31 +573,38 @@ Tras la reconstrucción se autorizaron **trece** excepciones a la regla de oro:
      `GET /api/fragancias?maquina=&marca=` → `api_produccion/CAMBIO_ANDROID_fragancias.md`.
      **Mientras no lo haga, configurar fragancias en la web no cambia lo que ve el
      operario en la tablet.**
-2. **Validación de fragancia en `iniciar_turno`** — hoy valida
+2. **App Android — las tres cosas del 2026-08-19**, especificadas en
+   `CAMBIO_ANDROID_paro_estado_foto_velocidad.md` y **sin implementar en la app**: leer
+   `GET /api/paro/estado` para que el botón de paro nazca de lo que sabe el servidor y no de
+   su memoria (guardando el `paro_id` que ya devuelve `/paro/iniciar` y que hoy descarta),
+   el botón de cámara opcional en el paro, y el botón «VELOCIDAD MAQ» debajo de «REGISTRAR
+   PALLET». Hasta que se implementen, **la foto y la velocidad no tienen quién las mande**:
+   los endpoints y las pantallas de la web están listos y vacíos.
+3. **Validación de fragancia en `iniciar_turno`** — hoy valida
    `(máquina, marca, presentación)` pero **no** la fragancia, a propósito: activarla antes
    de que todas las tablets lean `/api/fragancias` rechazaría turnos legítimos. Cuando la
    app esté actualizada se puede añadir, con autorización aparte.
-3. **`POST /api/paro/iniciar` tiene el desajuste simétrico y NO se ha tocado** (falta
+4. **`POST /api/paro/iniciar` tiene el desajuste simétrico y NO se ha tocado** (falta
    autorización). Si ya existe un paro abierto responde **409** y la app, que solo entra en
    modo paro en el callback de éxito, se queda creyendo que produce mientras la web la
    muestra parada. Es alcanzable justo con la contingencia nueva: si el operario reinicia
    la app y pulsa «registrar paro» sobre un paro reabierto desde `/admin`, verá un error.
    El arreglo sería el mismo criterio que en `finalizar`: devolver 200 con el paro que ya
    está abierto, sin sobrescribir su motivo.
-4. **Paros sin cerrar** — el garbage collector de `tasks.py` cierra los turnos colgados a
+5. **Paros sin cerrar** — el garbage collector de `tasks.py` cierra los turnos colgados a
    las 13 h pero **no cierra los paros abiertos de esa sesión**, así que quedan con
    `fin_paro` NULL para siempre (hay 1 de 78 así: el paro 105). La vista de paros los
    distingue con el estado «SIN CIERRE» en vez de contarlos como paros en curso, pero el
    arreglo de fondo está en el backend y **no se ha tocado** (haría falta autorización).
-5. **Máquinas de línea líquida** — ya hay dos dadas de alta (`Máquina 3` y `Maquina 12`),
+6. **Máquinas de línea líquida** — ya hay dos dadas de alta (`Máquina 3` y `Maquina 12`),
    sin producción registrada todavía. Total: 8 máquinas activas, una de ellas `PRUEBA`.
-6. **Logo provisional** — `public/logo192.png` es el de Create React App. El de la cabecera
+7. **Logo provisional** — `public/logo192.png` es el de Create React App. El de la cabecera
    es un SVG hecho a partir de las capturas (`components/ui/Logo.js`); si aparece el
    original, se sustituye por un `<img>`.
-7. **Botón «Insumos» de la cabecera** — aparece en las capturas pero no hay ninguna captura
+8. **Botón «Insumos» de la cabecera** — aparece en las capturas pero no hay ninguna captura
    ni especificación de esa vista. Hoy muestra un aviso de «vista sin especificación de
    referencia». Falta decidir qué debe contener, o quitar el botón.
-8. **El total de estadísticas no cuadra con el KPI de producción**, y es **de siempre**, no
+9. **El total de estadísticas no cuadra con el KPI de producción**, y es **de siempre**, no
    de la segmentación: el rango de fechas de `estadisticas` filtra por `inicio_turno` de la
    sesión mientras `kpis` cuenta por `pallets.fecha_hora`. Sin ningún filtro, el 2026-08-05
    daban 1801 y 2767 pacas respectivamente. Con los segmentadores puestos la diferencia se
@@ -687,7 +749,7 @@ frontend_sigep/
     ├── App.js                   # estado, polling, layout de dos columnas, navegación
     ├── setupProxy.js            # reenvío de /api al backend en desarrollo
     ├── lib/
-    │   ├── format.js            # es-EC, duraciones, turno, antigüedad, etiqueta de tablet
+    │   ├── format.js            # es-EC, duraciones, turno, antigüedad, etiqueta de tablet, velocidad
     │   ├── filtros.js           # dimensiones segmentables, params y serialización repetida
     │   └── useApi.js            # GET con polling; conserva el último dato bueno
     ├── components/
@@ -931,6 +993,15 @@ npx eslint --ext .js src/
   ve—, un `CONSULTA` las seis sin controles de escritura, y que un nivel desconocido lo
   dice en vez de romperse al buscar el componente. Las pestañas del admin son el
   **primer** `tablist` de la página: los componentes de dentro traen los suyos.
+  De la velocidad y la foto (2026-08-19): que la tabla de líneas enseña la última lectura
+  y que una sesión **sin ninguna** sale «—» con un título que lo explica, **nunca un cero**
+  —sería indistinguible de una máquina detenida—, que el promedio viaja pegado al nº de
+  lecturas, que un paro con foto la enseña y enlaza a la imagen completa mientras uno sin
+  foto no deja hueco, que «Quitar foto» solo existe si hay foto y va a `/paros/{id}/foto` y
+  **no** al paro —borrar el paro para arreglar una foto movida perdería el tiempo parado—, y
+  que en Producción la velocidad media solo se pinta cuando hay lecturas, porque las
+  sesiones anteriores al cambio nunca las tendrán. En `format.test.js`, que `velocidad(0)`
+  sí enseña el cero: un cero registrado de verdad es un dato.
   De la contingencia de paros (2026-08-19): que un paro **EN CURSO** avisa de que hay una
   tablet detrás con su botón local, que su confirmación de cierre nombra la consecuencia
   concreta —el «no hay paro activo» que verá el operario— y la salida, mientras la de un
@@ -990,11 +1061,14 @@ así se evita CORS. El `App.js` heredado apunta a `http://150.36.200.252:8000/ap
 | GET | `/dashboard/kpis` | `desde`,`hasta`,`hora_desde`,`hora_hasta`,`maquina[]`,`operador[]`,`marca[]`,`presentacion[]`,`fragancia[]` | `{pallets_hoy, pacas_hoy, sacos_hoy, turnos_activos, eficiencia}` |
 | GET | `/dashboard/logs` | — | `[{hora:"HH:MM:SS", mensaje, tipo:"pallet"}]` · 15 más recientes, desc |
 | GET | `/dashboard/produccion_hora` | mismos filtros + `agrupar` (opcional) | `[{hora, pallets, detalle:[{maquina,operario,producto,pacas}]}]`. Sin `agrupar` o con `hora`: un punto por hora del reloj, `hora:"HH:00"` — con rango de varios días **suma esa hora de todos los días**. Con `agrupar=dia`: un punto por fecha, `hora:"YYYY-MM-DD"`. Valor desconocido → se trata como `hora`, igual que `?tipo=` |
-| GET | `/dashboard/estado_operativo` | mismos filtros | `[{sesion_id, maquina, operador, producto, inicio_turno, tiempo_transcurrido, total_pacas, estado}]` |
+| GET | `/dashboard/estado_operativo` | mismos filtros | `[{sesion_id, maquina, operador, producto, inicio_turno, tiempo_transcurrido, total_pacas, estado, velocidad_ultima, velocidad_promedio, velocidad_lecturas, velocidad_hora}]`. Las cuatro de velocidad se añadieron el 2026-08-19 y **viajan siempre**, con `null` cuando la sesión no tiene lecturas: un `0` por defecto sería indistinguible de una máquina detenida |
 | GET | `/dashboard/top_produccion` | mismos filtros | `[{name, value}]` desc |
 | GET | `/dashboard/opciones_filtros` | `desde`,`hasta`,`hora_desde`,`hora_hasta`,`maquina[]`,`operador[]`,`marca[]`,`presentacion[]`,`fragancia[]` | `{maquina[], operador[], marca[], presentacion[], fragancia[]}`. Sin `desde`/`hasta` es el catálogo histórico completo. Los filtros **encadenan** los menús, y a cada dimensión se le aplican los de *las otras*, **nunca el suyo** (si no, marcar un valor vaciaría su propia lista). La franja recorta por `inicio_turno` |
 | GET | `/dashboard/estadisticas` | `dim`, `rango`, `desde`, `hasta`, `hora_desde`, `hora_hasta`, `maquina[]`, `operador[]`, `marca[]`, `presentacion[]`, `fragancia[]` | `{dim, rango, total_pacas, total_sesiones, items:[{etiqueta,pacas,sesiones,pct}]}`. Los cinco filtros se añadieron el 2026-08-05 (§0); un `dim` desconocido sigue dando **400** |
 | GET | `/dashboard/paros` | `desde`,`hasta`,`hora_desde`,`hora_hasta`,`maquina[]`,`operador[]` | `{kpis, maquinas[], paros[], por_categoria[]}` — ver «Paros» más abajo |
+| GET | `/paro/estado` | `sesion_id` (obligatorio) | `{sesion_id, turno_abierto, en_paro, paro_abierto, ultimo_paro}`. **Solo lectura.** Existe para que la tablet deje de fiarse de su estado en memoria (§0): `paro_abierto: null` significa «no está en paro», no es un error, y `ultimo_paro` va aparte para reconocer un paro cacheado que ya se cerró. **404** solo si la sesión no existe |
+| POST | `/paro/{paro_id}/foto` | multipart, campo `foto` | `{paro_id, foto_url, mensaje}`. Evidencia **opcional**. JPG/PNG, máx. 5 MB (otro tipo o más tamaño → **400**); volver a llamar **sustituye** la anterior y borra el archivo viejo. **Ruta aparte de `/paro/iniciar` a propósito**: pasar `iniciar` a multipart rompería las tablets de hoy |
+| POST | `/velocidad` | `{sesion_id, velocidad, request_id?}` | `{velocidad_id, mensaje, velocidad, duplicado}`. Velocidad en **fundas/min**, una fila por lectura. Idempotente por `request_id`. Fuera de 0.1–1000 → **400**; turno finalizado → **400**; sesión inexistente → **404** |
 | POST | `/reportes_app` | `{texto, maquina?, operador?, session_id?, request_id?}` | `{id, mensaje, duplicado?}`. Lo escribe el botón «reportar problema» de la tablet. Idempotente por `request_id`. Desde el 2026-08-07 **envía un correo** (solo si la fila es nueva) a `REPORTES_EMAIL_TO`. Texto vacío → **400** |
 | GET | `/dashboard/comentarios_turno` | `desde`,`hasta` **o** `limit` (def. 30, máx. 200) | `[{id,sesion_id,maquina,operador,texto,creado_en,fecha,hora}]` desc. Sin `desde`/`hasta` devuelve los últimos `limit` sin importar la fecha |
 | GET | `/mantenimiento/checklist` | `limit` (def. 30) **o** `desde`,`hasta` | `[{id,maquina,operador,momento,codigo_turno,fecha_turno,fecha,hora,supervisor,comentarios,items:[{etiqueta,marcado}],total_items,items_ok,creado_en}]` |
@@ -1065,7 +1139,8 @@ Respuesta: `{kpis, maquinas, paros, por_categoria}`.
 - **`paros[]`** — del más reciente al más antiguo:
   `{id, sesion_id, maquina, operador, producto, categoria, comentario, motivo, inicio,
   fin, fin_estimado, estado, en_curso, duracion_segundos, duracion_estimada,
-  inicio_turno, fin_turno}`.
+  inicio_turno, fin_turno, foto_url}`. `foto_url` (2026-08-19) es la ruta servida de la
+  evidencia fotográfica, o `null`: la foto es **opcional** y lo normal es que no esté.
 - **`maquinas[]`** — semáforo, con **criterio mixto deliberado**: `estado`, `operador`,
   `inicio_turno` y `paro_actual` son **de ahora** (la máquina está parada o no en este
   instante, sea cual sea el rango), mientras `paros` y `segundos` son **del rango**.
@@ -1155,7 +1230,8 @@ de supervisor de las tablets) filtra por los niveles operativos, así que un usu
 | POST | `/admin/operadores` | `{nombre, tipo?}` — `tipo` ∈ `SOLIDO` (default) \| `LIQUIDO`. Si existe inactivo lo **reactiva**. 409 si ya está activo |
 | PUT | `/admin/operadores/{id}` | `{nombre?, tipo?, activo?}` → desactivar = `{activo:false}` |
 | DELETE | `/admin/operadores/{id}` | ⚠️ **borrado físico** (`db.delete`) |
-| GET | `/admin/sesiones` | `desde`,`hasta` → `[{id,maquina,operador,marca,presentacion,fragancia,inicio,fin,estado,total_pacas,n_registros}]` |
+| GET | `/admin/sesiones` | `desde`,`hasta` → `[{id,maquina,operador,marca,presentacion,fragancia,inicio,fin,estado,total_pacas,n_registros,velocidad_promedio,velocidad_lecturas}]`. Las dos de velocidad son del 2026-08-19; `velocidad_promedio` es `null` sin lecturas, y el recuento va al lado porque una media de una sola lectura no describe un turno |
+| DELETE | `/admin/paros/{id}/foto` | Quita la evidencia fotográfica **dejando el paro intacto**, y borra el archivo de `static/paros/` — dejarlo huérfano lo mantendría accesible por URL, y `/static` no pide autenticación. **400** si ese paro no tiene foto |
 | PUT | `/admin/sesiones/{id}` | `{maquina?,operador?,marca?,presentacion?,fragancia?}` |
 | POST | `/admin/sesiones/{id}/cerrar` | Cierra un turno abierto: paro abierto + pedidos vivos + `fin_turno` + `duracion_minutos`, y deja `observaciones = "CERRADO MANUALMENTE POR: X"`. 400 si ya estaba cerrado. **No avisa a la tablet**: si sigue trabajando, seguirá mandando pacas a una sesión cerrada y su finalizar dará 400 |
 | DELETE | `/admin/sesiones/{id}` | ⚠️ **borrado físico en cascada**, solo `SUPERADMIN`: sesión + pallets + paros + pedidos + comentarios + reportes + mensajes. Devuelve el recuento de lo borrado, que es la única traza que queda |
@@ -1229,7 +1305,7 @@ heartbeat los recupera como respaldo. **No cambiar el transporte ni el formato.*
 | KPI `TURNOS ACTIVOS` → `5` | `kpis.turnos_activos` |
 | KPI `LÍNEAS CON TURNO HOY` → `7`, `5 activas · 2 finalizada(s)` | **Derivado** de `estado_operativo`: `length`, y conteo por `estado` |
 | `Producción por hora / por día · pacas` | `produccion_hora[].hora` / `.pallets` (`.detalle` para el tooltip). Toggle `HORA \| DÍA` en la cabecera de la tarjeta: **automático** — con rango de un solo día va por hora y «DÍA» sale deshabilitado; en cuanto el rango abarca varios días pasa a por día. La elección manual dura hasta el siguiente «Cargar» |
-| `Estado operativo · líneas` | `estado_operativo[]` completo |
+| `Estado operativo · líneas` | `estado_operativo[]` completo. Columna **Fundas/min** (2026-08-19): la **última** lectura como cifra, y el promedio, el nº de lecturas y la hora en el `title`. Sin lecturas, «—» y un título que lo dice — nunca un cero |
 | `Estadísticas de producción` | `estadisticas?dim=…&desde=&hasta=` + segmentadores. **Sin ningún control propio**: ni los presets `Hoy/7d/30d/Todo` de la versión vieja, ni los tabs de agrupación (`Máquina`, `Operario`, `Marca+Pres.`, `Marca+Pres.+Frag.`). Rango, franja y filtros son los de la cabecera, y la agrupación se deduce de lo segmentado (tabla en §2) |
 | `Actividad en vivo` | `logs[]` |
 | `Checklist de mantenimiento · 8 recientes` | `mantenimiento/checklist?limit=8` |
@@ -1252,7 +1328,7 @@ dos vistas no puedan contradecirse; el botón «Cargar» es el mismo.
 | KPI `PAROS REGISTRADOS` | `kpis.total_paros`, con `en_curso` y `sin_cierre` en el pie |
 | KPI `TIEMPO TOTAL PARADO` / `DURACIÓN PROMEDIO` | `kpis.segundos_total` / `segundos_promedio` |
 | `Estado de máquinas` | `paros.maquinas[]`. Una tarjeta por máquina; la que está en paro se resalta en ámbar y muestra categoría, comentario y un **cronómetro** |
-| `Paros del rango` | `paros.paros[]`. Fila desplegable: producto, horas exactas, turno, sesión, comentario del operario y el motivo tal como lo mandó la tablet |
+| `Paros del rango` | `paros.paros[]`. Fila desplegable: producto, horas exactas, turno, sesión, comentario del operario, el motivo tal como lo mandó la tablet y la **evidencia fotográfica** si la hay (miniatura que abre la imagen completa en otra pestaña) |
 | `Paros por categoría` | `paros.por_categoria[]`. Ordenado por **tiempo parado**, no por número de paros: dos horas de mantenimiento pesan más que cinco atascos de un minuto |
 | Franja horaria | Se aplica a los paros por su **hora de inicio**; el filtro lo advierte. No hay descargas en esta vista (la hoja «Paros» va dentro del Excel de producción, que se descarga desde el dashboard) |
 
@@ -1270,7 +1346,7 @@ equipo con la hora mal puesta inventaría paros de horas o duraciones negativas.
 | Checklists | `GET /admin/checklists`, `PUT /admin/checklists/{id}` |
 | Jerarquía | `GET /admin/maquina_productos`, `GET /admin/maquina_fragancias`, `GET /admin/catalogos`, `POST`/`PUT`/`DELETE /admin/maquina_productos`, `POST`/`PUT /admin/maquina_fragancias`, `POST`/`PUT /admin/maquinas`, `POST /admin/marcas`, `POST /admin/presentaciones`, `POST /admin/fragancias` |
 | Mensajes | `GET /admin/sesiones_activas`, `POST /admin/mensajes/masivo` |
-| Paros | `GET`/`PUT /admin/paros`, `POST /admin/paros/{id}/cerrar`, `DELETE /admin/paros/{id}` |
+| Paros | `GET`/`PUT /admin/paros`, `POST /admin/paros/{id}/cerrar`, `DELETE /admin/paros/{id}`, `DELETE /admin/paros/{id}/foto` |
 | Insumos (solo `ADMINBODEGA` y `SUPERADMIN`) | lectura del público `/api/insumos/dashboard`; `PUT`/`DELETE` de `/admin/pedidos/{id}` y `/admin/entregas/{id}` |
 | Reportes (solo `SUPERADMIN`) | `GET`/`PUT`/`DELETE` de `/admin/reportes_app` y `/admin/comentarios` |
 | Tablets (solo `SUPERADMIN`) | `GET`/`PUT`/`DELETE /admin/tablets` |

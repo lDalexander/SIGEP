@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { ChevronDown } from 'lucide-react';
 import { Card, Badge, Button, Campo, Input, Select, Estado, Aviso, useAviso, Label } from '../ui';
-import { num, fechaISO, plural } from '../../lib/format';
+import { num, fechaISO, plural, velocidad } from '../../lib/format';
 import FiltroRango from './FiltroRango';
 import useApi from '../../lib/useApi';
 import { admin, mensajeDeError, esSuperadmin, puedeEditar } from '../../lib/adminApi';
@@ -352,6 +352,17 @@ export default function TabProduccion() {
                     />
                     Pacas: {num(sesion.total_pacas)} ({num(sesion.n_registros)} reg.)
                   </button>
+                  {/* Velocidad media del turno (2026-08-19). Solo se enseña si hay alguna
+                      lectura: un «—» permanente en cada sesión antigua sería ruido, y las
+                      sesiones de antes de este cambio nunca van a tener ninguna. El número
+                      de lecturas va al lado porque una media de una sola no describe un
+                      turno de ocho horas. */}
+                  {sesion.velocidad_lecturas > 0 && (
+                    <Label className="text-sig-dim">
+                      {velocidad(sesion.velocidad_promedio)} fundas/min ·{' '}
+                      {plural(sesion.velocidad_lecturas, 'lectura', 'lecturas')}
+                    </Label>
+                  )}
                   {/* Habilitado siempre, como en las capturas: si no hay cambios el
                       propio `guardar` lo avisa en lugar de mandar un PUT vacío. */}
                   {editable && (
