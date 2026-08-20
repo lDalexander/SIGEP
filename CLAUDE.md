@@ -17,19 +17,25 @@ industriales con sincronización offline-first.
 capturas de `referencia_ui/`. 182 tests en verde.
 
 **Foto del paro, velocidad de máquina y `GET /api/paro/estado`** (2026-08-19).
-**Escrito, con tests y lint en verde; NO desplegado, y el `ALTER` está PENDIENTE de
-ejecutar.** Tag previo: `v1.15-pre-foto-velocidad`.
+**Ya está en producción** (2026-08-20: worker `3196184`, frontend `main.3ec38e92.js`), y el
+`ALTER` de `alter_paros_foto_velocidad.sql` **está ejecutado**. Tag previo:
+`v1.15-pre-foto-velocidad`; respaldo del build anterior:
+`~/respaldos_build_sigep/build_2026-08-20_115631`.
 
-⚠️ **Antes de recargar el backend hay que ejecutar `alter_paros_foto_velocidad.sql`.**
-`models.py` ya declara `paros_maquina.foto_path` y la columna **todavía no existe en
-MySQL**, así que un `kill -HUP` ahora dejaría toda lectura de paros dando error 500. El
-servicio vivo no corre peligro porque tiene el código anterior cargado en memoria.
+Se recargó **con 5 turnos activos**, y por eso se verificó antes lo que de verdad
+importaba: que una tablet con el **APK viejo** siga funcionando igual contra el código
+nuevo. Se simuló el ciclo completo —`iniciar_turno` → `registrar_pallet` (con su reintento
+idempotente) → `paro/iniciar` (409 en el duplicado) → `paro/finalizar` → `heartbeat` →
+`finalizar_turno`— **contra la BD real dentro de una transacción revertida**, más los
+9 endpoints de lectura que usa la app comparados byte a byte. Es la prueba de que la
+columna nueva en `paros_maquina` no rompe el camino de las tablets. Después del HUP:
+`/api/maquinas` y `/api/operadores` idénticas byte a byte, KPIs sin moverse (1975 pacas ·
+150 sacos) y los 5 turnos abiertos con su producción intacta.
 
-**La tabla `registro_velocidad` ya está creada**, y no la creó nadie a mano: la creó
-`Base.metadata.create_all()` al importar el modelo para una comprobación. Es exactamente
-lo que este archivo ya advertía que pasa con las tablas nuevas. Es aditiva y está vacía, así
-que es inocua; la columna `foto_path` **no** se creó sola, porque `create_all` nunca altera
-una tabla que ya existe.
+**La tabla `registro_velocidad` la creó `Base.metadata.create_all()`**, no una migración a
+mano: pasó al importar el modelo para una comprobación, que es exactamente lo que este
+archivo ya advertía que ocurre con las tablas nuevas. La columna `foto_path` **no** se creó
+sola, porque `create_all` nunca altera una tabla que ya existe — de ahí el `ALTER`.
 
 - **Foto opcional en cada paro.** Copia el patrón que ya funciona en las entregas de
   insumo: se guarda la **ruta** (`/static/paros/...`) y nunca la imagen, para que los dumps
@@ -629,6 +635,39 @@ Tras la reconstrucción se autorizaron **trece** excepciones a la regla de oro:
 | Referencia visual | `referencia_ui/*.jpeg` — 9 capturas de la versión a reproducir |
 
 Convive un apache2 en el puerto 80. **No reconfigurar nginx, systemd ni apache.**
+
+### Distribución del APK (OTA)
+
+El APK vive en `api_produccion/static/sigep_latest.apk` y hay un sistema OTA ya montado:
+`GET /api/config/version` devuelve `{version_code, version_name, url_descarga,
+obligatorio}`, y la app **tiene el permiso `REQUEST_INSTALL_PACKAGES`**, así que puede
+instalar lo que descargue.
+
+**Está deshabilitado a propósito** (`main.py`): anuncia `version_code: 1` y
+`obligatorio: False` para que ninguna tablet crea que hay actualización «mientras se
+prepara el rollout remoto». Para activarlo hay que poner ahí el `version_code` **real y
+mayor** que el instalado en las tablets.
+
+Tres cosas que se comprobaron el 2026-08-20 y que no son evidentes:
+
+- **La URL solo sirve por el 8000.** `http://…:3000/static/sigep_latest.apk` devuelve
+  **200 con el `index.html` de la SPA** (700 bytes, `text/html`), porque nginx hace
+  fallback a la SPA; el 8000 devuelve los 7,4 MB con
+  `application/vnd.android.package-archive`. Una tablet apuntada al 3000 se descargaría un
+  HTML y la instalación fallaría con un error que no dice nada.
+- **`/static/` no pide autenticación**, así que el APK es descargable por cualquiera que
+  tenga la URL. Igual que las fotos de paros y de entregas.
+- **La firma manda, y el OTA no la esquiva.** El APK en producción está firmado con el
+  keystore de release (`DETCUADOR · Sistemas · SIGEP · Guayaquil`), **no** con la clave
+  debug. Un APK firmado con otra clave —por ejemplo una build debug de Android Studio— no
+  puede actualizar sobre el instalado: hay que **desinstalar**, y eso borra los
+  `SharedPreferences` (`sesion_activa`, `turno_maquina`, `turno_operador`,
+  `turno_pendiente_crear`) y la cola local. La app arranca sin turno mientras **el turno
+  sigue abierto en el servidor**, así que el operario recibe «Esta máquina ya tiene un turno
+  activo» y hay que cerrarlo desde `/admin` → Producción → «CERRAR TURNO».
+
+Antes de actualizar tablets, mirar que estén a **0 pendientes**
+(`GET /api/tablets/estado`): lo que no se ha enviado se pierde si hay que desinstalar.
 
 ### Comandos
 
