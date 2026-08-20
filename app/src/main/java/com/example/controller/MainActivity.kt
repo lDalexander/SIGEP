@@ -37,7 +37,13 @@ import com.example.controller.sync.ConnectivityObserver
 import com.example.controller.sync.TabletsWebSocketManager
 import com.example.controller.ui.AjustesTabletActivity
 import com.example.controller.ui.PendientesActivity
+import com.example.controller.util.versionNameInstalada
 import kotlinx.coroutines.flow.collectLatest
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.content.pm.PackageManager
+import androidx.core.content.FileProvider
+import java.io.File
 
 class MainActivity : AppCompatActivity() {
 
@@ -54,10 +60,46 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tabletsWsManager: TabletsWebSocketManager
     private lateinit var tvBadge: android.widget.TextView
 
+    private lateinit var btnVelocidad: Button
+
     private var paroActivo = false
+
+    // Id del paro abierto, devuelto por POST /api/paro/iniciar. Se persiste junto al
+    // flag para poder adjuntarle la foto y para reconocerlo al consultar el estado
+    // real al servidor. null = paro abierto sin red (todavía sin id) o sin paro.
+    private var paroActivoId: Int? = null
+
+    // true mientras viaja un iniciar/finalizar paro. Sin esto, una revalidación del
+    // radar que salió ANTES de abrir el paro puede volver con "no hay paro" justo
+    // después de abrirlo y desbloquear las pacas con la máquina parada.
+    private var operacionParoEnCurso = false
+
+    // Se incrementa en cada cambio local del estado de paro. La consulta al servidor
+    // guarda su valor antes de salir y solo aplica la respuesta si nadie tocó el paro
+    // mientras viajaba: si no, una respuesta lenta pisa lo que el operario acaba de hacer.
+    private var generacionParo = 0
+
+    // Foto opcional del paro en curso de captura (misma mecánica que la evidencia de
+    // las entregas de insumo: FileProvider + TakePicture).
+    private var fotoParoUri: Uri? = null
+    private var fotoParoFile: File? = null
+    private var tvFotoParoEstado: TextView? = null
+
+    // Lado largo al que se redimensiona la foto antes de subirla. Una foto de tablet
+    // moderna pasa de los 5 MB que acepta el server (400) — a ~1600 px y JPEG 80 quedan
+    // 200-400 KB, de sobra para ver una pieza rota.
+    private val LADO_MAX_FOTO = 1600
+    private val CALIDAD_JPEG_FOTO = 80
+    private val PERMISO_CAMARA_PARO = 301
+
     // PARO ALMUERZO: reusa el mecanismo de paro (motivo fijo) con contador en pantalla.
     private var almuerzoActivo = false
     private val MOTIVO_ALMUERZO = "ALMUERZO"
+
+    // Cada cuántos ciclos del radar (5 s) se revalida el estado del paro contra el
+    // servidor: ~30 s. El paro cerrado desde la web se detecta solo, sin que el
+    // operario tenga que tocar nada, y sin triplicar el tráfico del radar.
+    private val CICLOS_RADAR_POR_CHEQUEO_PARO = 6
     private lateinit var seccionConfiguracion: LinearLayout
     private lateinit var seccionProduccion: LinearLayout
     private lateinit var etCantidadPacas: EditText
@@ -134,7 +176,30 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Cámara para la evidencia del paro. La foto es OPCIONAL: si el operario cancela,
+    // el paro se registra igual (el dato que no se puede perder es el tiempo parado).
+    private val launcherCamaraParo = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.TakePicture()
+    ) { ok ->
+        if (ok) {
+            tvFotoParoEstado?.text = "📷 Foto capturada"
+        } else {
+            fotoParoFile?.delete()
+            fotoParoUri = null
+            fotoParoFile = null
+            tvFotoParoEstado?.text = "Sin foto adjunta"
+        }
+    }
+
     val tipos = arrayOf("-- Seleccione Tipo --", "Sólido", "Líquido")
+
+    // YA NO es la fuente de las fragancias: ahora vienen de api/fragancias por
+    // combinación máquina+marca. Se conserva como fallback de último recurso (mismo
+    // papel que listaMaquinasLocal / marcasPorMaquinaLocal) para la tablet recién
+    // instalada que aún no tiene caché y arranca sin red. Sin esto el spinner se
+    // quedaría solo con el placeholder y el guard de INICIAR TURNO —que exige
+    // selectedItemPosition != 0— haría imposible abrir el turno.
+    // El texto viaja tal cual al servidor: no tocar los acentos.
     val fragancias = arrayOf("-- Seleccione Fragancia --", "Limón", "Floral")
 
     private var listaOperadoresServidor: List<String> = emptyList()
@@ -156,10 +221,19 @@ class MainActivity : AppCompatActivity() {
     // POR máquina desde api/maquinas). Reemplaza a los mapas locales cuando llega.
     private var jerarquiaMaquinas: Map<String, List<MarcaResponse>> = emptyMap()
 
+    // Fragancias por combinación, clave "máquina|marca" (mismo formato que
+    // presentacionesPorMaquinaMarcaLocal). Se llena desde api/fragancias al elegir
+    // marca y se cachea, para que la siguiente vez salga al instante y sin red.
+    private var fraganciasPorMaquinaMarca: Map<String, List<String>> = emptyMap()
+
     // Versión del esquema de caché de la jerarquía. Subir este número invalida
     // cachés viejas. v2 descarta el catálogo GLOBAL erróneo que guardaban versiones
     // previas (mismo para todas las máquinas) y cae al fallback local hasta re-descargar.
     private val cacheVersionJerarquia = 2
+
+    // Versión del esquema de caché de fragancias, independiente de la jerarquía para
+    // poder invalidar una sin tirar la otra. Subirlo descarta las cachés anteriores.
+    private val cacheVersionFragancias = 1
 
     // Fallback local hasta que el backend devuelva la jerarquía en api/maquinas.
     // Eliminar estos mapas cuando el servidor implemente el campo `marcas` en MaquinaResponse.
@@ -211,9 +285,11 @@ class MainActivity : AppCompatActivity() {
         btnVerEstadoPedidos = findViewById(R.id.btnVerEstadoPedidos)
         tvBadge             = findViewById(R.id.tvBadgePendientes)
         vincularVistas()
-        // Versión mostrada en la UI tomada del build (nunca queda desfasada).
+        // Versión leída del paquete instalado, no de BuildConfig: esa constante se
+        // incrusta en el .class y se queda vieja si el archivo no se recompila
+        // (ver VersionApp.kt — pasó de verdad en MenuRoles/Splash con la 1.5.1).
         findViewById<TextView>(R.id.textViewDevelopedBy)?.text =
-            "Desarrollado por John Alexander Garcia | DETCUADOR S.A. | Versión ${BuildConfig.VERSION_NAME}"
+            "Desarrollado por John Alexander Garcia | DETCUADOR S.A. | Versión ${versionNameInstalada()}"
 
         rvPendientesConfirmacion.layoutManager = LinearLayoutManager(this)
         adapterPendientesConfirmacion = PedidoAdapter(emptyList(), esAsignado = false, esConfirmacion = true) { pedido ->
@@ -228,6 +304,10 @@ class MainActivity : AppCompatActivity() {
             // Al recuperar conexión re-descargamos catálogos + jerarquía para que
             // la tablet quede sincronizada con MySQL sin esperar a reiniciar la app.
             descargarCatalogosDesdeServidor()
+            refrescarFraganciasDeSeleccionActual()
+            // Volvió la red: es el momento de comprobar si el paro que la tablet cree
+            // abierto sigue abierto de verdad.
+            sincronizarEstadoParoDesdeServidor()
         }
         tabletsWsManager = TabletsWebSocketManager(
             tabletPrefs.deviceId,
@@ -282,6 +362,7 @@ class MainActivity : AppCompatActivity() {
                         seccionConfiguracion.visibility = View.GONE
                         seccionProduccion.visibility    = View.VISIBLE
                         restaurarEstadoAlmuerzo()
+                        restaurarEstadoParo()
                         Toast.makeText(this@MainActivity, "Turno en sincronización…", Toast.LENGTH_SHORT).show()
                     } else {
                         forzarReinicioPorError("Sesión local huérfana — inicie un turno nuevo.")
@@ -294,6 +375,9 @@ class MainActivity : AppCompatActivity() {
                 seccionProduccion.visibility    = View.VISIBLE
                 Toast.makeText(this, "Turno recuperado", Toast.LENGTH_SHORT).show()
                 restaurarEstadoAlmuerzo()
+                // El botón de paro nace de lo persistido y se corrige enseguida con el
+                // estado real del servidor (onStart / radar), no de lo que había en memoria.
+                restaurarEstadoParo()
                 recuperarHistorial(sesionGuardada)
                 iniciarRadarStatusPedidos(sesionGuardada)
             }
@@ -391,7 +475,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun iniciarRadarStatusPedidos(sesionId: Int) {
         lifecycleScope.launch(Dispatchers.IO) {
+            var ciclo = 0
             while (isActive) {
+                // Revalidación periódica del paro: el caso de la Máquina 7 pasó con la
+                // app en primer plano todo el rato, así que no basta con mirar al
+                // arrancar o al volver de segundo plano.
+                if (ciclo % CICLOS_RADAR_POR_CHEQUEO_PARO == 0) {
+                    sincronizarEstadoParoDesdeServidor()
+                }
+                ciclo++
                 try {
                     val respuesta = RetrofitClient.apiService.obtenerEstadoPedidos(sesionId)
                     withContext(Dispatchers.Main) {
@@ -506,6 +598,7 @@ class MainActivity : AppCompatActivity() {
         etCantidadPacas      = findViewById(R.id.etCantidadPacas)
         btnIniciarTurno      = findViewById(R.id.btnIniciarTurno)
         btnEnviarPallet      = findViewById(R.id.btnEnviarPallet)
+        btnVelocidad         = findViewById(R.id.btnVelocidad)
         btnTerminarTurno     = findViewById(R.id.btnTerminarTurno)
         btnParo              = findViewById(R.id.btnParo)
         btnAlmuerzo          = findViewById(R.id.btnAlmuerzo)
@@ -552,8 +645,12 @@ class MainActivity : AppCompatActivity() {
                     val operadores = operadoresParaTipo(tipoMaquina)
                     spinnerOperador.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, operadores)
                     spinnerOperador.isEnabled = true
-                    spinnerFragancia.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, fragancias)
-                    spinnerFragancia.isEnabled = true
+
+                    // La fragancia depende de máquina+marca (api/fragancias), así que
+                    // aquí solo se bloquea: se puebla al elegir marca, igual que presentación.
+                    spinnerFragancia.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item,
+                        arrayOf("-- Seleccione primero la Marca --"))
+                    spinnerFragancia.isEnabled = false
 
                     // Usamos la jerarquía del servidor cuando ya está disponible;
                     // el fallback local mantiene funcionalidad hasta que el backend la implemente.
@@ -591,13 +688,90 @@ class MainActivity : AppCompatActivity() {
                     spinnerPresentacion.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, presentaciones)
                     spinnerPresentacion.isEnabled = true
                     btnIniciarTurno.isEnabled = true
+
+                    // Fragancias de esta combinación: primero lo que ya tenemos (caché o
+                    // fallback) de forma síncrona para no dejar la UI esperando, y en
+                    // paralelo el refresco contra el servidor.
+                    val clave = "$maquinaActual|$marcaActual"
+                    aplicarFragancias(fraganciasParaClave(clave))
+                    refrescarFraganciasDesdeServidor(maquinaActual, marcaActual, clave)
                 } else {
                     spinnerPresentacion.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, arrayOf("-- Seleccione primero la Marca --"))
                     spinnerPresentacion.isEnabled = false
+                    spinnerFragancia.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, arrayOf("-- Seleccione primero la Marca --"))
+                    spinnerFragancia.isEnabled = false
                     btnIniciarTurno.isEnabled = false
                 }
             }
             override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+    }
+
+    // Fragancias a mostrar para una combinación "máquina|marca", sin tocar la red:
+    // 1) lo cacheado/descargado para esa combinación, 2) el fallback en fuente.
+    // Devuelve solo las opciones reales, sin placeholder.
+    private fun fraganciasParaClave(clave: String): List<String> =
+        fraganciasPorMaquinaMarca[clave]
+            ?.takeIf { it.isNotEmpty() }
+            ?: fragancias.drop(1)
+
+    // Pone las fragancias en el spinner con el placeholder delante y lo habilita.
+    private fun aplicarFragancias(opciones: List<String>) {
+        // El spinner NUNCA puede quedar solo con el placeholder: el guard de
+        // INICIAR TURNO exige selectedItemPosition != 0 y el turno sería imposible
+        // de abrir. Ante una lista vacía se cae igualmente al fallback en fuente.
+        val lista = opciones.takeIf { it.isNotEmpty() } ?: fragancias.drop(1)
+        val items = listOf("-- Seleccione Fragancia --") + lista
+
+        // Si ya está puesta exactamente esta lista no reasignamos el adapter:
+        // hacerlo resetea la selección y le borraría al operario la fragancia que
+        // ya había elegido (el refresco de red suele llegar después de que eligió).
+        val actual = spinnerFragancia.adapter?.let { ad ->
+            (0 until ad.count).map { ad.getItem(it)?.toString() }
+        }
+        if (actual != items) {
+            spinnerFragancia.adapter = ArrayAdapter(this, R.layout.spinner_item, items)
+        }
+        spinnerFragancia.isEnabled = true
+    }
+
+    // Refresco de fragancias contra el servidor, por detrás de la UI. Nunca bloquea:
+    // el spinner ya quedó poblado con caché/fallback antes de entrar aquí.
+    private fun refrescarFraganciasDesdeServidor(maquina: String, marca: String, clave: String) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val resp  = RetrofitClient.apiService.obtenerFragancias(maquina, marca)
+                val lista = resp.body().orEmpty()
+                // El server nunca devuelve vacío; si llega vacío o falla, conservamos
+                // la caché previa en vez de degradar lo que el operario ya ve.
+                if (!resp.isSuccessful || lista.isEmpty()) return@launch
+                withContext(Dispatchers.Main) {
+                    fraganciasPorMaquinaMarca = fraganciasPorMaquinaMarca + (clave to lista)
+                    guardarFraganciasEnCache()
+                    // Todo setAdapter dispara onItemSelected(position = 0) de forma
+                    // asíncrona, así que el operario puede haber cambiado de marca
+                    // mientras llegaba esta respuesta: solo se aplica si sigue vigente.
+                    val sigueVigente = spinnerMaquina.selectedItem?.toString() == maquina &&
+                                       spinnerMarca.selectedItem?.toString() == marca
+                    if (sigueVigente) aplicarFragancias(lista)
+                }
+            } catch (e: Exception) {
+                ErrorReporter.report("Fragancias", "No se pudo actualizar fragancias — usando caché local", e)
+            }
+        }
+    }
+
+    // Al recuperar la red, revalida solo la combinación que el operario tiene elegida
+    // en ese momento. No prefetcheamos las ~17 combinaciones: serían 17 llamadas para
+    // datos que probablemente no se usen en este turno.
+    // Ojo: el callback de ConnectivityObserver corre en hilo de binder, y los spinners
+    // solo se pueden leer desde el hilo principal.
+    private fun refrescarFraganciasDeSeleccionActual() {
+        runOnUiThread {
+            if (spinnerMaquina.selectedItemPosition <= 0 || spinnerMarca.selectedItemPosition <= 0) return@runOnUiThread
+            val maquina = spinnerMaquina.selectedItem?.toString() ?: return@runOnUiThread
+            val marca   = spinnerMarca.selectedItem?.toString() ?: return@runOnUiThread
+            refrescarFraganciasDesdeServidor(maquina, marca, "$maquina|$marca")
         }
     }
 
@@ -733,24 +907,49 @@ class MainActivity : AppCompatActivity() {
                 val inputMotivo = EditText(this).apply { hint = "Ej: Por temas de arrastres..." }
                 contenedor.addView(inputMotivo)
 
+                // Foto opcional (reusa la misma mecánica que la evidencia de insumos).
+                agregarSelectorFotoParo(contenedor)
+
+                // El diálogo va en un ScrollView: con el bloque de foto ya no entra en
+                // la pantalla de la tablet con el teclado abierto.
+                val scroll = android.widget.ScrollView(this).apply { addView(contenedor) }
+
                 AlertDialog.Builder(this)
                     .setTitle("Registrar Tiempo Muerto")
-                    .setView(contenedor)
+                    .setView(scroll)
                     .setPositiveButton("Confirmar Paro") { _, _ ->
                         val detalle = inputMotivo.text.toString().trim()
                         if (detalle.isNotEmpty()) {
                             // Concatenamos categoría y detalle en un solo campo
                             // para no modificar el esquema de base de datos existente.
-                            llamarApiIniciarParo("[${spinnerTipoParo.selectedItem}] - $detalle")
+                            llamarApiIniciarParo("[${spinnerTipoParo.selectedItem}] - $detalle", fotoParoUri)
                         } else {
                             Toast.makeText(this, "Debe escribir el motivo detallado", Toast.LENGTH_SHORT).show()
+                            descartarFotoParoPendiente()
                         }
                     }
-                    .setNegativeButton("Cancelar", null)
+                    .setNegativeButton("Cancelar") { _, _ -> descartarFotoParoPendiente() }
+                    .setOnDismissListener { tvFotoParoEstado = null }
                     .show()
             } else {
                 llamarApiFinalizarParo()
             }
+        }
+
+        // Salida manual por si todo falla: pulsación larga sobre el botón de paro.
+        btnParo.setOnLongClickListener {
+            if (!paroActivo) return@setOnLongClickListener false
+            mostrarOpcionesParo()
+            true
+        }
+
+        // VELOCIDAD MAQ — lectura puntual en fundas/min. Offline-first (cola).
+        btnVelocidad.setOnClickListener {
+            if (sesionActualId == null) {
+                Toast.makeText(this, "Inicie un turno para registrar la velocidad.", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            pedirVelocidadMaquina()
         }
 
         // PARO ALMUERZO — un toque inicia (motivo fijo), otro reanuda. Offline-first.
@@ -1166,6 +1365,10 @@ class MainActivity : AppCompatActivity() {
         connectivityObserver.register()
         tabletsWsManager.connect()
         colaRepo.dispararSync()
+        // Al arrancar y al volver de segundo plano (que es cuando más rato ha podido
+        // pasar) el botón de paro se pinta con lo que sabe el servidor, no con lo que
+        // recordaba la app.
+        sincronizarEstadoParoDesdeServidor()
     }
 
     override fun onStop() {
@@ -1271,6 +1474,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Caché de fragancias por "máquina|marca". Se guarda aparte del resto del catálogo
+    // porque se actualiza en otro momento (al elegir marca, no al descargar catálogos).
+    private fun guardarFraganciasEnCache() {
+        if (fraganciasPorMaquinaMarca.isEmpty()) return
+        getSharedPreferences("SIGEP_CATALOGOS", MODE_PRIVATE).edit().apply {
+            putInt("cache_version_fragancias", cacheVersionFragancias)
+            putString("cache_fragancias", Gson().toJson(fraganciasPorMaquinaMarca))
+            apply()
+        }
+    }
+
     // Operarios a mostrar para el tipo de línea de la máquina elegida. Si hay caché
     // por tipo (aunque solo tenga el placeholder) se respeta tal cual, para no mezclar
     // líneas. Solo cuando no hay dato por tipo (caché vieja / primera vez sin red) se
@@ -1317,54 +1531,67 @@ class MainActivity : AppCompatActivity() {
             val tipoJerarquia = object : TypeToken<Map<String, List<MarcaResponse>>>() {}.type
             jerarquiaMaquinas = gson.fromJson(jsonJerarquia, tipoJerarquia) ?: emptyMap()
         }
+
+        // Fragancias por "máquina|marca", con su propio versionado: una caché escrita
+        // por un esquema viejo se ignora y se cae al fallback hasta re-descargar.
+        val versionFragancias = prefs.getInt("cache_version_fragancias", 0)
+        val jsonFragancias    = prefs.getString("cache_fragancias", null)
+        if (versionFragancias >= cacheVersionFragancias && jsonFragancias != null) {
+            val tipoFragancias = object : TypeToken<Map<String, List<String>>>() {}.type
+            fraganciasPorMaquinaMarca = gson.fromJson(jsonFragancias, tipoFragancias) ?: emptyMap()
+        }
     }
 
     // ==========================================
     // PAROS
     // ==========================================
 
-    private fun llamarApiIniciarParo(motivo: String) {
+    private fun llamarApiIniciarParo(motivo: String, foto: Uri?) {
         btnParo.isEnabled = false
+        operacionParoEnCurso = true
         val req = IniciarParoRequest(sesion_id = sesionActualId!!, motivo = motivo)
 
-        // Helper local para aplicar el cambio visual del paro activo, una vez que
-        // sabemos que el server lo aceptó (o que lo encolamos para reintentar).
-        fun aplicarParoActivo(mensaje: String) {
-            paroActivo = true
-            btnParo.text = "REANUDAR OPERACIÓN"
-            btnParo.setBackgroundColor(Color.parseColor("#4CAF50"))
-            btnEnviarPallet.isEnabled = false
-            btnEnviarPallet.setBackgroundColor(Color.GRAY)
-            btnAlmuerzo.isEnabled = false   // exclusión mutua: un solo paro activo por sesión
-            Toast.makeText(this@MainActivity, mensaje, Toast.LENGTH_SHORT).show()
-        }
-
         lifecycleScope.launch {
-            if (sesionActualId == -99) {
-                colaRepo.enqueueIniciarParo(req)
-                aplicarParoActivo("Paro en cola")
-                btnParo.isEnabled = true
-                return@launch
-            }
-
             try {
+                if (sesionActualId == -99) {
+                    colaRepo.enqueueIniciarParo(req)
+                    // Sin id real todavía: la foto viaja con paro_id = -99 y el SyncWorker
+                    // le escribe el id que devuelva el INICIAR_PARO al sincronizarse.
+                    aplicarParoActivoUi(null, "Paro en cola")
+                    encolarFotoParo(foto, -99)
+                    return@launch
+                }
+
                 val resp = withContext(Dispatchers.IO) {
                     RetrofitClient.apiService.iniciarParo(req)
                 }
                 if (resp.isSuccessful) {
-                    aplicarParoActivo("Paro registrado")
+                    val paroId = resp.body()?.paro_id
+                    aplicarParoActivoUi(paroId, "Paro registrado")
+                    if (paroId != null) {
+                        encolarFotoParo(foto, paroId)
+                    } else if (foto != null) {
+                        // Server sin paro_id en la respuesta: el paro quedó registrado,
+                        // pero no hay id al que adjuntar la evidencia.
+                        descartarFotoParoPendiente()
+                        Toast.makeText(this@MainActivity,
+                            "Paro registrado, pero no se pudo adjuntar la foto", Toast.LENGTH_LONG).show()
+                    }
                 } else {
                     AlertDialog.Builder(this@MainActivity)
                         .setTitle("No se pudo registrar el paro")
                         .setMessage(extraerDetalleErrorHttp(resp))
                         .setPositiveButton("Entendido", null)
                         .show()
+                    descartarFotoParoPendiente()
                 }
             } catch (e: Exception) {
                 ErrorReporter.warn("MainActivity", "Sin red al iniciar paro, encolando: ${e.message}")
                 colaRepo.enqueueIniciarParo(req)
-                aplicarParoActivo("Sin red — paro guardado, se enviará al reconectar")
+                aplicarParoActivoUi(null, "Sin red — paro guardado, se enviará al reconectar")
+                encolarFotoParo(foto, -99)
             } finally {
+                operacionParoEnCurso = false
                 btnParo.isEnabled = true
             }
         }
@@ -1372,57 +1599,450 @@ class MainActivity : AppCompatActivity() {
 
     private fun llamarApiFinalizarParo() {
         btnParo.isEnabled = false
+        operacionParoEnCurso = true
         val req = FinalizarParoRequest(sesion_id = sesionActualId!!)
 
-        fun aplicarReanudacion(mensaje: String) {
-            paroActivo = false
-            btnParo.text = "REGISTRAR PARO"
-            btnParo.setBackgroundColor(Color.parseColor("#FA8400"))
-            btnEnviarPallet.isEnabled = true
-            btnEnviarPallet.setBackgroundColor(Color.parseColor("#2196F3"))
-            btnAlmuerzo.isEnabled = true
-            Toast.makeText(this@MainActivity, mensaje, Toast.LENGTH_SHORT).show()
-        }
-
         lifecycleScope.launch {
-            if (sesionActualId == -99) {
-                colaRepo.enqueueFinalizarParo(req)
-                aplicarReanudacion("Reanudación en cola")
-                btnParo.isEnabled = true
-                return@launch
-            }
-
             try {
+                if (sesionActualId == -99) {
+                    colaRepo.enqueueFinalizarParo(req)
+                    aplicarReanudacionUi("Reanudación en cola")
+                    return@launch
+                }
+
                 val resp = withContext(Dispatchers.IO) {
                     RetrofitClient.apiService.finalizarParo(req)
                 }
-                if (resp.isSuccessful) {
-                    aplicarReanudacion("Producción reanudada")
-                } else {
-                    AlertDialog.Builder(this@MainActivity)
-                        .setTitle("No se pudo finalizar el paro")
-                        .setMessage(extraerDetalleErrorHttp(resp))
-                        .setPositiveButton("Entendido", null)
-                        .show()
+                when {
+                    resp.isSuccessful -> {
+                        // ya_cerrado = lo cerró un supervisor desde la web. Es éxito:
+                        // lo importante es que la tablet se desbloquee.
+                        val yaCerrado = resp.body()?.ya_cerrado == true
+                        aplicarReanudacionUi(
+                            if (yaCerrado) "El paro ya estaba cerrado — producción reanudada"
+                            else "Producción reanudada"
+                        )
+                    }
+                    // Server anterior al fix del 2026-08-19: 404 "No hay paro activo"
+                    // significa que ya estaba cerrado. Dejar el botón trabado por esto
+                    // es lo que costó 1 h 34 min de producción en la Máquina 7.
+                    resp.code() == 404 -> aplicarReanudacionUi("El paro ya estaba cerrado — producción reanudada")
+                    else -> {
+                        AlertDialog.Builder(this@MainActivity)
+                            .setTitle("No se pudo finalizar el paro")
+                            .setMessage(extraerDetalleErrorHttp(resp))
+                            .setPositiveButton("Entendido", null)
+                            .show()
+                        // El server rechazó por otro motivo: le preguntamos el estado
+                        // real, así el botón no se queda trabado por un error puntual.
+                        sincronizarEstadoParoDesdeServidor()
+                    }
                 }
             } catch (e: Exception) {
                 ErrorReporter.warn("MainActivity", "Sin red al finalizar paro, encolando: ${e.message}")
                 colaRepo.enqueueFinalizarParo(req)
-                aplicarReanudacion("Sin red — reanudación guardada, se enviará al reconectar")
+                aplicarReanudacionUi("Sin red — reanudación guardada, se enviará al reconectar")
             } finally {
+                operacionParoEnCurso = false
                 btnParo.isEnabled = true
             }
         }
     }
 
+    // ===== Estado del paro: UI, persistencia y sincronización con el servidor =====
+
+    // Enciende la UI de paro activo. [paroId] puede ser null (paro encolado sin red).
+    private fun aplicarParoActivoUi(paroId: Int?, mensaje: String?) {
+        paroActivo = true
+        paroActivoId = paroId
+        generacionParo++
+        persistirEstadoParo(true, paroId)
+        btnParo.text = "REANUDAR OPERACIÓN"
+        btnParo.setBackgroundColor(Color.parseColor("#4CAF50"))
+        btnEnviarPallet.isEnabled = false
+        btnEnviarPallet.setBackgroundColor(Color.GRAY)
+        btnAlmuerzo.isEnabled = false   // exclusión mutua: un solo paro activo por sesión
+        mensaje?.let { Toast.makeText(this, it, Toast.LENGTH_SHORT).show() }
+    }
+
+    private fun aplicarReanudacionUi(mensaje: String?) {
+        paroActivo = false
+        paroActivoId = null
+        generacionParo++
+        persistirEstadoParo(false, null)
+        btnParo.text = "REGISTRAR PARO"
+        btnParo.setBackgroundColor(Color.parseColor("#FA8400"))
+        btnEnviarPallet.isEnabled = true
+        btnEnviarPallet.setBackgroundColor(Color.parseColor("#2196F3"))
+        btnAlmuerzo.isEnabled = true
+        mensaje?.let { Toast.makeText(this, it, Toast.LENGTH_SHORT).show() }
+    }
+
+    // El paro se persiste (como el almuerzo) para que un paro real no se pierda de vista
+    // si la app se cierra: antes el flag vivía solo en memoria y la única salida de un
+    // botón trabado era matar la app.
+    private fun persistirEstadoParo(activo: Boolean, paroId: Int?) {
+        getSharedPreferences(NOMBRE_PREFS, MODE_PRIVATE).edit().apply {
+            putBoolean("paro_activo", activo)
+            if (activo && paroId != null) putInt("paro_activo_id", paroId) else remove("paro_activo_id")
+            apply()
+        }
+    }
+
+    // Reconstruye el botón de paro al reabrir la app con un paro en curso. Es solo el
+    // punto de partida: el estado real lo confirma el servidor en onStart / el radar.
+    private fun restaurarEstadoParo() {
+        val prefs = getSharedPreferences(NOMBRE_PREFS, MODE_PRIVATE)
+        if (!prefs.getBoolean("paro_activo", false)) return
+        if (almuerzoActivo) return   // el almuerzo ya pinta su propio estado
+        val id = prefs.getInt("paro_activo_id", -1).takeIf { it > 0 }
+        aplicarParoActivoUi(id, "Paro en curso")
+    }
+
+    // Consulta GET /api/paro/estado y le CREE AL SERVIDOR. Es el arreglo del bloqueo:
+    // el botón deja de depender de lo que la app recuerda.
+    private fun sincronizarEstadoParoDesdeServidor() {
+        // Puede llamarse desde el radar (IO) o desde el observador de red (hilo de
+        // binder): el estado de la UI solo se lee y escribe en el hilo principal.
+        runOnUiThread {
+            val sesion = sesionActualId ?: return@runOnUiThread
+            if (sesion <= 0) return@runOnUiThread   // -99: el server no conoce esta sesión
+            val generacion = generacionParo
+
+            lifecycleScope.launch(Dispatchers.IO) {
+                try {
+                    val resp = RetrofitClient.apiService.obtenerEstadoParo(sesion)
+                    if (resp.code() == 404) {
+                        // Un 404 acá es ambiguo: puede ser "sesión borrada desde /admin"
+                        // o "esta ruta todavía no existe en el servidor" (mientras no se
+                        // reinicie el servicio). NO se saca al operario de su turno por
+                        // algo que quizá solo signifique que el backend está desfasado;
+                        // la sesión inexistente ya la detecta finalizar_turno.
+                        ErrorReporter.warn("EstadoParo", "404 al consultar el estado del paro (sesión $sesion)")
+                        return@launch
+                    }
+                    val estado = resp.body()
+                    if (!resp.isSuccessful || estado == null) return@launch
+                    withContext(Dispatchers.Main) {
+                        // No aplica si el turno cambió mientras viajaba la respuesta, ni
+                        // si el operario tiene un iniciar/finalizar paro en vuelo (esta
+                        // respuesta podría ser anterior a ese cambio).
+                        if (sesionActualId == sesion &&
+                            !operacionParoEnCurso &&
+                            generacionParo == generacion
+                        ) {
+                            aplicarEstadoParoServidor(estado)
+                        }
+                    }
+                } catch (e: Exception) {
+                    // SIN RED NO SE CAMBIA NADA: mejor un botón posiblemente desfasado
+                    // que uno que se apaga porque se cayó el wifi — eso perdería el
+                    // registro del tiempo parado. La corrección llega en la próxima
+                    // consulta con red.
+                    ErrorReporter.warn("EstadoParo", "No se pudo consultar el estado del paro: ${e.message}")
+                }
+            }
+        }
+    }
+
+    private fun aplicarEstadoParoServidor(estado: EstadoParoResponse) {
+        val abierto = estado.paro_abierto
+
+        // paro_abierto = null NO es un error: significa que la máquina no está en paro.
+        if (!estado.en_paro || abierto == null) {
+            if (paroActivo) aplicarReanudacionUi("El paro ya estaba cerrado — producción reanudada")
+            if (almuerzoActivo) aplicarAlmuerzoInactivo("El almuerzo ya estaba cerrado — producción reanudada")
+            return
+        }
+
+        // El paro abierto es el del almuerzo (mismo mecanismo, motivo fijo): su UI la
+        // maneja el contador del almuerzo, acá no se toca nada.
+        if (abierto.motivo?.contains(MOTIVO_ALMUERZO, ignoreCase = true) == true) return
+
+        // Paro real abierto en el servidor: el botón debe estar en REANUDAR y con el
+        // paro_id que manda el server, aunque el local fuera otro (o no hubiera).
+        if (!paroActivo || paroActivoId != abierto.paro_id) {
+            aplicarParoActivoUi(
+                abierto.paro_id,
+                if (paroActivo) null else "Hay un paro abierto en esta máquina"
+            )
+        }
+    }
+
+    // Menú de la pulsación larga sobre el botón de paro: la salida manual por si todo
+    // lo demás falla, y la posibilidad de rehacer la foto que salió desenfocada.
+    private fun mostrarOpcionesParo() {
+        val etiquetas = mutableListOf<String>()
+        val acciones  = mutableListOf<() -> Unit>()
+
+        if (paroActivoId != null) {
+            etiquetas += "📷 Adjuntar o reemplazar la foto del paro"
+            acciones  += { pedirFotoParoEnCurso() }
+        }
+        etiquetas += "⚠️ Forzar reanudación (el botón quedó trabado)"
+        acciones  += { confirmarForzarReanudacion() }
+
+        AlertDialog.Builder(this)
+            .setTitle("Opciones del paro")
+            .setItems(etiquetas.toTypedArray()) { _, i -> acciones[i]() }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    // Desbloquea la pantalla en local y manda el cierre del paro por la cola. Es lo que
+    // hoy se consigue matando la app, pero sin perder la sesión de trabajo.
+    private fun confirmarForzarReanudacion() {
+        AlertDialog.Builder(this)
+            .setTitle("Forzar reanudación")
+            .setMessage(
+                "Úsalo solo si el botón quedó trabado y no puedes registrar pacas.\n\n" +
+                "Se desbloqueará la pantalla y el cierre del paro se enviará al servidor " +
+                "en cuanto haya red."
+            )
+            .setPositiveButton("FORZAR") { _, _ ->
+                val sesion = sesionActualId
+                lifecycleScope.launch {
+                    if (sesion != null) colaRepo.enqueueFinalizarParo(FinalizarParoRequest(sesion))
+                    aplicarReanudacionUi("Reanudación forzada — el cierre se enviará al servidor")
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    // ===== Evidencia fotográfica del paro (opcional) =====
+
+    // Añade al diálogo el bloque de foto: es opcional a propósito, registrar el paro sin
+    // foto no debe tener ninguna fricción.
+    private fun agregarSelectorFotoParo(contenedor: LinearLayout) {
+        fotoParoUri = null
+        fotoParoFile = null
+
+        contenedor.addView(TextView(this).apply {
+            text = "Evidencia fotográfica (opcional):"
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setPadding(0, 20, 0, 0)
+        })
+
+        val btnCam = Button(this).apply {
+            text = "📷 TOMAR FOTO"
+            setBackgroundColor(Color.parseColor("#455A64"))
+            setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = 8 }
+        }
+        contenedor.addView(btnCam)
+
+        val tvFoto = TextView(this).apply {
+            text = "Sin foto adjunta"
+            setTextColor(Color.GRAY)
+            setPadding(0, 8, 0, 0)
+        }
+        tvFotoParoEstado = tvFoto
+        contenedor.addView(tvFoto)
+
+        btnCam.setOnClickListener {
+            if (checkSelfPermission(android.Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(android.Manifest.permission.CAMERA), PERMISO_CAMARA_PARO)
+                Toast.makeText(this, "Concede el permiso y vuelve a tocar TOMAR FOTO", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            try {
+                val tmp = File.createTempFile(
+                    "PARO_${System.currentTimeMillis()}", ".jpg",
+                    getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES)
+                )
+                fotoParoFile = tmp
+                fotoParoUri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", tmp)
+                launcherCamaraParo.launch(fotoParoUri!!)
+            } catch (e: Exception) {
+                ErrorReporter.report("FotoParo", "No se pudo abrir la cámara", e)
+                Toast.makeText(this, "No se pudo abrir la cámara", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // Foto para un paro YA abierto (repetir la que salió mal). El endpoint sustituye
+    // la anterior, así que se puede rehacer tantas veces como haga falta.
+    private fun pedirFotoParoEnCurso() {
+        val paroId = paroActivoId ?: return
+        val contenedor = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(50, 40, 50, 20)
+        }
+        agregarSelectorFotoParo(contenedor)
+
+        AlertDialog.Builder(this)
+            .setTitle("Foto del paro")
+            .setView(contenedor)
+            .setPositiveButton("ADJUNTAR") { _, _ ->
+                if (fotoParoUri == null) {
+                    Toast.makeText(this, "No tomaste ninguna foto", Toast.LENGTH_SHORT).show()
+                } else {
+                    lifecycleScope.launch { encolarFotoParo(fotoParoUri, paroId) }
+                }
+            }
+            .setNegativeButton("Cancelar") { _, _ -> descartarFotoParoPendiente() }
+            .setOnDismissListener { tvFotoParoEstado = null }
+            .show()
+    }
+
+    // Comprime y encola la foto en su PROPIA operación: si no hay red el paro ya quedó
+    // registrado y la foto sube después, nunca al revés.
+    private suspend fun encolarFotoParo(origen: Uri?, paroId: Int) {
+        val uri = origen ?: return
+        val comprimida = withContext(Dispatchers.IO) { comprimirFotoParo(uri) }
+        descartarFotoParoPendiente()   // el original ya no hace falta
+        if (comprimida == null) {
+            Toast.makeText(this, "No se pudo preparar la foto (el paro sí quedó registrado)", Toast.LENGTH_LONG).show()
+            return
+        }
+        colaRepo.enqueueFotoParo(paroId, comprimida.absolutePath)
+        Toast.makeText(this, "Foto adjuntada al paro", Toast.LENGTH_SHORT).show()
+    }
+
+    // Redimensiona a ~1600 px de lado largo y JPEG 80: el server rechaza con 400 lo que
+    // pase de 5 MB, y una foto de tablet moderna los pasa de sobra.
+    private fun comprimirFotoParo(uri: Uri): File? {
+        return try {
+            val medida = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, medida) }
+            val ladoMayor = maxOf(medida.outWidth, medida.outHeight)
+            if (ladoMayor <= 0) return null
+
+            var escala = 1
+            while (ladoMayor / (escala * 2) >= LADO_MAX_FOTO) escala *= 2
+
+            val bitmap = contentResolver.openInputStream(uri)?.use {
+                BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = escala })
+            } ?: return null
+
+            // En filesDir (no en cacheDir): una foto encolada tiene que sobrevivir a que
+            // el sistema limpie la caché antes de que vuelva la red.
+            val dir = File(filesDir, "fotos_paro").apply { mkdirs() }
+            val destino = File(dir, "paro_${System.currentTimeMillis()}.jpg")
+            java.io.FileOutputStream(destino).use { salida ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, CALIDAD_JPEG_FOTO, salida)
+            }
+            bitmap.recycle()
+            destino
+        } catch (e: Exception) {
+            ErrorReporter.report("FotoParo", "No se pudo comprimir la foto del paro", e)
+            null
+        }
+    }
+
+    private fun descartarFotoParoPendiente() {
+        fotoParoFile?.delete()
+        fotoParoFile = null
+        fotoParoUri = null
+    }
+
     private fun limpiarEstadoParo() {
         paroActivo = false
+        paroActivoId = null
+        generacionParo++
+        persistirEstadoParo(false, null)
         btnParo.text = "REGISTRAR PARO"
         btnParo.setBackgroundColor(Color.parseColor("#FA8400"))
         btnParo.isEnabled = true
         btnEnviarPallet.isEnabled = true
         btnEnviarPallet.setBackgroundColor(Color.parseColor("#2196F3"))
         btnAlmuerzo.isEnabled = true
+    }
+
+    // ==========================================
+    // VELOCIDAD DE MÁQUINA (fundas/min)
+    // ==========================================
+
+    // Lectura puntual de la velocidad a la que está trabajando la máquina. Se pueden
+    // registrar varias por turno; no hay nada que "editar" desde la tablet.
+    private fun pedirVelocidadMaquina() {
+        val contenedor = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(50, 40, 50, 20)
+        }
+        contenedor.addView(TextView(this).apply {
+            // La unidad va rotulada: es lo único que evita que unos registren por minuto
+            // y otros por hora y el histórico quede inservible.
+            text = "Velocidad actual de la máquina, en FUNDAS/MIN:"
+            setTypeface(null, android.graphics.Typeface.BOLD)
+        })
+        val input = EditText(this).apply {
+            hint = "Ej: 45.5"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or
+                android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+        contenedor.addView(input)
+        contenedor.addView(TextView(this).apply {
+            text = "Se permiten decimales (45.5). Rango válido: 0.1 – 1000 fundas/min."
+            setTextColor(Color.GRAY)
+            setPadding(0, 12, 0, 0)
+        })
+
+        AlertDialog.Builder(this)
+            .setTitle("⚡ Velocidad de máquina")
+            .setView(contenedor)
+            .setPositiveButton("REGISTRAR") { _, _ ->
+                // Coma decimal: en la tablet el teclado numérico puede dar "45,5".
+                val velocidad = input.text.toString().trim().replace(',', '.').toDoubleOrNull()
+                if (velocidad == null || velocidad < 0.1 || velocidad > 1000) {
+                    Toast.makeText(this, "Ingrese una velocidad entre 0.1 y 1000 fundas/min", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                registrarVelocidad(velocidad)
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun registrarVelocidad(velocidad: Double) {
+        val sesion = sesionActualId ?: return
+        btnVelocidad.isEnabled = false
+        // request_id desde acá para que el intento directo y el encolado sean la MISMA
+        // lectura: sin él, un reintento entraría dos veces y sesgaría el promedio.
+        val req = VelocidadRequest(
+            sesion_id  = sesion,
+            velocidad  = velocidad,
+            request_id = java.util.UUID.randomUUID().toString()
+        )
+
+        lifecycleScope.launch {
+            try {
+                if (sesion == -99) {
+                    // Turno todavía sin id real: solo cabe encolar (el SyncWorker
+                    // reescribe el -99 con el id real del turno).
+                    colaRepo.enqueueVelocidad(req)
+                    Toast.makeText(this@MainActivity, "Velocidad guardada (pendiente de enviar)", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+
+                val resp = withContext(Dispatchers.IO) {
+                    RetrofitClient.apiService.registrarVelocidad(req)
+                }
+                if (resp.isSuccessful) {
+                    Toast.makeText(this@MainActivity,
+                        "Velocidad registrada: $velocidad fundas/min", Toast.LENGTH_SHORT).show()
+                } else {
+                    // 400/404: el server rechazó (errata del operario o turno cerrado).
+                    // Encolarlo solo repetiría el mismo rechazo.
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("No se pudo registrar la velocidad")
+                        .setMessage(extraerDetalleErrorHttp(resp))
+                        .setPositiveButton("Entendido", null)
+                        .show()
+                }
+            } catch (e: Exception) {
+                ErrorReporter.warn("MainActivity", "Sin red al registrar velocidad, encolando: ${e.message}")
+                colaRepo.enqueueVelocidad(req)
+                Toast.makeText(this@MainActivity,
+                    "Sin red — velocidad guardada, se enviará al reconectar", Toast.LENGTH_LONG).show()
+            } finally {
+                btnVelocidad.isEnabled = true
+            }
+        }
     }
 
     // ==========================================

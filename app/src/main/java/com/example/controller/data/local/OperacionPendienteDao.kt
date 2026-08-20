@@ -66,6 +66,28 @@ class OperacionPendienteDao(context: Context) {
         ).use { c -> generateSequence { if (c.moveToNext()) c.toOp() else null }.toList() }
     }
 
+    // Foto de paro que pertenece al paro cuya operación es [idOperacionParo]: la que se
+    // encoló después de ese paro y antes del siguiente INICIAR_PARO. Acotarla por los
+    // dos lados es lo que evita las asignaciones cruzadas — con la cola
+    // [almuerzo, paro, foto] sin red, quedarse con "la primera posterior" le pegaría la
+    // foto al almuerzo.
+    suspend fun proximaFotoParoSinId(idOperacionParo: Long): OperacionPendiente? = withContext(Dispatchers.IO) {
+        val id = idOperacionParo.toString()
+        db.readableDatabase.rawQuery(
+            """
+            SELECT * FROM operaciones_pendientes
+            WHERE tipo = 'FOTO_PARO' AND fatal = 0 AND id > ?
+              AND payloadJson LIKE '%"paro_id":-99%'
+              AND id < COALESCE(
+                  (SELECT MIN(id) FROM operaciones_pendientes
+                    WHERE tipo = 'INICIAR_PARO' AND id > ?),
+                  9223372036854775807)
+            ORDER BY id ASC LIMIT 1
+            """.trimIndent(),
+            arrayOf(id, id)
+        ).use { c -> if (c.moveToFirst()) c.toOp() else null }
+    }
+
     suspend fun existeFatalIniciarTurno(): Boolean = withContext(Dispatchers.IO) {
         db.readableDatabase.rawQuery(
             "SELECT 1 FROM operaciones_pendientes WHERE tipo = 'INICIAR_TURNO' AND fatal = 1 LIMIT 1",

@@ -8,6 +8,9 @@ import com.example.controller.*
 import com.example.controller.data.local.AppDatabase
 import com.example.controller.data.local.OperacionPendiente
 import com.google.gson.Gson
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.asRequestBody
 import retrofit2.HttpException
 import retrofit2.Response
 import java.io.IOException
@@ -58,6 +61,9 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
                     ) {
                         limpiarSesionLocal()
                     }
+                    // Foto rechazada de plano (400 formato/tamaño, 404 paro borrado):
+                    // no se va a poder subir nunca, así que liberamos el archivo.
+                    if (op.tipo == "FOTO_PARO") borrarArchivoDeFoto(op)
                 } else {
                     val intentos = op.intentos + 1
                     if (intentos > 10) {
@@ -111,6 +117,9 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
                 if (req.sesion_id == -99 && pendingSesionId != null) req = req.copy(sesion_id = pendingSesionId)
                 val resp = api.iniciarParo(req)
                 if (!resp.isSuccessful) throw HttpException(resp)
+                // El paro ya tiene id real: si hay una foto esperándolo en la cola,
+                // le escribimos ese id para que pueda subirse.
+                resp.body()?.paro_id?.let { asignarParoAFotoPendiente(op.id, it) }
                 null
             }
             "FINALIZAR_PARO" -> {
@@ -137,6 +146,46 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
                 if (!resp.isSuccessful) throw HttpException(resp)
                 null
             }
+            "REGISTRAR_VELOCIDAD" -> {
+                // Velocidad de máquina en fundas/min. duplicado:true = idempotencia
+                // por request_id → éxito igual. Un 400 (fuera de rango o turno cerrado)
+                // es fatal: reintentarlo daría el mismo 400 para siempre.
+                var req = gson.fromJson(op.payloadJson, VelocidadRequest::class.java)
+                if (req.sesion_id == -99 && pendingSesionId != null) req = req.copy(sesion_id = pendingSesionId)
+                val resp = api.registrarVelocidad(req)
+                if (!resp.isSuccessful) throw HttpException(resp)
+                null
+            }
+            "FOTO_PARO" -> {
+                // Evidencia fotográfica del paro (opcional). El archivo ya viene
+                // comprimido desde MainActivity; acá solo se sube y se borra del disco.
+                val pendiente = gson.fromJson(op.payloadJson, FotoParoPendiente::class.java)
+                val archivo = java.io.File(pendiente.ruta)
+                if (pendiente.paro_id <= 0) {
+                    // El INICIAR_PARO del que depende aún no se sincronizó. Le damos
+                    // unos reintentos y después DESCARTAMOS la foto: la cola es FIFO y
+                    // una foto que nunca va a resolverse no puede quedarse bloqueando
+                    // el envío de las pacas que vienen detrás.
+                    if (op.intentos < 3) throw IOException("Foto de paro aún sin paro_id real")
+                    Log.w("SyncWorker", "Foto de paro descartada: nunca se resolvió su paro_id")
+                    archivo.delete()
+                    return null
+                }
+                if (!archivo.exists()) {
+                    // El archivo se perdió (limpieza de caché / usuario). No es un error
+                    // recuperable: descartamos la foto sin tocar el paro, que ya está.
+                    Log.w("SyncWorker", "Foto de paro inexistente: ${pendiente.ruta}")
+                    return null
+                }
+                val cuerpo = MultipartBody.Part.createFormData(
+                    "foto", archivo.name,
+                    archivo.asRequestBody("image/jpeg".toMediaType())
+                )
+                val resp = api.subirFotoParo(pendiente.paro_id, cuerpo)
+                if (!resp.isSuccessful) throw HttpException(resp)
+                archivo.delete()
+                null
+            }
             "REPORTE_APP" -> {
                 // Reporte de problema con la app (CAMBIO 5).
                 val req = gson.fromJson(op.payloadJson, ReporteAppRequest::class.java)
@@ -160,6 +209,26 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
             if (nuevoJson != op.payloadJson) {
                 dao.actualizar(op.copy(payloadJson = nuevoJson))
             }
+        }
+    }
+
+    private fun borrarArchivoDeFoto(op: OperacionPendiente) {
+        try {
+            val pendiente = gson.fromJson(op.payloadJson, FotoParoPendiente::class.java)
+            java.io.File(pendiente.ruta).delete()
+        } catch (e: Exception) {
+            Log.w("SyncWorker", "No se pudo borrar la foto de paro: ${e.message}")
+        }
+    }
+
+    // Tras crear el paro en el servidor, le escribimos su id real a la foto que quedó
+    // esperando en la cola (se tomó sin red, cuando el paro todavía era -99). Solo a
+    // UNA: la siguiente foto huérfana pertenece al siguiente paro, no a este.
+    private suspend fun asignarParoAFotoPendiente(idOperacionParo: Long, paroId: Int) {
+        val foto = dao.proximaFotoParoSinId(idOperacionParo) ?: return
+        val nuevoJson = foto.payloadJson.replace("\"paro_id\":-99", "\"paro_id\":$paroId")
+        if (nuevoJson != foto.payloadJson) {
+            dao.actualizar(foto.copy(payloadJson = nuevoJson))
         }
     }
 

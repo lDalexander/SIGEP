@@ -30,11 +30,36 @@ interface ProduccionApi {
     @POST("api/reportes_app")
     suspend fun enviarReporteApp(@Body datos: ReporteAppRequest): Response<RespuestaGenerica>
 
+    // Devuelve {paro_id, mensaje}: el id es necesario para adjuntarle la foto después.
     @POST("/api/paro/iniciar")
-    suspend fun iniciarParo(@Body request: IniciarParoRequest): Response<Void>
+    suspend fun iniciarParo(@Body request: IniciarParoRequest): Response<IniciarParoResponse>
 
+    // 200 con ya_cerrado=true si el paro ya lo había cerrado un supervisor desde la web.
     @POST("/api/paro/finalizar")
-    suspend fun finalizarParo(@Body request: FinalizarParoRequest): Response<Void>
+    suspend fun finalizarParo(@Body request: FinalizarParoRequest): Response<FinalizarParoResponse>
+
+    // Estado real del paro de una sesión. Solo lectura: no crea, no cierra, no modifica.
+    // Es la fuente de verdad para pintar el botón de paro (ver EstadoParoResponse).
+    // 404 = la sesión no existe (borrada desde /admin) → hay que iniciar turno nuevo.
+    @GET("api/paro/estado")
+    suspend fun obtenerEstadoParo(@Query("sesion_id") sesionId: Int): Response<EstadoParoResponse>
+
+    // Evidencia fotográfica OPCIONAL del paro. JPG/PNG, máximo 5 MB (más → 400).
+    // Repetible: vuelve a llamar y sustituye la anterior. Va en ruta aparte y no dentro
+    // de /paro/iniciar a propósito: iniciar recibe JSON y pasarlo a multipart rompería
+    // a todas las tablets ya instaladas en planta.
+    @Multipart
+    @POST("api/paro/{paro_id}/foto")
+    suspend fun subirFotoParo(
+        @Path("paro_id") paroId: Int,
+        @Part foto: MultipartBody.Part
+    ): Response<FotoParoResponse>
+
+    // Velocidad de máquina en fundas/min. Idempotente por request_id (duplicado=true
+    // en la respuesta cuenta como éxito). 400 si está fuera de 0.1–1000 o el turno ya
+    // se cerró; 404 si la sesión no existe.
+    @POST("api/velocidad")
+    suspend fun registrarVelocidad(@Body request: VelocidadRequest): Response<VelocidadResponse>
 
     @POST("/api/insumos/pedido_dinamico")
     suspend fun solicitarInsumo(@Body request: SolicitarInsumoRequest): Response<RespuestaGenerica>
@@ -52,6 +77,16 @@ interface ProduccionApi {
 
     @GET("api/maquinas")
     suspend fun obtenerMaquinas(): Response<List<MaquinaResponse>>
+
+    // Fragancias disponibles para una combinación máquina+marca concretas. El server
+    // NUNCA devuelve lista vacía: si la combinación no está configurada devuelve el
+    // catálogo completo, para que una configuración incompleta en la web no deje a
+    // nadie sin poder iniciar turno. Retrofit codifica las tildes de los parámetros.
+    @GET("api/fragancias")
+    suspend fun obtenerFragancias(
+        @Query("maquina") maquina: String,
+        @Query("marca") marca: String
+    ): Response<List<String>>
 
     @GET("/api/sesion/{sesion_id}/historial")
     suspend fun obtenerHistorialSesion(@Path("sesion_id") sesionId: Int): Response<List<HistorialPallet>>

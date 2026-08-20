@@ -115,6 +115,35 @@ class ColaSyncRepository(private val context: Context) {
         dispararSync()
     }
 
+    // Velocidad de máquina (fundas/min). Idempotente por request_id: sin él una tablet
+    // sin red reintentaría y la misma lectura entraría varias veces, sesgando el
+    // promedio del turno.
+    suspend fun enqueueVelocidad(req: VelocidadRequest) {
+        val requestId = req.request_id.ifBlank { UUID.randomUUID().toString() }
+        dao.insertar(OperacionPendiente(
+            tipo        = "REGISTRAR_VELOCIDAD",
+            payloadJson = gson.toJson(req.copy(request_id = requestId)),
+            requestId   = requestId,
+            creadoEn    = System.currentTimeMillis()
+        ))
+        dispararSync()
+    }
+
+    // Foto de evidencia de un paro. Va en su PROPIA operación, separada del paro: si no
+    // hay red el paro se registra igual y la foto sube después, nunca al revés (un paro
+    // que espera a que suba una foto es un paro que se puede perder).
+    // paroId = -99 cuando el paro se encoló sin red: el SyncWorker lo reescribe con el
+    // id real al sincronizar el INICIAR_PARO.
+    suspend fun enqueueFotoParo(paroId: Int, rutaArchivo: String) {
+        dao.insertar(OperacionPendiente(
+            tipo        = "FOTO_PARO",
+            payloadJson = gson.toJson(FotoParoPendiente(paro_id = paroId, ruta = rutaArchivo)),
+            requestId   = UUID.randomUUID().toString(),
+            creadoEn    = System.currentTimeMillis()
+        ))
+        dispararSync()
+    }
+
     suspend fun desmarcarFatal(id: Long) {
         dao.marcarError(id, "", false)
     }

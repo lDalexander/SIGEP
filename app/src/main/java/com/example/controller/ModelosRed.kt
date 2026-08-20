@@ -90,6 +90,78 @@ data class FinalizarParoRequest(
     val sesion_id: Int
 )
 
+// paro_id es el id del paro recién abierto: lo persistimos para poder adjuntarle la
+// foto después (POST /api/paro/{paro_id}/foto) y para reconocerlo al consultar estado.
+data class IniciarParoResponse(
+    val paro_id: Int? = null,
+    val mensaje: String? = null
+)
+
+// ya_cerrado = true cuando el paro ya estaba cerrado (lo cerró un supervisor desde la
+// web). El server responde 200, NO 404: es un éxito y la tablet debe desbloquearse.
+// El campo no viaja en el camino normal, de ahí el default en false.
+data class FinalizarParoResponse(
+    val paro_id: Int? = null,
+    val mensaje: String? = null,
+    val duracion_segundos: Double? = null,
+    val ya_cerrado: Boolean = false
+)
+
+data class ParoDetalle(
+    val paro_id: Int,
+    val sesion_id: Int? = null,
+    val motivo: String? = null,
+    val inicio_paro: String? = null,
+    val fin_paro: String? = null,
+    val duracion_segundos: Double? = null,
+    val abierto: Boolean = false,
+    val tiene_foto: Boolean = false
+)
+
+// GET /api/paro/estado?sesion_id= — solo lectura, es la FUENTE DE VERDAD del botón
+// de paro. paro_abierto = null NO es error: significa que la máquina no está en paro.
+// Sin esto, un paro cerrado desde la web dejaba el flag local encendido para siempre
+// (bloqueo de 1 h 34 min en la Máquina 7 el 2026-08-19).
+data class EstadoParoResponse(
+    val sesion_id: Int? = null,
+    val turno_abierto: Boolean = false,
+    val en_paro: Boolean = false,
+    val paro_abierto: ParoDetalle? = null,
+    val ultimo_paro: ParoDetalle? = null
+)
+
+data class FotoParoResponse(
+    val paro_id: Int? = null,
+    val foto_url: String? = null,
+    val mensaje: String? = null
+)
+
+// Foto de paro pendiente de subir. Es el payload que viaja en la cola offline (no un
+// DTO de red): la imagen ya comprimida vive en disco y solo guardamos su ruta.
+// paro_id = -99 cuando el paro se abrió sin red y aún no tiene id real; el SyncWorker
+// lo reescribe al sincronizar el INICIAR_PARO, igual que hace con sesion_id.
+data class FotoParoPendiente(
+    val paro_id: Int,
+    val ruta: String
+)
+
+// --- VELOCIDAD DE MÁQUINA (fundas/min) ---
+// Lectura puntual, no un ajuste: se pueden registrar varias por turno y todas quedan
+// con su hora. Idempotente por request_id (sin él, una tablet sin red reintenta y la
+// misma lectura sesga el promedio del turno).
+data class VelocidadRequest(
+    var sesion_id: Int,
+    val velocidad: Double,
+    val request_id: String = ""
+)
+
+data class VelocidadResponse(
+    val velocidad_id: Int? = null,
+    val mensaje: String? = null,
+    val velocidad: Double? = null,
+    val duplicado: Boolean = false
+)
+
 // --- MÓDULO DE INSUMOS (OPERADOR) ---
 data class InsumoResponse(
     val id: Int,

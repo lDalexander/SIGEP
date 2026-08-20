@@ -3,6 +3,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:fillViewport="true"
     android:background="#F0F0F0">
 
@@ -97,7 +98,20 @@
             </LinearLayout>
 
             <EditText android:id="@+id/etCantidadPacas" android:textColor="#000000" android:textColorHint="#757575" android:layout_width="match_parent" android:layout_height="60dp" android:inputType="number" android:hint="Cantidad de Pacas" android:textSize="20sp" android:layout_marginBottom="16dp"/>
-            <Button android:id="@+id/btnEnviarPallet" android:layout_width="match_parent" android:layout_height="60dp" android:text="ENVIAR REGISTRO" android:backgroundTint="#2196F3" android:layout_marginBottom="16dp"/>
+            <Button android:id="@+id/btnEnviarPallet" android:layout_width="match_parent" android:layout_height="60dp" android:text="ENVIAR REGISTRO" android:backgroundTint="#2196F3" android:layout_marginBottom="12dp"/>
+
+            <!-- Velocidad de máquina en fundas/min. La unidad va rotulada también en el
+                 diálogo: es lo único que evita que unos registren por minuto y otros por
+                 hora y el histórico quede inservible. -->
+            <Button
+                android:id="@+id/btnVelocidad"
+                android:layout_width="match_parent"
+                android:layout_height="60dp"
+                android:text="⚡ VELOCIDAD MAQ"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:backgroundTint="#0E7490"
+                android:layout_marginBottom="16dp" />
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -244,6 +258,8 @@
                 android:layout_marginBottom="32dp" />
         </LinearLayout>
 
+        <!-- El texto real lo pone MainActivity desde BuildConfig.VERSION_NAME (onCreate).
+             Con tools:text el número solo existe en el preview y no puede quedar viejo. -->
         <TextView
             android:id="@+id/textViewDevelopedBy"
             android:layout_width="wrap_content"
@@ -251,7 +267,7 @@
             android:layout_gravity="center"
             android:layout_marginTop="20dp"
             android:gravity="center"
-            android:text="Desarrollado por John Alexander Garcia | DETCUADOR S.A. | Versión 1.4.0"
+            tools:text="Desarrollado por John Alexander Garcia | DETCUADOR S.A. | Versión 0.0.0"
             android:textColor="#000000"
             android:textSize="10sp"
             android:textStyle="bold" />
