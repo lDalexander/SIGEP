@@ -2,6 +2,7 @@
 <androidx.constraintlayout.widget.ConstraintLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
@@ -41,11 +42,13 @@
             android:textSize="14sp" />
     </LinearLayout>
 
+    <!-- El texto real lo pone SplashActivity desde BuildConfig.VERSION_NAME (onCreate).
+         Con tools:text el número solo existe en el preview y no puede quedar viejo. -->
     <TextView
         android:id="@+id/textViewDevelopedBy"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Desarrollado por John Alexander Garcia | DETCUADOR S.A. | Versión 1.4.0"
+        tools:text="Desarrollado por John Alexander Garcia | DETCUADOR S.A. | Versión 0.0.0"
         android:textColor="#000000"
         android:textSize="10sp"
         android:textStyle="bold"

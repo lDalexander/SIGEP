@@ -7,6 +7,7 @@ import android.widget.Button
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import com.example.controller.util.versionNameInstalada
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.textfield.TextInputEditText
 import kotlinx.coroutines.Dispatchers
@@ -27,8 +28,10 @@ class MenuRolesActivity : AppCompatActivity() {
         btnInsumista = findViewById(R.id.btnRolInsumista)
         val btnRolSupervisor = findViewById<Button>(R.id.btnRolSupervisor)
         btnAdminAccess = findViewById(R.id.btnAdminAccess)
+        // versionNameInstalada() y NO BuildConfig.VERSION_NAME: esa constante se incrusta
+        // en el .class y se queda vieja si el archivo no se recompila (ver VersionApp.kt).
         findViewById<android.widget.TextView>(R.id.textViewVersion)?.text =
-            "DETCUADOR S.A. | John Garcia | Versión ${BuildConfig.VERSION_NAME}"
+            "DETCUADOR S.A. | John Garcia | Versión ${versionNameInstalada()}"
 
         btnRolSupervisor.setOnClickListener {
             startActivity(Intent(this, LoginActivity::class.java).apply {

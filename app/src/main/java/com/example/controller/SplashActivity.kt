@@ -14,6 +14,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
+import com.example.controller.util.versionNameInstalada
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -25,8 +26,10 @@ class SplashActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_splash)
         supportActionBar?.hide()
+        // versionNameInstalada() y NO BuildConfig.VERSION_NAME (ver VersionApp.kt): esta
+        // pantalla es justo una de las que se quedó mostrando «1.2.3» con la 1.5.1 puesta.
         findViewById<android.widget.TextView>(R.id.textViewDevelopedBy)?.text =
-            "Desarrollado por John Alexander Garcia | DETCUADOR S.A. | Versión ${BuildConfig.VERSION_NAME}"
+            "Desarrollado por John Alexander Garcia | DETCUADOR S.A. | Versión ${versionNameInstalada()}"
         // API de actualización deshabilitada temporalmente (aún no integrada).
         // Para reactivarla, reemplazar la línea siguiente por: verificarActualizacion()
         continuarAPrincipal()

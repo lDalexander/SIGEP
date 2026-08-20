@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
@@ -66,11 +67,13 @@
     app:iconTint="#4D4D4D"
     android:layout_marginBottom="16dp"/>
 
+    <!-- El texto real lo pone MenuRolesActivity desde BuildConfig.VERSION_NAME (onCreate).
+         Con tools:text el número solo existe en el preview y no puede quedar viejo. -->
     <TextView
         android:id="@+id/textViewVersion"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="DETCUADOR S.A. | John Garcia | Versión 1.4.0"
+        tools:text="DETCUADOR S.A. | John Garcia | Versión 0.0.0"
         android:textColor="#888888"
         android:textSize="14sp" />
 
