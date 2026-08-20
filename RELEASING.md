@@ -63,8 +63,8 @@ keyPassword=********
 Edita `app/build.gradle.kts` → bloque `defaultConfig`:
 
 ```kotlin
-versionCode = 10           // SIEMPRE +1 respecto a la versión anterior (última: 10)
-versionName = "1.4.0"      // versión legible (semver) — última publicada: 1.4.0
+versionCode = 12           // SIEMPRE +1 respecto a la versión anterior (última: 12)
+versionName = "1.5.1"      // versión legible (semver) — última publicada: 1.4.0
 ```
 
 Reglas:
@@ -80,8 +80,17 @@ Reglas:
 
 ```bash
 # Windows (Git Bash):
-JAVA_HOME="C:/Program Files/Android/Android Studio/jbr" ./gradlew assembleRelease
+JAVA_HOME="C:/Program Files/Android/Android Studio/jbr" ./gradlew clean assembleRelease
 ```
+
+> **El `clean` no es opcional al subir de versión.** Las etiquetas de versión de la UI
+> se leen del `PackageManager` (ver `util/VersionApp.kt`) justamente porque
+> `BuildConfig.VERSION_NAME` es una constante que Kotlin **incrusta** en el `.class` de
+> cada llamador, y el compilador incremental no recompila un archivo solo porque haya
+> cambiado el *valor* de la constante. Si algún día se vuelve a usar `BuildConfig` para
+> algo que dependa de la versión, un build incremental puede dejar el valor viejo dentro
+> del APK: con la 1.5.1 instalada, `MenuRolesActivity` y `SplashActivity` mostraban
+> «Versión 1.2.3».
 
 APK resultante:
 
@@ -115,11 +124,11 @@ Confirma versión y firma antes de distribuir:
 
 ```bash
 git add app/build.gradle.kts
-git commit -m "chore: version 1.4.0 (versionCode 10)"
+git commit -m "chore: version 1.5.1 (versionCode 12)"
 git checkout master && git merge --no-ff <rama>          # si venías de una rama de feature
-git tag -a v1.4.0 -m "SIGEP v1.4.0"
+git tag -a v1.5.1 -m "SIGEP v1.5.1"
 git push origin master
-git push origin v1.4.0
+git push origin v1.5.1
 ```
 
 ---
@@ -136,7 +145,10 @@ git push origin v1.4.0
 ## Checklist rápido de release
 
 - [ ] `versionCode` incrementado y `versionName` actualizado.
-- [ ] App compila (`./gradlew assembleRelease`).
+- [ ] App compila **con `clean`** (`./gradlew clean assembleRelease`).
+- [ ] La versión que se ve en pantalla (Splash / selección de perfil / producción)
+      coincide con `versionName`. Comprobable sin instalar:
+      `adb shell dumpsys package com.example.controller | grep versionName`.
 - [ ] Contrato cliente↔backend en sincronía (endpoints Retrofit en `ProduccionApi.kt`
       coinciden con el OpenAPI del backend).
 - [ ] APK firmado y verificado (`aapt dump badging`).
