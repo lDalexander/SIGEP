@@ -29,14 +29,22 @@ const RESPUESTAS = {
     { hora: '08:00', pallets: 150, detalle: [{ maquina: 'Máquina 7', operario: 'X', producto: 'ULTREX', pacas: 150 }] },
   ],
   '/api/dashboard/estado_operativo': [
-    /* La 7 registró velocidad; la 9 no. Las dos filas conviven a propósito: son los dos
-       casos que la tabla tiene que distinguir sin inventarse un cero. */
+    /* Las tres filas son los tres casos que la tabla tiene que distinguir, y conviven a
+       propósito: la 7 tiene lectura Y estándar (se puede juzgar), la 9 no tiene lectura
+       (no se inventa un cero) y la 8 tiene lectura pero nadie le configuró el estándar
+       (se enseña sin colorear, porque no hay contra qué compararla). */
     { sesion_id: 376, maquina: 'Máquina 7', operador: 'ANTHONY MERCADO', producto: 'ULTREX - Floral - 1 KG',
       inicio_turno: '10:19:45', tiempo_transcurrido: 288, total_pacas: 300, estado: 'Activo',
-      velocidad_ultima: 45.5, velocidad_promedio: 43.2, velocidad_lecturas: 6, velocidad_hora: '15:04:11' },
+      velocidad_ultima: 45.5, velocidad_promedio: 43.2, velocidad_lecturas: 6, velocidad_hora: '15:04:11',
+      velocidad_min: 32, velocidad_max: 38 },
     { sesion_id: 375, maquina: 'Máquina 9', operador: 'ALEX VALENZUELA', producto: 'TORBELLINO - Floral - 1 KG',
       inicio_turno: '09:19:11', tiempo_transcurrido: 50, total_pacas: 150, estado: 'Finalizado',
-      velocidad_ultima: null, velocidad_promedio: null, velocidad_lecturas: 0, velocidad_hora: null },
+      velocidad_ultima: null, velocidad_promedio: null, velocidad_lecturas: 0, velocidad_hora: null,
+      velocidad_min: null, velocidad_max: null },
+    { sesion_id: 374, maquina: 'Máquina 8', operador: 'PEDRO SARABIA', producto: 'ULTREX - Limón - 500 GR',
+      inicio_turno: '08:02:00', tiempo_transcurrido: 120, total_pacas: 90, estado: 'Activo',
+      velocidad_ultima: 30, velocidad_promedio: 30, velocidad_lecturas: 2, velocidad_hora: '09:40:00',
+      velocidad_min: null, velocidad_max: null },
   ],
   '/api/dashboard/top_produccion': [{ name: 'TORBELLINO', value: 1547 }],
   '/api/dashboard/estadisticas': {
@@ -852,10 +860,13 @@ test('un valor filtrado que ya no está en el rango sigue visible y se puede qui
 /* ─────────────────────────────────────────────────────────────────────────────
    Velocidad de máquina y foto del paro (2026-08-19)
 
-   La velocidad la teclea el operario en la tablet (fundas/min) y aquí se lee. Lo
+   La velocidad la teclea el operario en la tablet (unidades/min) y aquí se lee. Lo
    que se protege: que una sesión SIN lecturas no salga con un cero —sería una
    máquina detenida, y solo significa que nadie la anotó— y que la foto, que es
    opcional, no deje hueco cuando no está.
+
+   Desde el 2026-08-21 se lee además contra el estándar de esa (máquina, presentación)
+   configurado en /admin → Jerarquía: la lectura sola no dice si va bien.
    ───────────────────────────────────────────────────────────────────────────── */
 
 test('la tabla de líneas enseña la velocidad y no inventa un cero sin lecturas', async () => {
@@ -864,12 +875,32 @@ test('la tabla de líneas enseña la velocidad y no inventa un cero sin lecturas
 
   // La Máquina 7 registró 6 lecturas: sale la última, en formato es-EC.
   expect(within(tabla).getByText('45,5')).toBeInTheDocument();
-  expect(within(tabla).getAllByText('Fundas/min').length).toBe(2);
+  /* La etiqueta dice UNIDADES y no «fundas»: la línea líquida no llena fundas y el
+     mismo número describe las dos líneas. */
+  expect(within(tabla).getAllByText('Unid./min').length).toBe(3);
 
   /* La Máquina 9 no registró ninguna. Su celda es «—», y el título lo explica en vez
      de dejar al supervisor adivinando si la máquina fue lentísima o si nadie anotó. */
   const celdaSinVelocidad = within(tabla).getByTitle(/no registró ninguna velocidad/i);
   expect(within(celdaSinVelocidad).getByText('—')).toBeInTheDocument();
+});
+
+test('la lectura se compara con la meta de esa máquina y presentación', async () => {
+  render(<App />);
+  const tabla = await screen.findByRole('region', { name: 'Estado operativo · líneas' });
+
+  /* La Máquina 7 tiene meta 32–38 y va a 45,5: fuera de rango. El rango se enseña bajo la
+     cifra —para saber contra qué se está juzgando sin abrir nada— y el título dice de qué
+     lado se sale, que es lo que decide si hay que ir a mirar la máquina. */
+  const celda = within(tabla).getByTitle(/por encima de la meta de 32 – 38 unidades\/min/);
+  expect(within(celda).getByText('meta 32 – 38')).toBeInTheDocument();
+  expect(within(celda).getByText('45,5')).toHaveClass('text-sig-amber');
+
+  /* La Máquina 8 registró velocidad pero nadie le configuró el estándar: la cifra se
+     enseña SIN color y sin meta. Pintarla de un color sería un juicio inventado. */
+  const sinEstandar = within(tabla).getByTitle(/sin velocidad estándar configurada/);
+  expect(within(sinEstandar).getByText('30')).toHaveClass('text-sig-text');
+  expect(within(tabla).queryAllByText(/^meta /).length).toBe(1);
 });
 
 test('el promedio y el número de lecturas van en el título, no como cifra principal', async () => {

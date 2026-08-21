@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { ChevronDown } from 'lucide-react';
 import { Card, Badge, Button, Campo, Input, Select, Estado, Aviso, useAviso, Label } from '../ui';
-import { num, fechaISO, plural, velocidad } from '../../lib/format';
+import { num, fechaISO, plural, velocidad, rangoVelocidad, estadoVelocidad } from '../../lib/format';
 import FiltroRango from './FiltroRango';
 import useApi from '../../lib/useApi';
 import { admin, mensajeDeError, esSuperadmin, puedeEditar } from '../../lib/adminApi';
@@ -359,8 +359,32 @@ export default function TabProduccion() {
                       turno de ocho horas. */}
                   {sesion.velocidad_lecturas > 0 && (
                     <Label className="text-sig-dim">
-                      {velocidad(sesion.velocidad_promedio)} fundas/min ·{' '}
+                      {velocidad(sesion.velocidad_promedio)} unidades/min ·{' '}
                       {plural(sesion.velocidad_lecturas, 'lectura', 'lecturas')}
+                      {/* La meta de esa (máquina, presentación) cuando está configurada
+                          en Jerarquía (2026-08-21). Se compara contra el PROMEDIO y no
+                          contra la última lectura, al revés que el dashboard: aquí el
+                          turno ya pasó y lo que se juzga es cómo fue entero, no cómo iba
+                          en un instante. */}
+                      {rangoVelocidad(sesion.velocidad_min, sesion.velocidad_max) && (
+                        <span
+                          className={
+                            estadoVelocidad(
+                              sesion.velocidad_promedio, sesion.velocidad_min, sesion.velocidad_max,
+                            ) === 'dentro' ? 'text-sig-ok' : 'text-sig-amber'
+                          }
+                          title={
+                            estadoVelocidad(
+                              sesion.velocidad_promedio, sesion.velocidad_min, sesion.velocidad_max,
+                            ) === 'dentro'
+                              ? 'El promedio del turno está dentro de la meta'
+                              : 'El promedio del turno se sale de la meta de esta máquina y presentación'
+                          }
+                        >
+                          {' · meta '}
+                          {rangoVelocidad(sesion.velocidad_min, sesion.velocidad_max)}
+                        </span>
+                      )}
                     </Label>
                   )}
                   {/* Habilitado siempre, como en las capturas: si no hay cambios el

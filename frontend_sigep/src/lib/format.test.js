@@ -1,6 +1,6 @@
 import {
   num, pct, duracion, antiguedad, fechaCorta, fechaISO, turnoActual, etiquetaTablet, plural,
-  fechaEje, fechaLegible, velocidad,
+  fechaEje, fechaLegible, velocidad, rangoVelocidad, estadoVelocidad,
 } from './format';
 
 describe('num — separador de miles es-EC', () => {
@@ -19,7 +19,7 @@ describe('num — separador de miles es-EC', () => {
   });
 });
 
-describe('velocidad — fundas/min, un decimal', () => {
+describe('velocidad — unidades/min, un decimal', () => {
   test.each([
     [45.5, '45,5'],
     [45, '45'],
@@ -29,7 +29,7 @@ describe('velocidad — fundas/min, un decimal', () => {
     expect(velocidad(entrada)).toBe(salida);
   });
 
-  /* Lo importante de este bloque: sin lectura NO sale un cero. Un «0 fundas/min» es una
+  /* Lo importante de este bloque: sin lectura NO sale un cero. Un «0 unidades/min» es una
      cifra creíble —una máquina detenida— y aquí significaría solo que nadie la anotó. */
   test.each([null, undefined, '', 'abc'])('velocidad(%p) no inventa un cero', (entrada) => {
     expect(velocidad(entrada)).toBe('—');
@@ -37,6 +37,50 @@ describe('velocidad — fundas/min, un decimal', () => {
 
   test('un cero registrado de verdad sí se enseña', () => {
     expect(velocidad(0)).toBe('0');
+  });
+});
+
+/* Velocidad estándar por (máquina, presentación) — 2026-08-21.
+   Estas dos funciones son las que convierten una lectura suelta en «va bien» o «va mal»,
+   así que lo que se protege aquí es que NO juzguen cuando no hay con qué. */
+describe('rangoVelocidad — el par mínimo/máximo', () => {
+  test('formatea los dos extremos en es-EC', () => {
+    expect(rangoVelocidad(32, 38)).toBe('32 – 38');
+    expect(rangoVelocidad(28.5, 32.25)).toBe('28,5 – 32,3');
+  });
+
+  /* Devuelve null y no «—», al revés que el resto del módulo: un guion donde debería ir
+     el rango se leería como «esta máquina no cumple», y lo que pasa es que nadie le ha
+     configurado el estándar. Quien llama decide no pintar nada. */
+  test.each([
+    [null, null], [32, null], [null, 38], [undefined, undefined], ['', ''], ['abc', 38],
+  ])('rangoVelocidad(%p, %p) no pinta nada', (min, max) => {
+    expect(rangoVelocidad(min, max)).toBeNull();
+  });
+});
+
+describe('estadoVelocidad — comparar la lectura con su meta', () => {
+  test.each([
+    [30, 'bajo'],
+    [45, 'sobre'],
+    [35, 'dentro'],
+    [32, 'dentro'],     // los extremos cuentan como dentro: el rango lo escribió alguien
+    [38, 'dentro'],     // pensando «de 32 a 38», y un 38 exacto no es un incumplimiento
+  ])('una lectura de %p contra 32–38 es %p', (valor, esperado) => {
+    expect(estadoVelocidad(valor, 32, 38)).toBe(esperado);
+  });
+
+  /* Sin lectura o sin estándar no hay nada que comparar. Son dos huecos distintos pero
+     llevan a lo mismo: no se juzga, y la UI se limita a enseñar lo que hay. */
+  test.each([
+    [null, 32, 38], [undefined, 32, 38], ['', 32, 38], ['abc', 32, 38],
+    [35, null, null], [35, 32, null], [35, null, 38],
+  ])('estadoVelocidad(%p, %p, %p) no concluye nada', (valor, min, max) => {
+    expect(estadoVelocidad(valor, min, max)).toBeNull();
+  });
+
+  test('un cero registrado de verdad sí se juzga', () => {
+    expect(estadoVelocidad(0, 32, 38)).toBe('bajo');
   });
 });
 

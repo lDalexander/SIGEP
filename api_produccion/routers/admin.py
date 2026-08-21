@@ -25,7 +25,8 @@ from sqlalchemy.orm import Session
 
 from database import get_db, logger
 from sqlalchemy import text
-from routers.operaciones import PAROS_FOTO_DIR
+from routers.operaciones import PAROS_FOTO_DIR, VELOCIDAD_MIN, VELOCIDAD_MAX
+from services.velocidad import SIN_ESTANDAR, estandares_por_maquina_presentacion
 from models import (
     OperadorDB,
     AdministradorDB,
@@ -37,6 +38,7 @@ from models import (
     MaquinaDB,
     MaquinaProductoDB,
     MaquinaMarcaFraganciaDB,
+    MaquinaPresentacionVelocidadDB,
     MarcaDB,
     PresentacionDB,
     FraganciaDB,
@@ -386,6 +388,10 @@ def listar_sesiones(desde: str = Query(None), hasta: str = Query(None), db: Sess
         .order_by(SesionTrabajoDB.inicio_turno.desc())
         .all()
     )
+    # Velocidad estándar de (máquina, presentación) — 2026-08-21. Dos consultas para toda
+    # la lista y no una por fila: es la misma pantalla que ya hace varias por sesión.
+    estandares = estandares_por_maquina_presentacion(db)
+
     out = []
     for s in sesiones:
         total = int(db.query(func.coalesce(func.sum(PalletDB.cantidad_pacas), 0)).filter(PalletDB.session_id == s.id).scalar() or 0)
@@ -408,6 +414,10 @@ def listar_sesiones(desde: str = Query(None), hasta: str = Query(None), db: Sess
             "total_pacas": total, "n_registros": int(n),
             "velocidad_promedio": round(float(vel_prom), 1) if vel_prom is not None else None,
             "velocidad_lecturas": int(vel_n or 0),
+            # Rango esperado para esa máquina y ese gramaje (2026-08-21). Viajan siempre,
+            # con None cuando nadie lo ha configurado: sin estándar la media se enseña sin
+            # juzgarla, que es lo correcto mientras no exista contra qué compararla.
+            **estandares.get((s.maquina, s.presentacion), SIN_ESTANDAR),
         })
     return out
 
@@ -963,6 +973,193 @@ def actualizar_maquina_fragancia(fila_id: int, datos: MaquinaFraganciaUpdate, db
     logger.info(f"Fragancia editada: id {fila.id} (admin {ctx.get('username')})")
     return {"id": fila.id, "maquina_id": fila.maquina_id, "marca": fila.marca,
             "fragancia": fila.fragancia, "activo": bool(fila.activo)}
+
+
+# ----------------------------------------------------------------------------
+# Velocidad estándar por (máquina, presentación)  — 2026-08-21
+# ----------------------------------------------------------------------------
+# La tablet registra a qué velocidad va la máquina desde el 2026-08-19, pero el número
+# llegaba solo: 30 unidades/min no es rápido ni lento hasta saber qué se esperaba de ESA
+# máquina con ESE gramaje. Aquí se configura ese esperado, sin entrar a MySQL.
+#
+# La granularidad NO lleva marca (ver el docstring del modelo): manda el gramaje y la
+# máquina que lo llena, no la etiqueta.
+
+class VelocidadEstandarIn(BaseModel):
+    maquina_id: int
+    presentacion: str
+    vel_min: float
+    vel_max: float
+
+
+class VelocidadEstandarUpdate(BaseModel):
+    vel_min: float | None = None
+    vel_max: float | None = None
+    activo: bool | None = None
+
+
+def _presentacion_de_la_maquina(db, maquina_id: int, nombre) -> str:
+    """Valida que la presentación sea una que esa máquina produce de verdad.
+
+    Mismo criterio que `_marca_de_la_maquina` con las fragancias: si la máquina todavía
+    no tiene jerarquía cargada se acepta cualquiera (si no, no habría por dónde empezar
+    con una máquina recién dada de alta), pero en cuanto la tiene, configurar el ritmo de
+    un gramaje que nunca va a llenar es una fila muerta que además ensucia el editor.
+    """
+    presentacion = (nombre or "").strip()
+    if not presentacion:
+        raise HTTPException(status_code=400, detail="La presentación es obligatoria")
+    suyas = {p.presentacion for p in db.query(MaquinaProductoDB).filter(
+        MaquinaProductoDB.maquina_id == maquina_id,
+        MaquinaProductoDB.activo.is_(True),
+    ).all()}
+    if suyas and presentacion not in suyas:
+        raise HTTPException(status_code=422, detail=f"Esa máquina no produce {presentacion}")
+    return presentacion
+
+
+def _rango_velocidad(vel_min, vel_max):
+    """Valida el par (mínimo, máximo) y lo devuelve redondeado a un decimal.
+
+    Los límites son los MISMOS que acepta `POST /api/velocidad` (0.1–1000): un estándar
+    fuera del rango en el que se puede registrar una lectura no lo cumpliría nunca nadie,
+    y el error saldría a la hora de leer el dashboard, no aquí, que es donde se puede
+    arreglar. El teclado de planta es el mismo en los dos sitios.
+
+    `vel_min == vel_max` se acepta: un estándar exacto es raro pero no es un error.
+    """
+    try:
+        mn = round(float(vel_min), 1)
+        mx = round(float(vel_max), 1)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="La velocidad debe ser un número")
+    for valor in (mn, mx):
+        if not (VELOCIDAD_MIN <= valor <= VELOCIDAD_MAX):
+            raise HTTPException(
+                status_code=400,
+                detail=f"La velocidad debe estar entre {VELOCIDAD_MIN} y {VELOCIDAD_MAX} unidades/min",
+            )
+    if mn > mx:
+        raise HTTPException(status_code=400, detail="El mínimo no puede ser mayor que el máximo")
+    return mn, mx
+
+
+def _velocidad_estandar_dict(fila):
+    return {"id": fila.id, "vel_min": float(fila.vel_min), "vel_max": float(fila.vel_max),
+            "activo": bool(fila.activo)}
+
+
+@router.get("/velocidad_estandar")
+def listar_velocidad_estandar(db: Session = Depends(get_db), ctx=Depends(require_planta_lectura)):
+    """Matriz máquina → presentación → rango esperado, para el editor de la jerarquía.
+
+    Las presentaciones de cada máquina son la unión de las que produce
+    (`maquina_productos` activo) y las que ya tienen estándar configurado: si se da de
+    baja una combinación de producto, su estándar sigue visible y quitable en vez de
+    quedarse en la tabla sin que nada lo muestre. Es el mismo criterio que
+    /admin/maquina_fragancias con las marcas.
+
+    `estandar: null` significa «sin configurar», que es distinto de un rango en cero:
+    sin estándar el dashboard enseña la lectura sin juzgarla, y eso es lo correcto
+    mientras nadie haya dicho qué se espera de esa máquina.
+    """
+    maquinas = db.query(MaquinaDB).order_by(MaquinaDB.id).all()
+
+    productos = db.query(MaquinaProductoDB).filter(MaquinaProductoDB.activo.is_(True)).all()
+    pres_por_maquina: dict[int, set] = {}
+    for p in productos:
+        if p.presentacion:
+            pres_por_maquina.setdefault(p.maquina_id, set()).add(p.presentacion)
+
+    filas = db.query(MaquinaPresentacionVelocidadDB).all()
+    estandar_por_clave = {(f.maquina_id, f.presentacion): f for f in filas}
+
+    def _presentaciones(maquina_id: int) -> list:
+        produce = pres_por_maquina.get(maquina_id, set())
+        configuradas = {p for (mid, p) in estandar_por_clave if mid == maquina_id}
+        salida = []
+        for presentacion in sorted(produce | configuradas):
+            fila = estandar_por_clave.get((maquina_id, presentacion))
+            salida.append({
+                "presentacion": presentacion,
+                "produce": presentacion in produce,
+                "estandar": _velocidad_estandar_dict(fila) if fila else None,
+            })
+        return salida
+
+    return [
+        {"maquina_id": m.id, "maquina": m.nombre, "tipo": m.tipo, "activa": bool(m.activa),
+         "presentaciones": _presentaciones(m.id)}
+        for m in maquinas
+    ]
+
+
+@router.post("/velocidad_estandar")
+def crear_velocidad_estandar(datos: VelocidadEstandarIn, db: Session = Depends(get_db), ctx=Depends(require_planta)):
+    """Fija el rango esperado de (máquina, presentación). Reactiva si existía dado de baja.
+
+    Al reactivar se aplican los valores que vienen ahora y no los viejos: quien vuelve a
+    configurar un estándar que se había quitado está diciendo cuál quiere, y resucitar el
+    anterior en silencio sería justo lo contrario de lo que acaba de teclear.
+    """
+    maquina = db.query(MaquinaDB).filter(MaquinaDB.id == datos.maquina_id).first()
+    if not maquina:
+        raise HTTPException(status_code=404, detail="Máquina no encontrada")
+    presentacion = _presentacion_de_la_maquina(db, datos.maquina_id, datos.presentacion)
+    vel_min, vel_max = _rango_velocidad(datos.vel_min, datos.vel_max)
+
+    existente = db.query(MaquinaPresentacionVelocidadDB).filter(
+        MaquinaPresentacionVelocidadDB.maquina_id == datos.maquina_id,
+        MaquinaPresentacionVelocidadDB.presentacion == presentacion,
+    ).first()
+    if existente:
+        if existente.activo:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{presentacion} ya tiene velocidad estándar en esa máquina",
+            )
+        existente.vel_min, existente.vel_max, existente.activo = vel_min, vel_max, True
+        db.commit()
+        logger.info(f"Velocidad estándar reactivada: maq {datos.maquina_id} {presentacion} "
+                    f"{vel_min}-{vel_max} (admin {ctx.get('username')})")
+        return {"maquina_id": datos.maquina_id, "presentacion": presentacion,
+                "reactivado": True, **_velocidad_estandar_dict(existente)}
+
+    fila = MaquinaPresentacionVelocidadDB(maquina_id=datos.maquina_id, presentacion=presentacion,
+                                          vel_min=vel_min, vel_max=vel_max, activo=True)
+    db.add(fila)
+    db.commit()
+    db.refresh(fila)
+    logger.info(f"Velocidad estándar creada: maq {datos.maquina_id} {presentacion} "
+                f"{vel_min}-{vel_max} (admin {ctx.get('username')})")
+    return {"maquina_id": fila.maquina_id, "presentacion": presentacion,
+            **_velocidad_estandar_dict(fila)}
+
+
+@router.put("/velocidad_estandar/{fila_id}")
+def actualizar_velocidad_estandar(fila_id: int, datos: VelocidadEstandarUpdate, db: Session = Depends(get_db), ctx=Depends(require_planta)):
+    """Corrige el rango o lo da de baja (`{activo:false}`).
+
+    El par se valida ENTERO aunque solo venga un extremo: subir el mínimo por encima del
+    máximo que ya estaba guardado dejaría una fila que ninguna lectura puede cumplir, y
+    el rango es una sola cosa, no dos campos independientes.
+    """
+    fila = db.query(MaquinaPresentacionVelocidadDB).filter(MaquinaPresentacionVelocidadDB.id == fila_id).first()
+    if not fila:
+        raise HTTPException(status_code=404, detail="Velocidad estándar no encontrada")
+    if datos.vel_min is not None or datos.vel_max is not None:
+        vel_min, vel_max = _rango_velocidad(
+            fila.vel_min if datos.vel_min is None else datos.vel_min,
+            fila.vel_max if datos.vel_max is None else datos.vel_max,
+        )
+        fila.vel_min, fila.vel_max = vel_min, vel_max
+    if datos.activo is not None:
+        fila.activo = datos.activo
+    db.commit()
+    logger.info(f"Velocidad estándar editada: id {fila.id} → {fila.vel_min}-{fila.vel_max} "
+                f"activo={bool(fila.activo)} (admin {ctx.get('username')})")
+    return {"maquina_id": fila.maquina_id, "presentacion": fila.presentacion,
+            **_velocidad_estandar_dict(fila)}
 
 
 @router.delete("/maquina_productos/{fila_id}")

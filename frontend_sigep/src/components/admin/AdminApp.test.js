@@ -78,6 +78,23 @@ const MAQUINA_FRAGANCIAS = [
   },
 ];
 
+/* Velocidad estándar: cuelga de (máquina, presentación) — sin la marca, al revés que las
+   fragancias. «1.2 KG» ya tiene rango; «1 KG» no lo tiene todavía (el caso de alta), y
+   «500 GR» lo tuvo y se quitó, además de ser una presentación que esta máquina ya no
+   produce: hay que poder quitarle el rango aunque no salga en su jerarquía. */
+const VELOCIDAD_ESTANDAR = [
+  {
+    maquina_id: 1, maquina: 'Máquina 7', tipo: 'SOLIDO', activa: true,
+    presentaciones: [
+      { presentacion: '1 KG', produce: true, estandar: null },
+      { presentacion: '1.2 KG', produce: true,
+        estandar: { id: 71, vel_min: 32, vel_max: 38, activo: true } },
+      { presentacion: '500 GR', produce: false,
+        estandar: { id: 72, vel_min: 50, vel_max: 60, activo: false } },
+    ],
+  },
+];
+
 const CATALOGOS = {
   maquinas: [{ id: 1, nombre: 'Máquina 7', tipo: 'SOLIDO' }],
   marcas: ['COMISARIATO', 'TORBELLINO', 'ULTREX'],
@@ -90,7 +107,9 @@ const SESIONES = [
     id: 330, maquina: 'Máquina 8', operador: 'KEVIN SORIANO', marca: 'ULTREX',
     presentacion: '500 GR', fragancia: 'Limón', inicio: '2026-07-23 11:19',
     fin: null, estado: 'Activo', total_pacas: 0, n_registros: 0,
+    /* Promedio 43,2 contra una meta de 32–38: el turno se salió del rango. */
     velocidad_promedio: 43.2, velocidad_lecturas: 6,
+    velocidad_min: 32, velocidad_max: 38,
   },
   /* Finalizada y con producción: no debe ofrecer «CERRAR TURNO», y su borrado
      exige teclear el número por tener pacas registradas. */
@@ -100,6 +119,7 @@ const SESIONES = [
     fin: '15:40', estado: 'Finalizado', total_pacas: 480, n_registros: 12,
     /* Sin ninguna lectura: las sesiones anteriores a este cambio nunca tendrán. */
     velocidad_promedio: null, velocidad_lecturas: 0,
+    velocidad_min: null, velocidad_max: null,
   },
 ];
 
@@ -274,6 +294,7 @@ beforeEach(() => {
     if (url === '/operadores')        return Promise.resolve({ data: OPERARIOS });
     if (url === '/maquina_productos') return Promise.resolve({ data: MAQUINA_PRODUCTOS });
     if (url === '/maquina_fragancias') return Promise.resolve({ data: MAQUINA_FRAGANCIAS });
+    if (url === '/velocidad_estandar') return Promise.resolve({ data: VELOCIDAD_ESTANDAR });
     if (url === '/catalogos')         return Promise.resolve({ data: CATALOGOS });
     if (url === '/sesiones')          return Promise.resolve({ data: SESIONES });
     if (url === '/checklists')        return Promise.resolve({ data: CHECKLISTS });
@@ -524,6 +545,114 @@ test('Jerarquía: quitar una fragancia hace PUT {activo:false}, nunca DELETE', a
   // El histórico de sesiones se cruza con la fragancia por texto: un borrado físico
   // lo dejaría colgando.
   expect(mockAdmin.delete).not.toHaveBeenCalled();
+});
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Velocidad estándar por (máquina, presentación) — 2026-08-21
+
+   Es la tercera jerarquía de esta pestaña y la única que NO viaja a las tablets: la
+   app manda su lectura y la web la interpreta. Lo que se protege aquí es la
+   granularidad (presentación, sin marca), que quitar sea baja lógica como todo lo
+   demás, y que un rango imposible no salga de la web.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+test('Jerarquía: la velocidad estándar va por presentación, no por marca', async () => {
+  render(<AdminApp />);
+  irA('Jerarquía');
+  await screen.findByText('Máquina 7');
+
+  expect(screen.getByText('Velocidad estándar por presentación · unidades/min')).toBeInTheDocument();
+
+  // Lo guardado se precarga en las casillas: se corrige encima, no se vuelve a teclear.
+  expect(screen.getByLabelText('Velocidad mínima de 1.2 KG en Máquina 7')).toHaveValue(32);
+  expect(screen.getByLabelText('Velocidad máxima de 1.2 KG en Máquina 7')).toHaveValue(38);
+
+  /* Se teclea el minuto y se enseña la hora calculada, nunca al revés: en planta se
+     habla por hora, pero lo que manda la tablet son unidades por minuto. */
+  expect(screen.getByText('≈ 1.920 – 2.280 /hora')).toBeInTheDocument();
+
+  // 1 KG todavía no tiene rango: se dice, en vez de enseñar un 0 – 0 que parecería puesto.
+  expect(screen.getByLabelText('Velocidad mínima de 1 KG en Máquina 7')).toHaveValue(null);
+  expect(screen.getByText('sin configurar')).toBeInTheDocument();
+
+  /* 500 GR lo tuvo y se quitó, y además ya no se produce. Las dos cosas se dicen por
+     separado: son distintas y las dos explican por qué esa fila sigue ahí. */
+  expect(screen.getByText('quitada')).toBeInTheDocument();
+  expect(screen.getByText('ya no se produce')).toBeInTheDocument();
+});
+
+test('Jerarquía: fijar la velocidad de una presentación sin estándar la crea', async () => {
+  render(<AdminApp />);
+  irA('Jerarquía');
+  await screen.findByText('Máquina 7');
+
+  fireEvent.change(screen.getByLabelText('Velocidad mínima de 1 KG en Máquina 7'), {
+    target: { value: '28' },
+  });
+  fireEvent.change(screen.getByLabelText('Velocidad máxima de 1 KG en Máquina 7'), {
+    target: { value: '32' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Aplicar velocidad de 1 KG en Máquina 7' }));
+
+  await waitFor(() =>
+    expect(mockAdmin.post).toHaveBeenCalledWith('/velocidad_estandar', {
+      maquina_id: 1, presentacion: '1 KG', vel_min: 28, vel_max: 32,
+    })
+  );
+});
+
+test('Jerarquía: corregir un rango existente va por PUT y lo deja aplicando', async () => {
+  render(<AdminApp />);
+  irA('Jerarquía');
+  await screen.findByText('Máquina 7');
+
+  fireEvent.change(screen.getByLabelText('Velocidad mínima de 1.2 KG en Máquina 7'), {
+    target: { value: '30' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Guardar velocidad de 1.2 KG en Máquina 7' }));
+
+  /* `activo: true` va siempre: guardar un rango en una presentación dada de baja es
+     decir que vuelve a aplicar, y si no, el cambio se guardaría sin efecto visible. */
+  await waitFor(() =>
+    expect(mockAdmin.put).toHaveBeenCalledWith('/velocidad_estandar/71', {
+      vel_min: 30, vel_max: 38, activo: true,
+    })
+  );
+});
+
+test('Jerarquía: quitar la velocidad estándar es PUT {activo:false}, nunca DELETE', async () => {
+  render(<AdminApp />);
+  irA('Jerarquía');
+  await screen.findByText('Máquina 7');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Quitar velocidad de 1.2 KG en Máquina 7' }));
+
+  /* La confirmación dice qué se pierde y qué no: las lecturas siguen llegando, lo que
+     se apaga es la comparación. Sin eso se leería como «deja de medirse la velocidad». */
+  expect(window.confirm.mock.calls[0][0]).toMatch(/dejarán de compararse con un rango/);
+  await waitFor(() =>
+    expect(mockAdmin.put).toHaveBeenCalledWith('/velocidad_estandar/71', { activo: false })
+  );
+  expect(mockAdmin.delete).not.toHaveBeenCalled();
+});
+
+test('Jerarquía: un rango imposible no sale de la web', async () => {
+  render(<AdminApp />);
+  irA('Jerarquía');
+  await screen.findByText('Máquina 7');
+
+  fireEvent.change(screen.getByLabelText('Velocidad mínima de 1 KG en Máquina 7'), {
+    target: { value: '40' },
+  });
+  fireEvent.change(screen.getByLabelText('Velocidad máxima de 1 KG en Máquina 7'), {
+    target: { value: '20' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Aplicar velocidad de 1 KG en Máquina 7' }));
+
+  /* El backend lo rechazaría igual; se para aquí para que el aviso salga al lado de lo
+     que se acaba de teclear y no como un error de servidor. */
+  expect(await screen.findByText(/El mínimo no puede ser mayor que el máximo/)).toBeInTheDocument();
+  expect(mockAdmin.post).not.toHaveBeenCalled();
 });
 
 test('Jerarquía: el catálogo maestro de fragancias se da de alta como marcas y presentaciones', async () => {
@@ -1322,10 +1451,24 @@ test('Producción: la velocidad media sale solo cuando hay lecturas', async () =
   irA('Producción');
 
   // La sesión 330 tiene 6 lecturas: promedio y recuento juntos, que es lo que da contexto.
-  expect(await screen.findByText(/43,2 fundas\/min · 6 lecturas/)).toBeInTheDocument();
+  expect(await screen.findByText(/43,2 unidades\/min · 6 lecturas/)).toBeInTheDocument();
   /* La 331 no tiene ninguna, y no se pinta un «—» permanente: las sesiones anteriores al
      cambio nunca van a tener lecturas y sería ruido en cada fila. */
   expect(screen.queryByText(/0 lecturas/)).not.toBeInTheDocument();
+});
+
+test('Producción: el promedio del turno se compara con la meta de esa presentación', async () => {
+  render(<AdminApp />);
+  irA('Producción');
+
+  /* La 330 promedió 43,2 con una meta de 32–38: se salió, y se marca en ámbar. Se juzga
+     el PROMEDIO y no la última lectura, al revés que el dashboard: aquí el turno ya
+     terminó y lo que interesa es cómo fue entero. */
+  const meta = await screen.findByText(/meta 32 – 38/);
+  expect(meta).toHaveClass('text-sig-amber');
+
+  /* La 331 no tiene meta configurada: no se pinta ninguna, ni siquiera vacía. */
+  expect(screen.queryAllByText(/meta /).length).toBe(1);
 });
 
 test('Paros: eliminar avisa de que es definitivo y sugiere corregir las horas', async () => {

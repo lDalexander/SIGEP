@@ -14,6 +14,7 @@ from fastapi.responses import StreamingResponse
 
 from database import get_db, logger
 from models import PalletDB, SesionTrabajoDB, ParoMaquinaDB, MaquinaDB, ComentarioTurnoDB, VelocidadMaquinaDB
+from services.velocidad import SIN_ESTANDAR, estandares_por_maquina_presentacion
 
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
@@ -331,6 +332,11 @@ def obtener_estado_operativo(desde: str = Query(None), hasta: str = Query(None),
                     "velocidad_hora": ultima_hora.strftime("%H:%M:%S") if ultima_hora else None,
                 }
 
+        # Rango esperado de cada (máquina, presentación), configurado en /admin →
+        # Jerarquía (2026-08-21). Es lo que convierte la lectura en información: sin él,
+        # «30» es un número; con él, es «va por debajo de lo que debería».
+        estandares = estandares_por_maquina_presentacion(db) if sesiones else {}
+
         resultados = []
         for s in sesiones:
             pallets_sesion = db.query(func.coalesce(func.sum(PalletDB.cantidad_pacas), 0)).filter(PalletDB.session_id == s.id).scalar()
@@ -353,7 +359,12 @@ def obtener_estado_operativo(desde: str = Query(None), hasta: str = Query(None),
                 **vel_por_sesion.get(s.id, {
                     "velocidad_ultima": None, "velocidad_promedio": None,
                     "velocidad_lecturas": 0, "velocidad_hora": None,
-                })
+                }),
+                # Y las dos del estándar (2026-08-21), con el mismo criterio: viajan
+                # siempre, en None cuando esa combinación no tiene rango configurado. La
+                # web enseña entonces la lectura sin juzgarla, que es lo honesto mientras
+                # nadie haya dicho qué se espera de esa máquina con ese gramaje.
+                **estandares.get((s.maquina, s.presentacion), SIN_ESTANDAR),
             })
         return resultados
     except Exception as e:

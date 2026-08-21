@@ -114,6 +114,43 @@ class MaquinaMarcaFraganciaDB(Base):
     fragancia = Column(String(100), nullable=False)
     activo = Column(Boolean, default=True)
 
+
+class MaquinaPresentacionVelocidadDB(Base):
+    """Velocidad ESTÁNDAR de (máquina, presentación), en unidades/min.
+
+    Es el rango al que se espera que trabaje esa máquina con ese gramaje —Máquina 7 con
+    1 KG entre 32 y 38, Máquina 9 con el mismo 1 KG entre 28 y 32— y existe para que la
+    lectura que manda la tablet (`registro_velocidad`) se pueda leer como rápida o lenta
+    en vez de como un número suelto: 30 unidades/min por sí solo no dice nada.
+
+    La granularidad es (máquina, presentación) y NO lleva marca, por el mismo motivo por
+    el que `maquina_marca_fragancias` no lleva presentación: lo que manda el ritmo es el
+    gramaje y la máquina que lo llena, no la etiqueta. ULTREX 1 KG y TORBELLINO 1 KG en la
+    Máquina 7 van al mismo ritmo, así que colgarlo de `maquina_productos` habría
+    multiplicado las filas a configurar sin ganar precisión.
+
+    UN RANGO Y NO UN VALOR ÚNICO: el ritmo real oscila con el material y con el operario,
+    así que un objetivo puntual marcaría como desviación cualquier turno normal. `vel_min`
+    es el suelo por debajo del cual hay que ir a mirar la máquina; `vel_max` el techo por
+    encima del cual la lectura es sospechosa (o el operario tecleó de más).
+
+    Se dice «unidades» y no «fundas» porque la línea líquida no llena fundas.
+
+    `activo` es baja lógica, igual que en las otras dos jerarquías: quitar un estándar no
+    puede borrar la referencia con la que se leyeron los turnos anteriores.
+    """
+    __tablename__ = "maquina_presentacion_velocidad"
+    __table_args__ = (
+        UniqueConstraint("maquina_id", "presentacion", name="uq_maquina_presentacion_velocidad"),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    maquina_id = Column(Integer, ForeignKey("maquinas.id"), index=True, nullable=False)
+    presentacion = Column(String(100), nullable=False)
+    vel_min = Column(Float, nullable=False)
+    vel_max = Column(Float, nullable=False)
+    activo = Column(Boolean, default=True)
+
+
 class InsumoDB(Base):
     """Catálogo de insumos (materiales) que se pueden solicitar a bodega."""
     __tablename__ = "insumos"

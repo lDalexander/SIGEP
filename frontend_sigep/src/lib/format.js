@@ -11,10 +11,13 @@ export function num(v) {
 }
 
 /**
- * Velocidad de máquina -> "45,5" (fundas/min). Un decimal como máximo.
+ * Velocidad de máquina -> "45,5" (unidades/min). Un decimal como máximo.
+ *
+ * Se dice UNIDADES y no «fundas» en toda la web: la línea líquida no llena fundas, y el
+ * mismo número va a describir las dos líneas.
  *
  * Sin lectura devuelve «—» y NO cero: una máquina sin velocidad registrada no va a cero
- * fundas/min, es que nadie la anotó. Mismo criterio que el resto de `format`, y aquí
+ * unidades/min, es que nadie la anotó. Mismo criterio que el resto de `format`, y aquí
  * importa más porque el cero sería una cifra creíble.
  */
 export function velocidad(v) {
@@ -22,6 +25,50 @@ export function velocidad(v) {
   const n = Number(v);
   if (!Number.isFinite(n)) return '—';
   return n.toLocaleString('es-EC', { maximumFractionDigits: 1 });
+}
+
+/**
+ * Número utilizable, o null. `Number(null)` y `Number('')` son 0, así que los huecos hay
+ * que descartarlos ANTES de convertir: es el mismo cuidado que `num()`, y aquí un cero
+ * colado convertiría «sin estándar» en «meta 0 – 0» y marcaría toda la planta en rojo.
+ */
+function cifra(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Rango estándar de velocidad -> "32 – 38". Sin los dos extremos devuelve null.
+ *
+ * Devuelve NULL y no «—» a propósito, al revés que el resto de este módulo: quien llama
+ * decide si pintar algo. Un «—» donde debería ir el rango se leería como «esta máquina
+ * no cumple», y lo que pasa de verdad es que nadie le ha configurado el estándar.
+ */
+export function rangoVelocidad(min, max) {
+  const a = cifra(min);
+  const b = cifra(max);
+  if (a === null || b === null) return null;
+  return `${velocidad(a)} – ${velocidad(b)}`;
+}
+
+/**
+ * Compara una lectura con su rango estándar -> 'bajo' | 'dentro' | 'sobre' | null.
+ *
+ * `null` cuando falta la lectura o falta el estándar, que son dos huecos distintos pero
+ * llevan a la misma conclusión: no hay nada que comparar, así que no se juzga.
+ *
+ * Los extremos CUENTAN COMO DENTRO: el rango lo teclea una persona pensando «de 32 a 38»,
+ * y marcar en rojo un turno que fue exactamente a 32 contradiría lo que quiso decir.
+ */
+export function estadoVelocidad(valor, min, max) {
+  const v = cifra(valor);
+  const a = cifra(min);
+  const b = cifra(max);
+  if (v === null || a === null || b === null) return null;
+  if (v < a) return 'bajo';
+  if (v > b) return 'sobre';
+  return 'dentro';
 }
 
 /** 28.23 -> "28.2%". Un decimal, como en las capturas. */

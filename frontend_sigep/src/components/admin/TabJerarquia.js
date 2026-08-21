@@ -1,11 +1,29 @@
 import React, { useState } from 'react';
 import { X } from 'lucide-react';
 import { Card, Badge, Button, Dot, Estado, Input, Select, Aviso, useAviso, Label } from '../ui';
-import { plural } from '../../lib/format';
+import { plural, num } from '../../lib/format';
 import useApi from '../../lib/useApi';
 import { admin, mensajeDeError } from '../../lib/adminApi';
 
 const TIPOS = ['Sólido', 'Líquido'];
+
+/* Los mismos límites que acepta POST /api/velocidad, que es la lectura contra la que se
+   compara: un estándar fuera de ellos no lo cumpliría ninguna lectura posible. */
+const VEL_MIN = 0.1;
+const VEL_MAX = 1000;
+
+/** Lo que se teclea son unidades/min; esto es el equivalente por hora, para reconocerlo.
+ *
+ *  La casilla vacía se descarta ANTES de convertir: `Number('')` es 0, y con él una
+ *  presentación sin configurar mostraría «≈ 0 – 0 /hora» como si tuviera un rango puesto.
+ */
+function porHora(min, max) {
+  if (min === '' || max === '' || min === null || max === null) return null;
+  const a = Number(min);
+  const b = Number(max);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  return `${num(Math.round(a * 60))} – ${num(Math.round(b * 60))}`;
+}
 
 /** El backend normaliza a SOLIDO/LIQUIDO; aquí se muestra con tilde. */
 function tipoBonito(tipo) {
@@ -23,10 +41,15 @@ function tipoContrario(tipo) {
  * iniciar turno, y la cachea offline; editar aquí se refleja en las tablets al
  * reconectar, sin reinstalar la app.
  *
- * Son DOS jerarquías con granularidad distinta, y no es un descuido:
- * `maquina_productos` va por (máquina, marca, presentación) y
- * `maquina_marca_fragancias` por (máquina, marca) — la fragancia no depende del
- * gramaje, ULTREX 1 KG y ULTREX 3 KG de la misma máquina llevan las mismas.
+ * Son TRES jerarquías con granularidad distinta, y no es un descuido:
+ * `maquina_productos` va por (máquina, marca, presentación), `maquina_marca_fragancias`
+ * por (máquina, marca) —la fragancia no depende del gramaje, ULTREX 1 KG y ULTREX 3 KG de
+ * la misma máquina llevan las mismas— y `maquina_presentacion_velocidad` por (máquina,
+ * presentación), que es justo la otra mitad: el ritmo lo marca el gramaje y la máquina que
+ * lo llena, no la etiqueta que lleve encima.
+ *
+ * La velocidad estándar, además, NO viaja a las tablets: la app manda su lectura y esta
+ * web la interpreta. Cambiar un rango aquí no cambia nada de lo que ve el operario.
  *
  * «Eliminar» hace baja lógica (`PUT {activo:false}`) en lugar del `DELETE` físico,
  * para no romper el histórico.
@@ -34,6 +57,7 @@ function tipoContrario(tipo) {
 export default function TabJerarquia() {
   const matriz = useApi('/maquina_productos', { cliente: admin });
   const fragMatriz = useApi('/maquina_fragancias', { cliente: admin });
+  const velMatriz = useApi('/velocidad_estandar', { cliente: admin });
   const catalogos = useApi('/catalogos', { cliente: admin });
   const { aviso, ok, fallo } = useAviso();
 
@@ -47,6 +71,10 @@ export default function TabJerarquia() {
   const [combo, setCombo] = useState({});
   /* Fragancia en preparación, por máquina+marca: { "3|ULTREX": "Floral" } */
   const [fragElegida, setFragElegida] = useState({});
+  /* Rango en edición, por máquina+presentación: { "1|1 KG": {min:'32', max:'38'} }.
+     Se guarda como TEXTO y no como número: es lo que hay en el input, y convertirlo en
+     cada tecla haría que borrar el último dígito reescribiera un 0 en la casilla. */
+  const [velEditada, setVelEditada] = useState({});
 
   const maquinas = Array.isArray(matriz.datos) ? matriz.datos : [];
   const marcas = catalogos.datos?.marcas || [];
@@ -59,9 +87,16 @@ export default function TabJerarquia() {
     fragPorMaquina[m.maquina_id] = m.marcas || [];
   });
 
+  /* maquina_id -> presentaciones[] con su estándar de velocidad, tal como lo da la API. */
+  const velPorMaquina = {};
+  (Array.isArray(velMatriz.datos) ? velMatriz.datos : []).forEach((m) => {
+    velPorMaquina[m.maquina_id] = m.presentaciones || [];
+  });
+
   const recargarTodo = () => {
     matriz.recargar();
     fragMatriz.recargar();
+    velMatriz.recargar();
     catalogos.recargar();
   };
 
@@ -167,12 +202,93 @@ export default function TabJerarquia() {
     }
   };
 
+  /* ── Velocidad estándar por máquina + presentación ──── */
+  /* Lo que se ve en la casilla: lo tecleado si hay algo, y si no lo que está guardado.
+     Se distingue con `=== undefined` y no con `||`: un 0 tecleado es un valor, y con
+     `||` volvería a pintar el guardado en cuanto se borra el campo. */
+  const valorVel = (clave, item, campo) => {
+    const tocado = velEditada[clave]?.[campo];
+    if (tocado !== undefined) return tocado;
+    const guardado = item.estandar?.[campo === 'min' ? 'vel_min' : 'vel_max'];
+    return guardado === null || guardado === undefined ? '' : String(guardado);
+  };
+
+  const escribirVel = (clave, campo, valor) =>
+    setVelEditada((prev) => ({ ...prev, [clave]: { ...prev[clave], [campo]: valor } }));
+
+  /* El backend valida lo mismo; esto es para no gastar un viaje y para que el aviso salga
+     al lado de lo que se acaba de teclear. */
+  const errorDelRango = (min, max) => {
+    const a = Number(min);
+    const b = Number(max);
+    if (min === '' || max === '' || !Number.isFinite(a) || !Number.isFinite(b)) {
+      return 'Escribe el mínimo y el máximo';
+    }
+    if (a < VEL_MIN || a > VEL_MAX || b < VEL_MIN || b > VEL_MAX) {
+      return `La velocidad debe estar entre ${VEL_MIN} y ${VEL_MAX} unidades/min`;
+    }
+    if (a > b) return 'El mínimo no puede ser mayor que el máximo';
+    return null;
+  };
+
+  const guardarVelocidad = async (maquina, item) => {
+    const clave = `${maquina.maquina_id}|${item.presentacion}`;
+    const min = valorVel(clave, item, 'min');
+    const max = valorVel(clave, item, 'max');
+    const problema = errorDelRango(min, max);
+    if (problema) {
+      fallo(`${item.presentacion}: ${problema}`);
+      return;
+    }
+    try {
+      /* Con fila existente se corrige (PUT, que también la reactiva si estaba de baja) y
+         sin ella se crea (POST). El PUT lleva `activo: true` a propósito: guardar un
+         rango en una presentación dada de baja es decir que vuelve a aplicar. */
+      if (item.estandar) {
+        await admin.put(`/velocidad_estandar/${item.estandar.id}`, {
+          vel_min: Number(min), vel_max: Number(max), activo: true,
+        });
+      } else {
+        await admin.post('/velocidad_estandar', {
+          maquina_id: maquina.maquina_id,
+          presentacion: item.presentacion,
+          vel_min: Number(min),
+          vel_max: Number(max),
+        });
+      }
+      ok(`${item.presentacion} en ${maquina.maquina}: ${min}–${max} unidades/min`);
+      setVelEditada((prev) => ({ ...prev, [clave]: undefined }));
+      velMatriz.recargar();
+    } catch (err) {
+      fallo(mensajeDeError(err));
+    }
+  };
+
+  /* Baja lógica, como todo lo demás de esta pantalla: la fila se conserva para poder
+     reactivarla, y los turnos ya leídos con ese rango no pierden su referencia. */
+  const quitarVelocidad = async (maquina, item) => {
+    if (!window.confirm(
+      `¿Quitar la velocidad estándar de ${item.presentacion} en ${maquina.maquina}?\n\n` +
+      'Las lecturas de la tablet se seguirán registrando, pero dejarán de compararse ' +
+      'con un rango en el dashboard.'
+    )) return;
+    try {
+      await admin.put(`/velocidad_estandar/${item.estandar.id}`, { activo: false });
+      ok(`Velocidad estándar quitada de ${item.presentacion} en ${maquina.maquina}`);
+      setVelEditada((prev) => ({ ...prev, [`${maquina.maquina_id}|${item.presentacion}`]: undefined }));
+      velMatriz.recargar();
+    } catch (err) {
+      fallo(mensajeDeError(err));
+    }
+  };
+
   return (
     <div>
       <div className="flex items-start justify-between gap-4 mb-5">
         <Label caja="normal" className="text-sig-dim">
-          Qué marca, presentación y fragancia produce cada máquina · se sincroniza con las
-          tablets al reconectar
+          Qué marca, presentación y fragancia produce cada máquina —se sincroniza con las
+          tablets al reconectar— y a qué velocidad debería trabajar, que solo se usa en la
+          web
         </Label>
         <Button onClick={recargarTodo} className="shrink-0">Recargar</Button>
       </div>
@@ -464,6 +580,118 @@ export default function TabJerarquia() {
                               >
                                 Añadir
                               </Button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Velocidad estándar: cuelga de (máquina, presentación), sin marca —
+                    lo que manda el ritmo es el gramaje y la máquina que lo llena. Es la
+                    referencia contra la que el dashboard lee la velocidad que manda la
+                    tablet; sin ella, la lectura se enseña pero no se juzga. */}
+                <div className="border-t border-sig-line px-5 py-3">
+                  <Label caja="normal" className="mb-2.5 block text-sig-muted">
+                    Velocidad estándar por presentación · unidades/min
+                  </Label>
+
+                  {(velPorMaquina[maquina.maquina_id] || []).length === 0 ? (
+                    <Label caja="normal" className="text-sig-dim">
+                      {velMatriz.cargando
+                        ? 'Cargando…'
+                        : 'Sin presentaciones todavía — agrega una combinación arriba'}
+                    </Label>
+                  ) : (
+                    <div className="space-y-2">
+                      {(velPorMaquina[maquina.maquina_id] || []).map((item) => {
+                        const clave = `${maquina.maquina_id}|${item.presentacion}`;
+                        const min = valorVel(clave, item, 'min');
+                        const max = valorVel(clave, item, 'max');
+                        const activo = Boolean(item.estandar?.activo);
+                        const hora = porHora(min, max);
+                        return (
+                          <div key={item.presentacion} className="flex flex-wrap items-center gap-2">
+                            <span className="w-[112px] shrink-0 font-mono text-[11px] uppercase
+                                             tracking-label text-sig-muted">
+                              {item.presentacion}
+                            </span>
+
+                            <Input
+                              type="number"
+                              inputMode="decimal"
+                              min={VEL_MIN}
+                              max={VEL_MAX}
+                              step="0.1"
+                              value={min}
+                              onChange={(e) => escribirVel(clave, 'min', e.target.value)}
+                              placeholder="mín"
+                              aria-label={`Velocidad mínima de ${item.presentacion} en ${maquina.maquina}`}
+                              className="w-[78px]"
+                            />
+                            <span className="text-sig-dim" aria-hidden="true">–</span>
+                            <Input
+                              type="number"
+                              inputMode="decimal"
+                              min={VEL_MIN}
+                              max={VEL_MAX}
+                              step="0.1"
+                              value={max}
+                              onChange={(e) => escribirVel(clave, 'max', e.target.value)}
+                              placeholder="máx"
+                              aria-label={`Velocidad máxima de ${item.presentacion} en ${maquina.maquina}`}
+                              className="w-[78px]"
+                            />
+
+                            {/* El equivalente por hora, calculado: es como se habla del
+                                objetivo en planta, pero lo que se compara con la tablet
+                                es el minuto, así que se teclea el minuto y se muestra la
+                                hora, nunca al revés. */}
+                            {hora ? (
+                              <Label caja="normal" className="text-sig-dim">≈ {hora} /hora</Label>
+                            ) : (
+                              <Label caja="normal" className="text-sig-dim">sin configurar</Label>
+                            )}
+
+                            {/* Dos avisos distintos que no hay que confundir: la fila
+                                dada de baja sigue guardada pero no compara nada, y la
+                                presentación que la máquina ya no produce solo está aquí
+                                para poder quitarle el estándar que se le puso antes. */}
+                            {item.estandar && !activo && (
+                              <Label caja="normal" className="text-sig-dim line-through">
+                                quitada
+                              </Label>
+                            )}
+                            {!item.produce && (
+                              <Label
+                                caja="normal"
+                                className="text-sig-dim"
+                                title="Esta máquina ya no tiene esa presentación en su jerarquía"
+                              >
+                                ya no se produce
+                              </Label>
+                            )}
+
+                            {/* Los botones se nombran con su presentación: hay uno por
+                                fila y «Guardar» a secas no diría cuál. */}
+                            <div className="ml-auto flex items-center gap-2">
+                              <Button
+                                tamano="sm"
+                                onClick={() => guardarVelocidad(maquina, item)}
+                                aria-label={`${activo ? 'Guardar' : 'Aplicar'} velocidad de ${item.presentacion} en ${maquina.maquina}`}
+                              >
+                                {activo ? 'Guardar' : 'Aplicar'}
+                              </Button>
+                              {activo && (
+                                <Button
+                                  tamano="sm"
+                                  onClick={() => quitarVelocidad(maquina, item)}
+                                  aria-label={`Quitar velocidad de ${item.presentacion} en ${maquina.maquina}`}
+                                >
+                                  Quitar
+                                </Button>
+                              )}
                             </div>
                           </div>
                         );
