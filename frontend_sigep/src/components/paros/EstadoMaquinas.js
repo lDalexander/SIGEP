@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Badge, Dot, Label, Estado } from '../ui';
+import { Card, Badge, Dot, Label, Estado, FotoEvidencia } from '../ui';
 import Cronometro from './Cronometro';
 import { duracionSeg, horaDeTexto, plural } from '../../lib/format';
 
@@ -16,10 +16,15 @@ const TONOS = {
  *
  * Props:
  *   datos      : `maquinas` de /dashboard/paros
+ *   fotos      : {id de paro -> foto_url}, armado en ParosView con `paros[]` de la misma
+ *                respuesta. La foto del paro que está abierto ahora se ve aquí, en la
+ *                tarjeta de la máquina parada, sin tener que buscar la fila en la tabla.
  *   recibidoEn : Date.now() de la última respuesta (para el cronómetro)
  *   periodo    : texto del metadato, para dejar claro de qué rango son los acumulados
  */
-export default function EstadoMaquinas({ datos = [], recibidoEn, periodo = 'hoy', cargando, error }) {
+export default function EstadoMaquinas({
+  datos = [], fotos = {}, recibidoEn, periodo = 'hoy', cargando, error,
+}) {
   const paradas = datos.filter((m) => m.estado === 'PARO').length;
 
   return (
@@ -77,6 +82,16 @@ export default function EstadoMaquinas({ datos = [], recibidoEn, periodo = 'hoy'
                     <Label caja="normal" className="block mt-1.5 text-sig-dim">
                       desde {horaDeTexto(m.paro_actual.inicio)}
                     </Label>
+                    {/* La evidencia del paro que está corriendo ahora mismo. Sin rótulo
+                        y más baja que en la tabla: la tarjeta es estrecha y lo que se
+                        busca aquí es reconocer la avería de un vistazo, no leerla. */}
+                    <FotoEvidencia
+                      ruta={fotos[m.paro_actual.id]}
+                      etiqueta={`paro en curso de ${m.maquina}`}
+                      rotulo={null}
+                      alto="h-20"
+                      className="mt-2"
+                    />
                   </div>
                 ) : (
                   <div className="mt-3 pt-3 border-t border-sig-line">

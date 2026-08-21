@@ -14,7 +14,61 @@ industriales con sincronización offline-first.
 
 **Última sesión: 2026-08-21.** El frontend está reconstruido y **desplegado en producción**
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
-capturas de `referencia_ui/`. 224 tests en verde.
+capturas de `referencia_ui/`. 235 tests en verde.
+
+**La foto del paro no se veía, y ahora se ve** (2026-08-21). Solo frontend; **escrito y
+validado, sin desplegar**. Tag previo: `v1.17-pre-visor-fotos-paro`.
+
+El código que enseña la foto existe desde el 2026-08-19 en las dos pantallas que muestran
+paros, y estaba bien escrito. Lo que estaba roto era la **URL**, y no se había notado
+porque **nunca ha llegado ninguna foto** (el 2026-08-21: 0 de 157 paros, `static/paros/`
+vacío), así que no había imagen con la que descubrirlo.
+
+- **El problema.** La API manda la ruta relativa (`foto_url`:
+  `/static/paros/130_447_….jpg`) y **esa ruta no carga en la web**: nginx sirve el 3000 con
+  `try_files $uri $uri/ /index.html` y solo proxea `/api/`, así que `/static/…` no encuentra
+  archivo y cae a la SPA. Medido con un JPG de prueba puesto y borrado en el momento: el
+  **8000 responde `200 image/jpeg`** y el **3000 responde `200 text/html` de 700 bytes**.
+  Es el mismo desajuste ya documentado para el APK (§1, «Distribución del APK»), y lo
+  peligroso es que **no es un error**: el `<img>` recibe un 200, pinta el icono de imagen
+  rota y nada en la consola dice por qué; el enlace «abrir a tamaño completo» abría la web
+  otra vez.
+- **La salida es de cliente, contra el 8000** (`lib/fotos.js`), porque las dos alternativas
+  necesitan autorización que no se pidió: un `location /static/` en nginx (regla 5) o servir
+  las fotos bajo `/api/` (regla 2). El 8000 escucha en `0.0.0.0` —es de donde las tablets
+  bajan el APK— y `/static/` no pide autenticación, así que la imagen carga sin token. Se
+  respeta el protocolo y el host desde el que se está viendo la web y **solo** se cambia el
+  puerto; si la web se sirviera ya desde el 8000, la ruta se deja intacta.
+  **Si algún día se añade el `location` a nginx, este módulo es lo único que hay que
+  quitar.** Con HTTPS delante habría que hacerlo, o el navegador bloquearía la imagen por
+  contenido mixto.
+- **Un solo componente para las dos pantallas** (`ui/FotoEvidencia.js`), por el mismo
+  motivo que `services/velocidad.py` en el backend: arreglar la URL en `/paros` y no en
+  `/admin` → Paros dejaría a la mitad de la planta mirando un icono roto.
+- **La foto se abre en un visor sobre la propia página**, no en otra pestaña. Antes el
+  enlace era la única forma de verla a tamaño útil, y ahora que la URL apunta al 8000 eso
+  saca al supervisor del centro de control y encima a otro puerto. El enlace sigue estando
+  **dentro** del visor, para quien quiera pantalla completa o descargarla. Escape y el clic
+  fuera cierran; el clic sobre la imagen no, que es justo donde se pincha al mirar una pieza
+  rota.
+- **Si la imagen no carga, se dice, con la ruta delante.** Es el fallo que de verdad va a
+  pasar cuando empiecen a llegar fotos: el archivo borrado a mano de `static/paros/`, o el
+  8000 inalcanzable desde ese equipo. Un icono roto se lee como «la web está mal hecha» y no
+  deja ninguna pista de qué mirar.
+- **La máquina parada AHORA enseña la foto de su paro en su propia tarjeta** («Estado de
+  máquinas»), que es donde se está mirando cuando una línea está detenida. `paro_actual` no
+  trae `foto_url` y el backend **no se tocó**: se empareja `paro_actual.id` con el `paros[]`
+  de la misma respuesta, en `ParosView`. Consecuencia asumida: `paro_actual` es de ahora y
+  `paros[]` es del rango, así que consultando una fecha pasada la tarjeta se queda sin
+  miniatura — mejor eso que enseñar la foto de otro paro.
+- **La fila cerrada avisa con un icono de cámara de qué paros traen foto**, y el nombre
+  accesible de la fila lo dice también. Sin eso habría que desplegar los paros uno a uno
+  para descubrir cuál tiene evidencia, y lo normal es que no la tengan.
+- **`rounded-sig` no existe en `tailwind.config.js`.** La miniatura del 2026-08-19 la usaba,
+  así que su borde salía cuadrado; nadie lo vio porque nunca hubo foto. Se cambió por
+  `rounded-xl`, que ya son los 12px del sistema (§5), y no queda ninguna en `src/`.
+- **Nada de esto toca `api_produccion/` ni la BD**, y ninguna respuesta de la API cambia.
+  **Las tablets no se ven afectadas.**
 
 **Velocidad estándar por (máquina, presentación)** (2026-08-21). **Ya está en producción**
 (worker `3327707`, frontend `main.de32e396.js`), y la tabla nueva
@@ -291,6 +345,7 @@ heartbeat, sin errores en el log del servicio.
 | Tag previo a la contingencia de paros | `v1.14-pre-contingencia-paros` (en GitHub) |
 | Tag previo a la foto y la velocidad | `v1.15-pre-foto-velocidad` (en GitHub) |
 | Tag previo al estándar de velocidad | `v1.16-pre-estandar-velocidad` (en GitHub) |
+| Tag previo al visor de fotos de paro | `v1.17-pre-visor-fotos-paro` (en GitHub) |
 | Build previo al estándar de velocidad | `~/respaldos_build_sigep/build_2026-08-21_152227` |
 | Build previo a la contingencia de paros | `~/respaldos_build_sigep/build_2026-08-19_165958` |
 | BD previa al `ALTER` de reportes | `backups/produccion_detg_pre_reportes_atendido_20260807_124057.sql.gz` |
@@ -867,6 +922,7 @@ frontend_sigep/
     ├── lib/
     │   ├── format.js            # es-EC, duraciones, turno, antigüedad, tablet, velocidad y su rango
     │   ├── filtros.js           # dimensiones segmentables, params y serialización repetida
+    │   ├── fotos.js             # URL de /static resuelta al 8000 (el 3000 devuelve la SPA)
     │   └── useApi.js            # GET con polling; conserva el último dato bueno
     ├── components/
     │   ├── Header.js            # cabecera: reloj, EN VIVO, Dashboard, Paros, Insumos, Admin
@@ -906,6 +962,7 @@ frontend_sigep/
     └── components/ui/           # componentes base del sistema de diseño
         ├── Label, Badge, Button, Card, StatCard (+ Cifra)
         ├── ProgressBar, Ring, Tabs, Dot, Logo
+        ├── FotoEvidencia         # miniatura + visor de la foto del paro
         └── Estado (+ Esqueleto)  # carga / error / vacío
 ```
 
@@ -1079,6 +1136,12 @@ npx eslint --ext .js src/
 ```
 
 - `src/lib/format.test.js` — formato es-EC, duraciones, turnos, antigüedad.
+- `src/lib/fotos.test.js` — la URL de las fotos: que una ruta de `/static` sale resuelta
+  **al 8000** y no relativa (por el 3000 la ruta relativa devuelve la SPA con un 200, así
+  que el fallo sería silencioso), que sin foto devuelve `null` y nunca `''` —un
+  `src=""` recarga la propia página—, que una URL ya absoluta se respeta, que se conserva
+  el host y el protocolo desde el que se ve la web y solo cambia el puerto, y que si la
+  web ya se sirve desde el 8000 la ruta se deja intacta.
 - `src/lib/filtros.test.js` — que las cinco claves siguen siendo las que acepta el backend,
   que una dimensión vacía no viaja, la tabla de agrupación automática (incluido que nunca
   devuelve un `dim` que el endpoint rechace con 400), y sobre todo **la serialización sin
@@ -1130,7 +1193,7 @@ npx eslint --ext .js src/
   De la velocidad y la foto (2026-08-19): que la tabla de líneas enseña la última lectura
   y que una sesión **sin ninguna** sale «—» con un título que lo explica, **nunca un cero**
   —sería indistinguible de una máquina detenida—, que el promedio viaja pegado al nº de
-  lecturas, que un paro con foto la enseña y enlaza a la imagen completa mientras uno sin
+  lecturas, que un paro con foto la enseña mientras uno sin
   foto no deja hueco, que «Quitar foto» solo existe si hay foto y va a `/paros/{id}/foto` y
   **no** al paro —borrar el paro para arreglar una foto movida perdería el tiempo parado—, y
   que en Producción la velocidad media solo se pinta cuando hay lecturas, porque las
@@ -1148,6 +1211,17 @@ npx eslint --ext .js src/
   contando como **dentro**, y que ni `rangoVelocidad` ni `estadoVelocidad` concluyen nada
   con un hueco: `Number(null)` y `Number('')` son 0, y un cero colado ahí marcaría toda la
   planta en rojo.
+  Del visor de fotos (2026-08-21): que la foto se pide **al 8000** y **no** con la ruta
+  relativa —el test comprueba las dos cosas, porque con la relativa el 3000 devuelve la
+  SPA con un 200 y no habría ni error de red—, que la miniatura abre un visor sobre la
+  propia vista y que en la fila **no** queda enlace a otra pestaña (el enlace vive dentro
+  del visor), que Escape lo cierra, que un `onError` de la imagen enseña el aviso **con la
+  ruta** y retira la miniatura en vez de dejar el icono roto, que un paro sin foto no deja
+  hueco ni rótulo, que la fila cerrada dice «con foto» en su nombre accesible solo cuando
+  la trae, y que la tarjeta de la máquina **parada ahora** enseña la foto de su paro en
+  curso emparejando `paro_actual.id` con `paros[]`. El fixture da foto al paro EN CURSO
+  (108) y deja sin foto el SIN CIERRE (105) por esto. En el admin, que es el **mismo**
+  componente y la misma URL resuelta.
   De la contingencia de paros (2026-08-19): que un paro **EN CURSO** avisa de que hay una
   tablet detrás con su botón local, que su confirmación de cierre nombra la consecuencia
   concreta —el «no hay paro activo» que verá el operario— y la salida, mientras la de un
@@ -1476,8 +1550,8 @@ dos vistas no puedan contradecirse; el botón «Cargar» es el mismo.
 | KPI `MÁQUINAS PARADAS AHORA` | `paros.kpis.maquinas_paradas` / `maquinas_produciendo`. Es **en vivo**, no del rango |
 | KPI `PAROS REGISTRADOS` | `kpis.total_paros`, con `en_curso` y `sin_cierre` en el pie |
 | KPI `TIEMPO TOTAL PARADO` / `DURACIÓN PROMEDIO` | `kpis.segundos_total` / `segundos_promedio` |
-| `Estado de máquinas` | `paros.maquinas[]`. Una tarjeta por máquina; la que está en paro se resalta en ámbar y muestra categoría, comentario y un **cronómetro** |
-| `Paros del rango` | `paros.paros[]`. Fila desplegable: producto, horas exactas, turno, sesión, comentario del operario, el motivo tal como lo mandó la tablet y la **evidencia fotográfica** si la hay (miniatura que abre la imagen completa en otra pestaña) |
+| `Estado de máquinas` | `paros.maquinas[]`. Una tarjeta por máquina; la que está en paro se resalta en ámbar y muestra categoría, comentario, un **cronómetro** y la **foto del paro en curso** si la hay. `paro_actual` no trae `foto_url`: se empareja su `id` con `paros[]` en `ParosView`, así que consultando una fecha pasada no sale miniatura (el paro en curso no está en la lista del rango) |
+| `Paros del rango` | `paros.paros[]`. Fila desplegable: producto, horas exactas, turno, sesión, comentario del operario, el motivo tal como lo mandó la tablet y la **evidencia fotográfica** si la hay. La fila cerrada marca con un icono de cámara los paros que traen foto; la miniatura abre un **visor sobre la propia página** (Escape o clic fuera para cerrar), con el enlace a otra pestaña dentro. La URL la resuelve `lib/fotos.js` contra el **8000**: la ruta relativa que manda la API no carga por el 3000 |
 | `Paros por categoría` | `paros.por_categoria[]`. Ordenado por **tiempo parado**, no por número de paros: dos horas de mantenimiento pesan más que cinco atascos de un minuto |
 | Franja horaria | Se aplica a los paros por su **hora de inicio**; el filtro lo advierte. No hay descargas en esta vista (la hoja «Paros» va dentro del Excel de producción, que se descarga desde el dashboard) |
 

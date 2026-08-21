@@ -1416,16 +1416,21 @@ test('Paros: un CONSULTA no puede reabrir', async () => {
    empiezan a mandar; lo que se protege aquí es que la web no finja tenerlos cuando no
    están, y que quitar una foto no se lleve por delante el registro del paro. */
 
-test('Paros: la foto del paro se enseña y enlaza a la imagen completa', async () => {
+test('Paros: la foto se pide al 8000 y se ve en el mismo visor que en /paros', async () => {
   render(<AdminApp />);
   irA('Paros');
   fireEvent.click(await screen.findByRole('button', { name: 'Paro 130' }));
 
-  expect(screen.getByAltText('Evidencia del paro 130'))
-    .toHaveAttribute('src', '/static/paros/130_447_20260807115300.jpg');
-  const enlace = screen.getByRole('link', { name: 'Evidencia del paro 130' });
-  expect(enlace).toHaveAttribute('href', '/static/paros/130_447_20260807115300.jpg');
-  expect(enlace).toHaveAttribute('target', '_blank');
+  /* Mismo componente que la vista /paros, a propósito: aquí es donde se decide si la
+     foto sirve o se quita, así que tiene que verse igual de bien. Y la URL resuelta al
+     8000 por lo mismo que allí — con la ruta relativa el 3000 devuelve la SPA. */
+  const foto = screen.getByAltText('Evidencia fotográfica · paro #130 de Máquina 7');
+  expect(foto).toHaveAttribute('src', 'http://localhost:8000/static/paros/130_447_20260807115300.jpg');
+
+  fireEvent.click(screen.getByRole('button', { name: /Ver a tamaño completo la evidencia · paro #130/ }));
+  const visor = await screen.findByRole('dialog', { name: /paro #130 de Máquina 7/ });
+  expect(within(visor).getByRole('link', { name: /Abrir aparte/ }))
+    .toHaveAttribute('href', 'http://localhost:8000/static/paros/130_447_20260807115300.jpg');
 });
 
 test('Paros: «Quitar foto» solo sale si hay foto, y no toca el paro', async () => {
@@ -1435,7 +1440,7 @@ test('Paros: «Quitar foto» solo sale si hay foto, y no toca el paro', async ()
   // El 118 no tiene foto: no ofrece quitarla ni deja un recuadro vacío.
   fireEvent.click(await screen.findByRole('button', { name: 'Paro 118' }));
   expect(screen.queryByRole('button', { name: 'Quitar foto' })).not.toBeInTheDocument();
-  expect(screen.queryByAltText('Evidencia del paro 118')).not.toBeInTheDocument();
+  expect(screen.queryByAltText(/paro #118/)).not.toBeInTheDocument();
 
   fireEvent.click(screen.getByRole('button', { name: 'Paro 130' }));
   fireEvent.click(screen.getByRole('button', { name: 'Quitar foto' }));

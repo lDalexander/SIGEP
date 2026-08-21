@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import ParosKPIs from './ParosKPIs';
 import EstadoMaquinas from './EstadoMaquinas';
 import ParosPorCategoria from './ParosPorCategoria';
@@ -36,6 +36,19 @@ export default function ParosView({
     if (datos) setRecibidoEn(Date.now());
   }, [datos]);
 
+  /* Foto del paro que cada máquina tiene abierto AHORA, por id de paro.
+     `maquinas[].paro_actual` no trae `foto_url` —el backend no la manda ahí y no se
+     toca (regla de oro)—, pero el mismo `paros[]` de esta respuesta sí, así que se
+     empareja por id en el cliente. Ojo con la consecuencia: `paro_actual` es de ahora
+     y `paros[]` es del rango consultado, de modo que mirando una fecha pasada el paro
+     en curso no está en la lista y la tarjeta se queda sin miniatura. Es lo correcto:
+     mejor no enseñar foto que enseñar la de otro paro. */
+  const fotosPorParo = useMemo(() => {
+    const m = {};
+    (datos?.paros || []).forEach((p) => { if (p.foto_url) m[p.id] = p.foto_url; });
+    return m;
+  }, [datos]);
+
   /* El indicador global de la cabecera lo lleva App, que no ve este fetch. */
   useEffect(() => {
     if (!cargando && onEstado) onEstado(!error);
@@ -48,6 +61,7 @@ export default function ParosView({
       <div className="mt-5">
         <EstadoMaquinas
           datos={datos?.maquinas}
+          fotos={fotosPorParo}
           recibidoEn={recibidoEn}
           periodo={periodo}
           cargando={cargando}

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { ChevronDown, ChevronRight } from 'lucide-react';
-import { Card, Badge, Label, Estado } from '../ui';
+import { ChevronDown, ChevronRight, Camera } from 'lucide-react';
+import { Card, Badge, Label, Estado, FotoEvidencia } from '../ui';
 import Cronometro from './Cronometro';
 import { duracionSeg, horaDeTexto, fechaDeTexto, plural } from '../../lib/format';
 
@@ -44,7 +44,8 @@ export default function TablaParos({
                   aria-expanded={expandido}
                   /* La fila es un botón con seis bloques de texto suelto; el nombre
                      accesible resume de qué paro se trata en vez de leerlos en fila. */
-                  aria-label={`Paro de ${p.maquina} · ${p.categoria} · ${horaDeTexto(p.inicio)} · ${p.estado}`}
+                  aria-label={`Paro de ${p.maquina} · ${p.categoria} · ${horaDeTexto(p.inicio)} · ${p.estado}`
+                    + (p.foto_url ? ' · con foto' : '')}
                   className="w-full flex items-center gap-4 px-5 py-3.5 text-left
                              hover:bg-white/[0.015] transition-colors"
                 >
@@ -74,9 +75,20 @@ export default function TablaParos({
                     <Label className="block mt-1 truncate">{p.operador}</Label>
                   </span>
 
-                  {/* Categoría y comentario del operario */}
+                  {/* Categoría y comentario del operario. El icono avisa de que ese
+                      paro trae foto: sin él habría que abrir las filas una a una para
+                      descubrir cuál tiene evidencia, y lo normal es que no la tengan. */}
                   <span className="flex-1 min-w-0">
-                    <Label className="block text-sig-amber/90">{p.categoria}</Label>
+                    <span className="flex items-center gap-1.5">
+                      <Label className="text-sig-amber/90">{p.categoria}</Label>
+                      {p.foto_url && (
+                        <Camera
+                          size={12}
+                          className="shrink-0 text-sig-amber/70"
+                          aria-hidden="true"
+                        />
+                      )}
+                    </span>
                     <span className="block mt-1 text-[13px] text-sig-muted truncate">
                       {p.comentario || '—'}
                     </span>
@@ -134,27 +146,15 @@ export default function TablaParos({
                     </dl>
 
                     {/* Evidencia fotográfica, si el operario la adjuntó (2026-08-19).
-                        La miniatura abre la imagen completa en otra pestaña: dentro de
-                        esta fila no cabe a un tamaño en el que se vea una pieza rota. */}
-                    {p.foto_url && (
-                      <div className="mt-3">
-                        <Label className="block mb-1.5">Evidencia fotográfica</Label>
-                        <a
-                          href={p.foto_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-block rounded-sig border border-sig-line overflow-hidden hover:border-sig-amber/60 transition-colors"
-                          title="Abrir la foto a tamaño completo"
-                        >
-                          <img
-                            src={p.foto_url}
-                            alt={`Evidencia del paro ${p.id}`}
-                            className="block h-28 w-auto max-w-full object-cover"
-                            loading="lazy"
-                          />
-                        </a>
-                      </div>
-                    )}
+                        La miniatura abre un visor sobre la propia vista (2026-08-21): la
+                        ruta real apunta al 8000 y no al 3000 —ver `lib/fotos.js`—, así
+                        que mandar al supervisor a otra pestaña lo saca del centro de
+                        control y encima a otro puerto. Sin foto no devuelve nada. */}
+                    <FotoEvidencia
+                      ruta={p.foto_url}
+                      etiqueta={`paro #${p.id} de ${p.maquina}`}
+                      className="mt-3"
+                    />
 
                     {p.estado === 'SIN CIERRE' && (
                       /* No se afirma que la máquina siga parada: el paro se quedó abierto

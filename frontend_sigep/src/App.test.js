@@ -93,7 +93,10 @@ const RESPUESTAS = {
         comentario: 'cambio de teflón', motivo: '[Mantenimiento] - cambio de teflón',
         inicio: '2026-08-05 10:00:00', fin: null, fin_estimado: null, estado: 'EN CURSO',
         en_curso: true, duracion_segundos: 600, duracion_estimada: false,
-        inicio_turno: '2026-08-05 07:20:59', fin_turno: null },
+        inicio_turno: '2026-08-05 07:20:59', fin_turno: null,
+        /* Con foto y EN CURSO: es el caso que alimenta la miniatura de la tarjeta de
+           «Estado de máquinas», que empareja `paro_actual.id` con esta lista. */
+        foto_url: '/static/paros/108_420_20260805100200.jpg' },
       { id: 107, sesion_id: 419, maquina: 'Máquina 7', operador: 'PEDRO SARABIA',
         producto: 'TORBELLINO · 1 KG · Floral', categoria: 'ALMUERZO', comentario: null,
         motivo: 'ALMUERZO', inicio: '2026-08-05 12:00:00', fin: '2026-08-05 12:15:00',
@@ -914,20 +917,87 @@ test('el promedio y el número de lecturas van en el título, no como cifra prin
   expect(within(celda).getByText('45,5')).toBeInTheDocument();
 });
 
-test('un paro con foto la enseña y enlaza a la imagen completa; sin foto no deja hueco', async () => {
+/* ── Fotos de los paros (2026-08-21) ───────────────────────────────────────────────
+   La foto se enseñaba desde el 2026-08-19, pero con la ruta tal como la manda la API
+   (`/static/paros/…`) y esa ruta **no carga en la web**: nginx sirve el 3000 con
+   `try_files … /index.html` y solo proxea `/api/`, así que devuelve 200 con el
+   `index.html` de la SPA y el `<img>` pinta el icono de imagen rota. Lo que estos tests
+   protegen es justo eso: que la URL sale resuelta contra el 8000 y no relativa. */
+
+test('la foto del paro se pide al 8000 y no con la ruta relativa, que en la web no carga', async () => {
   await irAParos();
 
   // El paro 107 (ALMUERZO) trae foto en el fixture.
   fireEvent.click(await screen.findByRole('button', { name: /Máquina 7 · ALMUERZO · 12:00 · CERRADO/ }));
-  const foto = await screen.findByAltText('Evidencia del paro 107');
-  expect(foto).toHaveAttribute('src', '/static/paros/107_419_20260805120500.jpg');
-  /* Abre en otra pestaña: dentro de la fila no cabe a un tamaño en el que se vea una
-     pieza rota. */
-  const enlace = screen.getByRole('link', { name: 'Evidencia del paro 107' });
-  expect(enlace).toHaveAttribute('href', '/static/paros/107_419_20260805120500.jpg');
+  const foto = await screen.findByAltText('Evidencia fotográfica · paro #107 de Máquina 7');
+
+  /* El punto del cambio: absoluta y al puerto del backend. Con la ruta relativa el
+     navegador recibiría el HTML de la SPA con un 200 y no habría ni error de red. */
+  expect(foto).toHaveAttribute('src', 'http://localhost:8000/static/paros/107_419_20260805120500.jpg');
+  expect(foto.getAttribute('src')).not.toBe('/static/paros/107_419_20260805120500.jpg');
+});
+
+test('la miniatura abre el visor sobre la propia vista, y Escape lo cierra', async () => {
+  await irAParos();
+  fireEvent.click(await screen.findByRole('button', { name: /Máquina 7 · ALMUERZO · 12:00 · CERRADO/ }));
+
+  /* No hay enlace a otra pestaña en la fila: la URL real va al 8000, así que abrirla
+     aparte saca al supervisor del centro de control y encima a otro puerto. */
+  expect(screen.queryByRole('link', { name: /Evidencia fotográfica · paro #107/ })).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: /Ver a tamaño completo la evidencia · paro #107/ }));
+  const visor = await screen.findByRole('dialog', { name: 'Evidencia fotográfica · paro #107 de Máquina 7' });
+
+  // Dentro del visor sí está la salida a otra pestaña, para verla a pantalla completa.
+  const enlace = within(visor).getByRole('link', { name: /Abrir aparte/ });
+  expect(enlace).toHaveAttribute('href', 'http://localhost:8000/static/paros/107_419_20260805120500.jpg');
   expect(enlace).toHaveAttribute('target', '_blank');
 
-  // El paro en curso no trae foto: no aparece el rótulo ni un recuadro vacío.
-  fireEvent.click(screen.getByRole('button', { name: /Máquina 7 · MANTENIMIENTO · 10:00 · EN CURSO/ }));
-  expect(screen.queryByAltText('Evidencia del paro 108')).not.toBeInTheDocument();
+  fireEvent.keyDown(document, { key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+});
+
+test('si la imagen no carga se dice, con la ruta delante, en vez de dejar el icono roto', async () => {
+  await irAParos();
+  fireEvent.click(await screen.findByRole('button', { name: /Máquina 7 · ALMUERZO · 12:00 · CERRADO/ }));
+  const foto = await screen.findByAltText('Evidencia fotográfica · paro #107 de Máquina 7');
+
+  /* Es el fallo que de verdad va a pasar: el archivo borrado a mano de `static/paros/`
+     o el 8000 inalcanzable desde ese equipo. Un icono roto no dice qué mirar. */
+  fireEvent.error(foto);
+  expect(await screen.findByText(/no se pudo cargar/i)).toBeInTheDocument();
+  expect(screen.getByText('/static/paros/107_419_20260805120500.jpg')).toBeInTheDocument();
+  expect(screen.queryByAltText('Evidencia fotográfica · paro #107 de Máquina 7')).not.toBeInTheDocument();
+});
+
+test('un paro sin foto no deja hueco, y la fila avisa de cuáles la traen', async () => {
+  await irAParos();
+
+  /* El 105 (SIN CIERRE) no tiene foto: ni rótulo ni recuadro vacío. Lo normal es que un
+     paro no la tenga —es opcional— y un hueco en cada fila sugeriría que falta algo. */
+  fireEvent.click(await screen.findByRole('button', { name: /Máquina 16 · BODEGA · 19:22 · SIN CIERRE/ }));
+  expect(screen.queryByAltText(/paro #105/)).not.toBeInTheDocument();
+  expect(screen.queryByText('Evidencia fotográfica')).not.toBeInTheDocument();
+
+  /* Con la fila cerrada se sabe que trae foto sin abrirla: si no, habría que desplegar
+     los paros uno a uno para descubrir cuál tiene evidencia. */
+  expect(screen.getByRole('button', { name: /Máquina 7 · ALMUERZO · 12:00 · CERRADO · con foto/ }))
+    .toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /Máquina 16 · BODEGA · 19:22 · SIN CIERRE$/ }))
+    .toBeInTheDocument();
+});
+
+test('la máquina parada ahora enseña la foto de su paro en curso, en su propia tarjeta', async () => {
+  await irAParos();
+  const tarjetas = await screen.findByRole('region', { name: /Estado de máquinas/ });
+
+  /* `maquinas[].paro_actual` no trae `foto_url` (el backend no se toca), así que se
+     empareja por id con `paros[]` de la misma respuesta: el paro 108 está en curso en
+     la Máquina 7 y su foto tiene que verse aquí, sin ir a buscar la fila en la tabla. */
+  const foto = within(tarjetas).getByAltText('Evidencia fotográfica · paro en curso de Máquina 7');
+  expect(foto).toHaveAttribute('src', 'http://localhost:8000/static/paros/108_420_20260805100200.jpg');
+
+  // Las que no están en paro no enseñan foto de nada.
+  expect(within(tarjetas).queryByAltText(/Máquina 9/)).not.toBeInTheDocument();
+  expect(within(tarjetas).queryByAltText(/Máquina 16/)).not.toBeInTheDocument();
 });

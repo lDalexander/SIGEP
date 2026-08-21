@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Card, Badge, Button, Estado, Input, Select, Aviso, useAviso, Label, Campo } from '../ui';
+import { Card, Badge, Button, Estado, Input, Select, Aviso, useAviso, Label, Campo, FotoEvidencia } from '../ui';
 import { duracionSeg, plural } from '../../lib/format';
 import useApi from '../../lib/useApi';
 import { admin, mensajeDeError, esSuperadmin, puedeEditar } from '../../lib/adminApi';
@@ -327,25 +327,15 @@ export default function TabParos() {
                       </Campo>
                     </div>
 
-                    {paro.foto_url && (
-                      <div className="mt-4">
-                        <Label className="block mb-1.5">Evidencia fotográfica</Label>
-                        <a
-                          href={paro.foto_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-block rounded-sig border border-sig-line overflow-hidden hover:border-sig-amber/60 transition-colors"
-                          title="Abrir la foto a tamaño completo"
-                        >
-                          <img
-                            src={paro.foto_url}
-                            alt={`Evidencia del paro ${paro.id}`}
-                            className="block h-28 w-auto max-w-full object-cover"
-                            loading="lazy"
-                          />
-                        </a>
-                      </div>
-                    )}
+                    {/* Misma miniatura y mismo visor que la vista /paros, y a
+                        propósito el mismo componente: aquí es donde se decide si la
+                        foto sirve o se quita, así que tiene que verse igual de bien que
+                        allí. La URL la resuelve `lib/fotos.js` contra el 8000. */}
+                    <FotoEvidencia
+                      ruta={paro.foto_url}
+                      etiqueta={`paro #${paro.id} de ${paro.maquina}`}
+                      className="mt-4"
+                    />
 
                     <Label className="block mt-3 text-sig-dim">
                       Turno {paro.sesion_id ?? '—'} · {paro.operador} · motivo original:{' '}
