@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { X, ExternalLink, ImageOff, Maximize2 } from 'lucide-react';
 import Label from './Label';
 import { urlFoto } from '../../lib/fotos';
@@ -25,6 +26,16 @@ import { urlFoto } from '../../lib/fotos';
  *   ninguna pista de qué mirar.
  * - **Sin foto no se deja hueco**: devuelve `null`. Lo normal es que un paro no tenga
  *   foto —es opcional— y un recuadro vacío en cada fila sugeriría que falta algo.
+ * - **El visor se monta en `document.body` con un portal, y eso no es opcional.** `Card`
+ *   lleva `animate-fade-in`, cuya animación está declarada con `both`, así que el
+ *   `transform: translateY(0)` del fotograma final **se queda aplicado para siempre**; un
+ *   `transform` convierte al elemento en el bloque contenedor de sus descendientes
+ *   `fixed`. Sin portal, el visor se posicionaba respecto a la tarjeta en vez del
+ *   viewport y encima lo recortaba su `overflow-hidden`: en «Estado de máquinas», que es
+ *   una tarjeta alta, el botón de cerrar quedaba fuera de la pantalla, y como el visor
+ *   bloquea el scroll de la página **no había forma de llegar a él ni de cerrarlo**
+ *   (reportado en planta el 2026-08-21). Es el mismo transform del que ya avisa el
+ *   comentario del `z-40` de la barra de segmentadores en `App.js`.
  *
  * Props:
  *   ruta     : `foto_url` tal como la manda la API (`/static/paros/…`) o `null`
@@ -111,13 +122,13 @@ export default function FotoEvidencia({
         </button>
       )}
 
-      {abierto && (
+      {abierto && createPortal((
         <div
           role="dialog"
           aria-modal="true"
           aria-label={alt}
           onClick={cerrar}
-          className="fixed inset-0 z-50 flex items-center justify-center
+          className="fixed inset-0 z-50 flex items-center justify-center overflow-auto
                      bg-sig-bg/90 p-4 sm:p-8"
         >
           {/* El clic en la imagen no cierra: al ampliar una pieza rota se pincha encima. */}
@@ -164,7 +175,7 @@ export default function FotoEvidencia({
             </p>
           </div>
         </div>
-      )}
+      ), document.body)}
     </div>
   );
 }

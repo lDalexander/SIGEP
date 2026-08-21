@@ -957,6 +957,27 @@ test('la miniatura abre el visor sobre la propia vista, y Escape lo cierra', asy
   await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
 });
 
+test('el visor se monta fuera de la tarjeta, o el botón de cerrar queda inalcanzable', async () => {
+  await irAParos();
+  const tarjetas = await screen.findByRole('region', { name: /Estado de máquinas/ });
+
+  fireEvent.click(within(tarjetas).getByRole('button', { name: /Ver a tamaño completo/ }));
+  const visor = await screen.findByRole('dialog');
+
+  /* Reportado en planta el 2026-08-21: el visor se abría dentro de «Estado de máquinas» y
+     el botón de cerrar quedaba fuera de la pantalla, y como el visor bloquea el scroll no
+     había forma de llegar a él. La causa es que `Card` lleva `animate-fade-in` declarada
+     con `both`, así que conserva el `transform` del último fotograma para siempre y pasa
+     a ser el bloque contenedor de sus descendientes `fixed`; encima la recorta su
+     `overflow-hidden`. El portal al body es lo que lo evita. */
+  expect(visor.parentElement).toBe(document.body);
+  expect(within(tarjetas).queryByRole('dialog')).not.toBeInTheDocument();
+
+  // Y desde ahí se cierra: es lo que no se podía hacer.
+  fireEvent.click(within(visor).getByRole('button', { name: /Cerrar el visor/ }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+});
+
 test('si la imagen no carga se dice, con la ruta delante, en vez de dejar el icono roto', async () => {
   await irAParos();
   fireEvent.click(await screen.findByRole('button', { name: /Máquina 7 · ALMUERZO · 12:00 · CERRADO/ }));

@@ -14,7 +14,7 @@ industriales con sincronización offline-first.
 
 **Última sesión: 2026-08-21.** El frontend está reconstruido y **desplegado en producción**
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
-capturas de `referencia_ui/`. 235 tests en verde.
+capturas de `referencia_ui/`. 236 tests en verde.
 
 **La foto del paro no se veía, y ahora se ve** (2026-08-21). Solo frontend; **escrito y
 validado, sin desplegar**. Tag previo: `v1.17-pre-visor-fotos-paro`.
@@ -51,6 +51,17 @@ vacío), así que no había imagen con la que descubrirlo.
   **dentro** del visor, para quien quiera pantalla completa o descargarla. Escape y el clic
   fuera cierran; el clic sobre la imagen no, que es justo donde se pincha al mirar una pieza
   rota.
+- **El visor se monta en `document.body` con un portal, y eso no es opcional.** Salió de
+  probarlo en planta: al abrir la foto desde «Estado de máquinas» el botón de cerrar
+  quedaba fuera de la pantalla y, como el visor bloquea el scroll de la página, **no había
+  forma de llegar a él**. La causa son dos cosas de `Card` a la vez: lleva
+  `animate-fade-in`, cuya animación está declarada con **`both`**, así que conserva el
+  `transform: translateY(0)` del último fotograma **para siempre** —y un `transform`
+  convierte al elemento en el bloque contenedor de sus descendientes `fixed`—, y además
+  lleva `overflow-hidden`, que recortaba lo que sobresaliera. Es el mismo transform del
+  que ya avisaba el comentario del `z-40` de la barra de segmentadores en `App.js`.
+  **Cuidado al meter cualquier otro elemento flotante dentro de una `Card`**: le pasará
+  igual.
 - **Si la imagen no carga, se dice, con la ruta delante.** Es el fallo que de verdad va a
   pasar cuando empiecen a llegar fotos: el archivo borrado a mano de `static/paros/`, o el
   8000 inalcanzable desde ese equipo. Un icono roto se lee como «la web está mal hecha» y no
@@ -1211,7 +1222,9 @@ npx eslint --ext .js src/
   contando como **dentro**, y que ni `rangoVelocidad` ni `estadoVelocidad` concluyen nada
   con un hueco: `Number(null)` y `Number('')` son 0, y un cero colado ahí marcaría toda la
   planta en rojo.
-  Del visor de fotos (2026-08-21): que la foto se pide **al 8000** y **no** con la ruta
+  Del visor de fotos (2026-08-21): que el visor se monta **fuera** de la tarjeta —su padre
+  es el `body`— y que desde ahí se puede cerrar; sin el portal ese test falla, que es el
+  bug reportado en planta. Que la foto se pide **al 8000** y **no** con la ruta
   relativa —el test comprueba las dos cosas, porque con la relativa el 3000 devuelve la
   SPA con un 200 y no habría ni error de red—, que la miniatura abre un visor sobre la
   propia vista y que en la fila **no** queda enlace a otra pestaña (el enlace vive dentro
