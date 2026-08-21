@@ -12,9 +12,68 @@ industriales con sincronización offline-first.
 
 ## 0. Estado actual
 
-**Última sesión: 2026-08-19.** El frontend está reconstruido y **desplegado en producción**
+**Última sesión: 2026-08-21.** El frontend está reconstruido y **desplegado en producción**
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
-capturas de `referencia_ui/`. 182 tests en verde.
+capturas de `referencia_ui/`. 224 tests en verde.
+
+**Velocidad estándar por (máquina, presentación)** (2026-08-21). **Ya está en producción**
+(worker `3327707`, frontend `main.de32e396.js`), y la tabla nueva
+`maquina_presentacion_velocidad` **está creada** con el `.sql` a mano. Tag previo:
+`v1.16-pre-estandar-velocidad`; respaldo del build anterior:
+`~/respaldos_build_sigep/build_2026-08-21_152227`.
+
+Desde el 2026-08-19 la tablet manda la velocidad, pero **el número llegaba solo**: 30
+unidades/min no es rápido ni lento hasta saber qué se esperaba de **esa** máquina con
+**ese** gramaje. La Máquina 7 con 1 KG puede ir a 32–38 y la Máquina 9 con el mismo 1 KG a
+28–32. Eso es lo que ahora se configura desde `/admin` → **Jerarquía**, sin entrar a MySQL.
+
+- **Granularidad (máquina, presentación), sin marca.** Es la simétrica de las fragancias,
+  que van por (máquina, marca) y dejan fuera el gramaje: aquí manda el gramaje y la
+  máquina que lo llena, no la etiqueta. ULTREX 1 KG y TORBELLINO 1 KG en la Máquina 7 van
+  al mismo ritmo, así que colgarlo de `maquina_productos` habría multiplicado las filas a
+  mantener a mano sin ganar precisión.
+- **Un RANGO y no un valor único.** El ritmo real oscila con el material y el operario; un
+  objetivo puntual marcaría como desviación cualquier turno normal y la señal dejaría de
+  servir. Los límites aceptados son **los mismos que `POST /api/velocidad`** (0.1–1000): un
+  estándar fuera de ellos no lo cumpliría ninguna lectura posible, y el error saldría al
+  leer el dashboard en vez de donde se puede arreglar.
+- **Se juzgan cosas distintas en cada pantalla, a propósito.** El dashboard compara la
+  **última lectura** (cómo va la línea ahora) y `/admin` → Producción el **promedio** (cómo
+  fue el turno entero). El emparejamiento vive en `services/velocidad.py` y no en cada
+  router, para que no puedan divergir: si el criterio cambiara en un solo sitio, la misma
+  sesión saldría dentro de rango en una pantalla y fuera en la otra.
+- **Sin estándar no se colorea nada.** Las claves `velocidad_min`/`velocidad_max` viajan
+  siempre en `null` cuando esa combinación no tiene rango, y la web enseña la lectura sin
+  juzgarla. Un color ahí sería un juicio inventado, igual que un cero sería una lectura
+  inventada.
+- **El emparejamiento es por TEXTO** (nombre de máquina + presentación de la sesión), como
+  ya hacen los filtros del dashboard: si a una máquina se le cambia el nombre desde
+  `/admin`, las sesiones viejas dejan de encontrar su estándar. Se prefiere eso a
+  aproximar: un rango equivocado es peor que ninguno.
+- **La UI deja de decir «fundas/min» y dice «unidades/min»** — la línea líquida no llena
+  fundas y el mismo número va a describir las dos líneas. El `detail` del 400 de
+  `POST /api/velocidad` **no se tocó**: es respuesta de la API que consume la tablet, y la
+  app además valida en local con su propio texto.
+- **Dos respuestas cambian de forma** (ninguna la consume la app): `/dashboard/estado_operativo`
+  y `/admin/sesiones` añaden `velocidad_min` y `velocidad_max`.
+- Verificado con `diff` 8000 vs 8001 en **25 endpoints**: 22 idénticos byte a byte, y los 3
+  de `estado_operativo` distintos **solo** por las dos claves nuevas, comprobado clave a
+  clave. Los endpoints nuevos, probados contra la BD real **dentro de una transacción
+  revertida** (15 casos: alta, 409 del duplicado, 422 de una presentación que la máquina no
+  produce, 400 de mín>máx y de fuera de rango, baja lógica, reactivación con los valores
+  nuevos) y **la tabla quedó en 0 filas**. Tras el HUP: `/api/maquinas`, `/api/operadores` y
+  `/api/fragancias` idénticas byte a byte, y **una tablet finalizó turno contra el código
+  nuevo un minuto después** (sesión 553, cierre normal sin marca de cierre automático).
+  **Las tablets no necesitan actualización.**
+
+**El APK 1.5.1 ya implementa las tres cosas de Android** (2026-08-21). Se comprobó
+desensamblándolo: llama a `api/paro/estado`, `api/paro/{paro_id}/foto` con el part `foto` y
+`api/velocidad` en unidades/min con el mismo rango 0.1–1000, y **encola la foto offline**
+(`enqueueFotoParo`), así que una tablet sin red no la pierde. Está versionado en
+`api_produccion/static/SIGEP-1.5.1.apk` y **no** publicado como `sigep_latest.apk`.
+El 2026-08-21 solo la Máquina 9 había mandado velocidad (1 lectura) y **no había llegado
+ninguna foto** (0 de 157 paros, `static/paros/` vacío): la web lleva desde el 2026-08-20
+esperándolas, no hay nada que arreglar ahí.
 
 **Foto del paro, velocidad de máquina y `GET /api/paro/estado`** (2026-08-19).
 **Ya está en producción** (2026-08-20: worker `3196184`, frontend `main.3ec38e92.js`), y el
@@ -181,14 +240,13 @@ después que `/api/maquinas` seguía idéntica byte a byte al snapshot previo, q
 tablet abrió WebSocket y registró un paro **contra el código nuevo** un minuto después del
 HUP. Detalle en «Cambios de backend ya autorizados» más abajo.
 
-**Ojo con la app Android:** se verificó desensamblando `static/sigep_latest.apk` (v1.3.1)
-que la app **no lee las fragancias del servidor**. Sus rutas HTTP son `api/operadores`,
-`api/maquinas`, `api/iniciar_turno`, `api/registrar_pallet`,
-`api/mantenimiento/checklist`… y **ninguna de fragancias**; `"Floral"` y `"Limón"` están
-como literales en el dex, junto a los ítems del checklist; y su data class
-`MarcaResponse(nombre=…)` **no tiene campo `fragancias`**, así que tampoco las leería
-dentro de `/api/maquinas`. Configurar fragancias en la web **no cambia todavía lo que ve
-el operario en la tablet**.
+**Ojo con la app Android — esto cambió con el APK 1.5.1:** la v1.3.1 **no leía las
+fragancias del servidor** (`"Floral"` y `"Limón"` estaban como literales en el dex, y su
+data class `MarcaResponse(nombre=…)` no tenía campo `fragancias`), así que configurarlas en
+la web no cambiaba nada en la tablet. La **1.5.1 sí las lee** (`api/fragancias`,
+`refrescarFraganciasDesdeServidor`, `cache_fragancias`), comprobado desensamblándola el
+2026-08-21. **Depende por tanto de qué APK tenga cada tablet**, y el OTA sigue
+deshabilitado: una tablet con la 1.3.1 seguirá ofreciendo la lista fija.
 
 Los **segmentadores multi-selección** del dashboard con **menús encadenados** (2026-08-05)
 **ya están en producción**. Semántica en §2 y §4. Cómo se desplegó, por si sirve de patrón:
@@ -232,6 +290,8 @@ heartbeat, sin errores en el log del servicio.
 | Tag previo a excluir el almuerzo | `v1.13-pre-excluir-almuerzo` (en GitHub) |
 | Tag previo a la contingencia de paros | `v1.14-pre-contingencia-paros` (en GitHub) |
 | Tag previo a la foto y la velocidad | `v1.15-pre-foto-velocidad` (en GitHub) |
+| Tag previo al estándar de velocidad | `v1.16-pre-estandar-velocidad` (en GitHub) |
+| Build previo al estándar de velocidad | `~/respaldos_build_sigep/build_2026-08-21_152227` |
 | Build previo a la contingencia de paros | `~/respaldos_build_sigep/build_2026-08-19_165958` |
 | BD previa al `ALTER` de reportes | `backups/produccion_detg_pre_reportes_atendido_20260807_124057.sql.gz` |
 | Build previo al panel de correo | `~/respaldos_build_sigep/build_2026-08-07_114148` |
@@ -257,7 +317,27 @@ falta tag, y la prohibición de «limpiar» el árbol con `checkout`/`reset`/`cl
 
 ### Cambios de backend ya autorizados y aplicados
 
-Tras la reconstrucción se autorizaron **trece** excepciones a la regla de oro:
+Tras la reconstrucción se autorizaron **catorce** excepciones a la regla de oro:
+
+- **Velocidad estándar por (máquina, presentación)** (2026-08-21, **en producción**).
+  Semántica y decisiones, arriba en «Velocidad estándar por (máquina, presentación)».
+
+  - **BD:** una tabla nueva, `maquina_presentacion_velocidad`
+    (`api_produccion/alter_velocidad_estandar.sql`), con UNIQUE de (`maquina_id`,
+    `presentacion`) y baja lógica. **Ningún `ALTER`; ninguna tabla existente se tocó.**
+    Como `registro_velocidad`, `create_all()` la crearía sola al importar el modelo, así
+    que el `.sql` se ejecutó **antes** de levantar nada con el código nuevo: es lo que pone
+    el `DEFAULT 1` en `activo` que SQLAlchemy resuelve en Python y MySQL se quedaría sin.
+  - **Endpoints nuevos:** `GET /admin/velocidad_estandar` (`require_planta_lectura`),
+    `POST` y `PUT /admin/velocidad_estandar/{id}` (`require_planta`). **No hay `DELETE`**:
+    quitar es `PUT {activo:false}`, como en las otras dos jerarquías.
+  - **Dos respuestas existentes añaden `velocidad_min`/`velocidad_max`**:
+    `/dashboard/estado_operativo` y `/admin/sesiones`. Ninguna la consume la app.
+  - `services/velocidad.py` es el **único** sitio donde se resuelve el emparejamiento, para
+    que el dashboard y el admin no puedan contradecirse.
+  - Verificado con `diff` 8000 vs 8001 en **25 endpoints** (22 idénticos byte a byte) y los
+    nuevos contra la BD real en una transacción revertida. **Las tablets no necesitan
+    actualización.**
 
 - **Contingencia de paros** (2026-08-19, **escrito y validado, sin desplegar**).
   `POST /api/paro/finalizar` tolera que el paro ya estuviera cerrado. Detalle arriba, en
@@ -572,45 +652,42 @@ Tras la reconstrucción se autorizaron **trece** excepciones a la regla de oro:
 
 ### Pendiente
 
-1. **App Android** — dos cambios, ninguno urgente (sin ellos todo sigue igual):
-   - el selector «Seleccione Operador» solo filtra por línea si la app pasa `?tipo=` con
-     el tipo de su máquina → `api_produccion/CAMBIO_ANDROID_tipo_operario.md`;
-   - el selector de fragancia sigue con su lista fija hasta que la app llame a
-     `GET /api/fragancias?maquina=&marca=` → `api_produccion/CAMBIO_ANDROID_fragancias.md`.
-     **Mientras no lo haga, configurar fragancias en la web no cambia lo que ve el
-     operario en la tablet.**
-2. **App Android — las tres cosas del 2026-08-19**, especificadas en
-   `CAMBIO_ANDROID_paro_estado_foto_velocidad.md` y **sin implementar en la app**: leer
-   `GET /api/paro/estado` para que el botón de paro nazca de lo que sabe el servidor y no de
-   su memoria (guardando el `paro_id` que ya devuelve `/paro/iniciar` y que hoy descarta),
-   el botón de cámara opcional en el paro, y el botón «VELOCIDAD MAQ» debajo de «REGISTRAR
-   PALLET». Hasta que se implementen, **la foto y la velocidad no tienen quién las mande**:
-   los endpoints y las pantallas de la web están listos y vacíos.
-3. **Validación de fragancia en `iniciar_turno`** — hoy valida
-   `(máquina, marca, presentación)` pero **no** la fragancia, a propósito: activarla antes
-   de que todas las tablets lean `/api/fragancias` rechazaría turnos legítimos. Cuando la
-   app esté actualizada se puede añadir, con autorización aparte.
-4. **`POST /api/paro/iniciar` tiene el desajuste simétrico y NO se ha tocado** (falta
+1. **Los cinco cambios de Android ya están hechos en el APK 1.5.1** — los cuatro
+   `CAMBIO_ANDROID_*.md` están implementados, comprobado desensamblando
+   `static/SIGEP-1.5.1.apk` el 2026-08-21: `getOperadoresPorTipo` (el `?tipo=` del selector
+   de operario), `refrescarFraganciasDesdeServidor` + `cache_fragancias` +
+   `fraganciasPorMaquinaMarca` (las fragancias salen del servidor y ya no de la lista fija
+   del dex), y las tres del 2026-08-19 (`api/paro/estado`,
+   `api/paro/{paro_id}/foto` con el part `foto` y encolado offline, `api/velocidad`).
+   **Lo que queda es de distribución, no de código:** el OTA sigue deshabilitado a
+   propósito (`version_code: 1`) y no consta que las 21 tablets tengan la 1.5.1 — el
+   2026-08-21 solo una máquina había mandado velocidad y ninguna, foto. Antes de actualizar
+   una tablet, mirar que esté a **0 pendientes**; y si hay que desinstalar por la firma, el
+   turno abierto se cierra desde `/admin` (ver «Distribución del APK»).
+2. **Validación de fragancia en `iniciar_turno`** — ahora sí es viable (la app la lee del
+   servidor), pero solo cuando **todas** las tablets tengan la 1.5.1: activarla con una
+   sola tablet vieja en planta rechazaría turnos legítimos. Necesita autorización aparte.
+3. **`POST /api/paro/iniciar` tiene el desajuste simétrico y NO se ha tocado** (falta
    autorización). Si ya existe un paro abierto responde **409** y la app, que solo entra en
    modo paro en el callback de éxito, se queda creyendo que produce mientras la web la
    muestra parada. Es alcanzable justo con la contingencia nueva: si el operario reinicia
    la app y pulsa «registrar paro» sobre un paro reabierto desde `/admin`, verá un error.
    El arreglo sería el mismo criterio que en `finalizar`: devolver 200 con el paro que ya
    está abierto, sin sobrescribir su motivo.
-5. **Paros sin cerrar** — el garbage collector de `tasks.py` cierra los turnos colgados a
+4. **Paros sin cerrar** — el garbage collector de `tasks.py` cierra los turnos colgados a
    las 13 h pero **no cierra los paros abiertos de esa sesión**, así que quedan con
    `fin_paro` NULL para siempre (hay 1 de 78 así: el paro 105). La vista de paros los
    distingue con el estado «SIN CIERRE» en vez de contarlos como paros en curso, pero el
    arreglo de fondo está en el backend y **no se ha tocado** (haría falta autorización).
-6. **Máquinas de línea líquida** — ya hay dos dadas de alta (`Máquina 3` y `Maquina 12`),
+5. **Máquinas de línea líquida** — ya hay dos dadas de alta (`Máquina 3` y `Maquina 12`),
    sin producción registrada todavía. Total: 8 máquinas activas, una de ellas `PRUEBA`.
-7. **Logo provisional** — `public/logo192.png` es el de Create React App. El de la cabecera
+6. **Logo provisional** — `public/logo192.png` es el de Create React App. El de la cabecera
    es un SVG hecho a partir de las capturas (`components/ui/Logo.js`); si aparece el
    original, se sustituye por un `<img>`.
-8. **Botón «Insumos» de la cabecera** — aparece en las capturas pero no hay ninguna captura
+7. **Botón «Insumos» de la cabecera** — aparece en las capturas pero no hay ninguna captura
    ni especificación de esa vista. Hoy muestra un aviso de «vista sin especificación de
    referencia». Falta decidir qué debe contener, o quitar el botón.
-9. **El total de estadísticas no cuadra con el KPI de producción**, y es **de siempre**, no
+8. **El total de estadísticas no cuadra con el KPI de producción**, y es **de siempre**, no
    de la segmentación: el rango de fechas de `estadisticas` filtra por `inicio_turno` de la
    sesión mientras `kpis` cuenta por `pallets.fecha_hora`. Sin ningún filtro, el 2026-08-05
    daban 1801 y 2767 pacas respectivamente. Con los segmentadores puestos la diferencia se
@@ -788,7 +865,7 @@ frontend_sigep/
     ├── App.js                   # estado, polling, layout de dos columnas, navegación
     ├── setupProxy.js            # reenvío de /api al backend en desarrollo
     ├── lib/
-    │   ├── format.js            # es-EC, duraciones, turno, antigüedad, etiqueta de tablet, velocidad
+    │   ├── format.js            # es-EC, duraciones, turno, antigüedad, tablet, velocidad y su rango
     │   ├── filtros.js           # dimensiones segmentables, params y serialización repetida
     │   └── useApi.js            # GET con polling; conserva el último dato bueno
     ├── components/
@@ -953,14 +1030,32 @@ fragancias de Jerarquía hace `PUT {activo: false}` tras confirmación, porque l
 de borrado del backend son físicos y dejarían huérfano el histórico. Hay tests que lo
 verifican.
 
-**La pestaña Jerarquía administra dos jerarquías con granularidad distinta**, y no es un
-descuido: `maquina_productos` va por (máquina, marca, presentación) y
-`maquina_marca_fragancias` por (máquina, marca) — la fragancia no depende del gramaje. En
+**La pestaña Jerarquía administra tres jerarquías con granularidad distinta**, y no es un
+descuido: `maquina_productos` va por (máquina, marca, presentación),
+`maquina_marca_fragancias` por (máquina, marca) —la fragancia no depende del gramaje— y
+`maquina_presentacion_velocidad` por (máquina, presentación), que es la simétrica: el ritmo
+depende del gramaje y de la máquina, no de la etiqueta. En
 la tarjeta de cada máquina, el bloque «Fragancias por marca» solo ofrece las marcas que
 esa máquina produce, las activas se muestran como chips ámbar con «×» y las quitadas
 siguen visibles tachadas para poder reactivarlas. Una marca **sin ninguna fragancia
 activa** se rotula «sin configurar · se ofrecen todas», porque el endpoint cae al catálogo
 completo en ese caso y el hueco se leería, si no, como «esta marca no lleva fragancia».
+
+El bloque **«Velocidad estándar por presentación · unidades/min»** (2026-08-21) es una fila
+por presentación con dos casillas, mínimo y máximo, precargadas con lo guardado para
+corregir encima. Detalles que no son evidentes:
+
+- **Se teclea el minuto y se muestra la hora calculada** (`≈ 1.920 – 2.280 /hora`), nunca
+  al revés: en planta se habla del objetivo por hora, pero lo que manda la tablet son
+  unidades por minuto y es contra eso contra lo que se compara.
+- Una casilla vacía **no** es un cero. `Number('')` es 0, así que el hueco se descarta
+  antes de convertir; si no, una presentación sin configurar mostraría «≈ 0 – 0 /hora»
+  como si tuviera rango puesto. Lo mismo en `rangoVelocidad`/`estadoVelocidad`.
+- **«Quitar» es `PUT {activo:false}`**, y su confirmación dice qué se pierde y qué no: las
+  lecturas se siguen registrando, lo que se apaga es la comparación.
+- La velocidad estándar **no viaja a las tablets**: la app manda su lectura y esta web la
+  interpreta. Cambiar un rango no cambia nada de lo que ve el operario, al revés que el
+  resto de esta pestaña. La cabecera lo dice.
 
 ### Estados y errores
 
@@ -1041,6 +1136,18 @@ npx eslint --ext .js src/
   que en Producción la velocidad media solo se pinta cuando hay lecturas, porque las
   sesiones anteriores al cambio nunca las tendrán. En `format.test.js`, que `velocidad(0)`
   sí enseña el cero: un cero registrado de verdad es un dato.
+  Del estándar de velocidad (2026-08-21): que la lectura se compara con la meta de su
+  (máquina, presentación) y que **una sesión con lectura pero sin estándar no se colorea**
+  —el fixture de `estado_operativo` trae las tres filas por esto: con lectura y meta, sin
+  lectura, y con lectura sin meta—, que en Producción se juzga el **promedio** y no la
+  última, que el bloque de Jerarquía va por presentación y no por marca, que el alta manda
+  `{maquina_id, presentacion, vel_min, vel_max}` y la corrección `PUT` **con `activo:true`**
+  (guardar en una dada de baja es decir que vuelve a aplicar), que quitar es
+  `PUT {activo:false}` y nunca `DELETE`, y que un rango imposible (mín > máx) **no sale de
+  la web**. En `format.test.js`, los tres estados de `estadoVelocidad` con los extremos
+  contando como **dentro**, y que ni `rangoVelocidad` ni `estadoVelocidad` concluyen nada
+  con un hueco: `Number(null)` y `Number('')` son 0, y un cero colado ahí marcaría toda la
+  planta en rojo.
   De la contingencia de paros (2026-08-19): que un paro **EN CURSO** avisa de que hay una
   tablet detrás con su botón local, que su confirmación de cierre nombra la consecuencia
   concreta —el «no hay paro activo» que verá el operario— y la salida, mientras la de un
@@ -1100,14 +1207,14 @@ así se evita CORS. El `App.js` heredado apunta a `http://150.36.200.252:8000/ap
 | GET | `/dashboard/kpis` | `desde`,`hasta`,`hora_desde`,`hora_hasta`,`maquina[]`,`operador[]`,`marca[]`,`presentacion[]`,`fragancia[]` | `{pallets_hoy, pacas_hoy, sacos_hoy, turnos_activos, eficiencia}` |
 | GET | `/dashboard/logs` | — | `[{hora:"HH:MM:SS", mensaje, tipo:"pallet"}]` · 15 más recientes, desc |
 | GET | `/dashboard/produccion_hora` | mismos filtros + `agrupar` (opcional) | `[{hora, pallets, detalle:[{maquina,operario,producto,pacas}]}]`. Sin `agrupar` o con `hora`: un punto por hora del reloj, `hora:"HH:00"` — con rango de varios días **suma esa hora de todos los días**. Con `agrupar=dia`: un punto por fecha, `hora:"YYYY-MM-DD"`. Valor desconocido → se trata como `hora`, igual que `?tipo=` |
-| GET | `/dashboard/estado_operativo` | mismos filtros | `[{sesion_id, maquina, operador, producto, inicio_turno, tiempo_transcurrido, total_pacas, estado, velocidad_ultima, velocidad_promedio, velocidad_lecturas, velocidad_hora}]`. Las cuatro de velocidad se añadieron el 2026-08-19 y **viajan siempre**, con `null` cuando la sesión no tiene lecturas: un `0` por defecto sería indistinguible de una máquina detenida |
+| GET | `/dashboard/estado_operativo` | mismos filtros | `[{sesion_id, maquina, operador, producto, inicio_turno, tiempo_transcurrido, total_pacas, estado, velocidad_ultima, velocidad_promedio, velocidad_lecturas, velocidad_hora, velocidad_min, velocidad_max}]`. Las cuatro de velocidad se añadieron el 2026-08-19 y **viajan siempre**, con `null` cuando la sesión no tiene lecturas: un `0` por defecto sería indistinguible de una máquina detenida. `velocidad_min`/`velocidad_max` (2026-08-21) son el rango estándar de esa (máquina, presentación) y viajan igual, en `null` cuando nadie lo configuró: entonces la web enseña la lectura **sin colorearla**, porque no hay contra qué compararla |
 | GET | `/dashboard/top_produccion` | mismos filtros | `[{name, value}]` desc |
 | GET | `/dashboard/opciones_filtros` | `desde`,`hasta`,`hora_desde`,`hora_hasta`,`maquina[]`,`operador[]`,`marca[]`,`presentacion[]`,`fragancia[]` | `{maquina[], operador[], marca[], presentacion[], fragancia[]}`. Sin `desde`/`hasta` es el catálogo histórico completo. Los filtros **encadenan** los menús, y a cada dimensión se le aplican los de *las otras*, **nunca el suyo** (si no, marcar un valor vaciaría su propia lista). La franja recorta por `inicio_turno` |
 | GET | `/dashboard/estadisticas` | `dim`, `rango`, `desde`, `hasta`, `hora_desde`, `hora_hasta`, `maquina[]`, `operador[]`, `marca[]`, `presentacion[]`, `fragancia[]` | `{dim, rango, total_pacas, total_sesiones, items:[{etiqueta,pacas,sesiones,pct}]}`. Los cinco filtros se añadieron el 2026-08-05 (§0); un `dim` desconocido sigue dando **400** |
 | GET | `/dashboard/paros` | `desde`,`hasta`,`hora_desde`,`hora_hasta`,`maquina[]`,`operador[]` | `{kpis, maquinas[], paros[], por_categoria[]}` — ver «Paros» más abajo |
 | GET | `/paro/estado` | `sesion_id` (obligatorio) | `{sesion_id, turno_abierto, en_paro, paro_abierto, ultimo_paro}`. **Solo lectura.** Existe para que la tablet deje de fiarse de su estado en memoria (§0): `paro_abierto: null` significa «no está en paro», no es un error, y `ultimo_paro` va aparte para reconocer un paro cacheado que ya se cerró. **404** solo si la sesión no existe |
 | POST | `/paro/{paro_id}/foto` | multipart, campo `foto` | `{paro_id, foto_url, mensaje}`. Evidencia **opcional**. JPG/PNG, máx. 5 MB (otro tipo o más tamaño → **400**); volver a llamar **sustituye** la anterior y borra el archivo viejo. **Ruta aparte de `/paro/iniciar` a propósito**: pasar `iniciar` a multipart rompería las tablets de hoy |
-| POST | `/velocidad` | `{sesion_id, velocidad, request_id?}` | `{velocidad_id, mensaje, velocidad, duplicado}`. Velocidad en **fundas/min**, una fila por lectura. Idempotente por `request_id`. Fuera de 0.1–1000 → **400**; turno finalizado → **400**; sesión inexistente → **404** |
+| POST | `/velocidad` | `{sesion_id, velocidad, request_id?}` | `{velocidad_id, mensaje, velocidad, duplicado}`. Velocidad en **unidades/min** (el `detail` del 400 y los logs siguen diciendo «fundas/min»: es respuesta que consume la tablet y no se tocó), una fila por lectura. Idempotente por `request_id`. Fuera de 0.1–1000 → **400**; turno finalizado → **400**; sesión inexistente → **404** |
 | POST | `/reportes_app` | `{texto, maquina?, operador?, session_id?, request_id?}` | `{id, mensaje, duplicado?}`. Lo escribe el botón «reportar problema» de la tablet. Idempotente por `request_id`. Desde el 2026-08-07 **envía un correo** (solo si la fila es nueva) a `REPORTES_EMAIL_TO`. Texto vacío → **400** |
 | GET | `/dashboard/comentarios_turno` | `desde`,`hasta` **o** `limit` (def. 30, máx. 200) | `[{id,sesion_id,maquina,operador,texto,creado_en,fecha,hora}]` desc. Sin `desde`/`hasta` devuelve los últimos `limit` sin importar la fecha |
 | GET | `/mantenimiento/checklist` | `limit` (def. 30) **o** `desde`,`hasta` | `[{id,maquina,operador,momento,codigo_turno,fecha_turno,fecha,hora,supervisor,comentarios,items:[{etiqueta,marcado}],total_items,items_ok,creado_en}]` |
@@ -1269,7 +1376,7 @@ de supervisor de las tablets) filtra por los niveles operativos, así que un usu
 | POST | `/admin/operadores` | `{nombre, tipo?}` — `tipo` ∈ `SOLIDO` (default) \| `LIQUIDO`. Si existe inactivo lo **reactiva**. 409 si ya está activo |
 | PUT | `/admin/operadores/{id}` | `{nombre?, tipo?, activo?}` → desactivar = `{activo:false}` |
 | DELETE | `/admin/operadores/{id}` | ⚠️ **borrado físico** (`db.delete`) |
-| GET | `/admin/sesiones` | `desde`,`hasta` → `[{id,maquina,operador,marca,presentacion,fragancia,inicio,fin,estado,total_pacas,n_registros,velocidad_promedio,velocidad_lecturas}]`. Las dos de velocidad son del 2026-08-19; `velocidad_promedio` es `null` sin lecturas, y el recuento va al lado porque una media de una sola lectura no describe un turno |
+| GET | `/admin/sesiones` | `desde`,`hasta` → `[{id,maquina,operador,marca,presentacion,fragancia,inicio,fin,estado,total_pacas,n_registros,velocidad_promedio,velocidad_lecturas,velocidad_min,velocidad_max}]`. Las dos primeras de velocidad son del 2026-08-19; `velocidad_promedio` es `null` sin lecturas, y el recuento va al lado porque una media de una sola lectura no describe un turno. `velocidad_min`/`velocidad_max` (2026-08-21) son el estándar de esa (máquina, presentación), y aquí se comparan contra el **promedio**: el turno ya terminó y lo que se juzga es cómo fue entero, no un instante |
 | DELETE | `/admin/paros/{id}/foto` | Quita la evidencia fotográfica **dejando el paro intacto**, y borra el archivo de `static/paros/` — dejarlo huérfano lo mantendría accesible por URL, y `/static` no pide autenticación. **400** si ese paro no tiene foto |
 | PUT | `/admin/sesiones/{id}` | `{maquina?,operador?,marca?,presentacion?,fragancia?}` |
 | POST | `/admin/sesiones/{id}/cerrar` | Cierra un turno abierto: paro abierto + pedidos vivos + `fin_turno` + `duracion_minutos`, y deja `observaciones = "CERRADO MANUALMENTE POR: X"`. 400 si ya estaba cerrado. **No avisa a la tablet**: si sigue trabajando, seguirá mandando pacas a una sesión cerrada y su finalizar dará 400 |
@@ -1290,6 +1397,9 @@ de supervisor de las tablets) filtra por los niveles operativos, así que un usu
 | PUT | `/admin/checklists/{id}` | `{supervisor?, comentarios?, items?:[{id,marcado}]}` |
 | GET | `/admin/catalogos` | `{maquinas:[{id,nombre,tipo}], marcas:[str], presentaciones:[str], fragancias:[str]}` — solo activos. `fragancias` se añadió el 2026-08-06: es admin-only, ninguna tablet lo lee |
 | GET | `/admin/maquina_fragancias` | `[{maquina_id,maquina,tipo,activa,marcas:[{marca,produce,fragancias:[{id,fragancia,activo}]}]}]` — incluye inactivas. Las marcas son la unión de las que produce y las que ya tienen fragancias, para que una combinación dada de baja no esconda sus fragancias |
+| GET | `/admin/velocidad_estandar` | `[{maquina_id,maquina,tipo,activa,presentaciones:[{presentacion,produce,estandar:{id,vel_min,vel_max,activo}\|null}]}]`. Las presentaciones son la unión de las que produce y las que ya tienen estándar, igual que las marcas de `maquina_fragancias`. `estandar: null` es «sin configurar», que **no** es un rango en cero |
+| POST | `/admin/velocidad_estandar` | `{maquina_id,presentacion,vel_min,vel_max}` en **unidades/min**. Reactiva si existía dada de baja, **con los valores nuevos** (quien reconfigura está diciendo cuál quiere); 409 si ya está activa. La presentación debe ser de esa máquina si tiene jerarquía (422). Rango 0.1–1000 y `vel_min ≤ vel_max`, si no **400** |
+| PUT | `/admin/velocidad_estandar/{id}` | `{vel_min?, vel_max?, activo?}` → quitar = `{activo:false}`. **El par se valida entero** aunque solo venga un extremo: subir el mínimo por encima del máximo guardado dejaría una fila que ninguna lectura puede cumplir |
 | POST | `/admin/maquina_fragancias` | `{maquina_id,marca,fragancia}`. Reactiva si existía inactiva, 409 si ya está activa. La fragancia debe estar en el catálogo (422 si no) y la marca debe ser de esa máquina si tiene jerarquía (422 si no) |
 | PUT | `/admin/maquina_fragancias/{id}` | `{fragancia?, activo?}` → quitar = `{activo:false}` |
 | POST | `/admin/fragancias` | `{nombre}` — catálogo maestro, crea o reactiva |
@@ -1344,7 +1454,7 @@ heartbeat los recupera como respaldo. **No cambiar el transporte ni el formato.*
 | KPI `TURNOS ACTIVOS` → `5` | `kpis.turnos_activos` |
 | KPI `LÍNEAS CON TURNO HOY` → `7`, `5 activas · 2 finalizada(s)` | **Derivado** de `estado_operativo`: `length`, y conteo por `estado` |
 | `Producción por hora / por día · pacas` | `produccion_hora[].hora` / `.pallets` (`.detalle` para el tooltip). Toggle `HORA \| DÍA` en la cabecera de la tarjeta: **automático** — con rango de un solo día va por hora y «DÍA» sale deshabilitado; en cuanto el rango abarca varios días pasa a por día. La elección manual dura hasta el siguiente «Cargar» |
-| `Estado operativo · líneas` | `estado_operativo[]` completo. Columna **Fundas/min** (2026-08-19): la **última** lectura como cifra, y el promedio, el nº de lecturas y la hora en el `title`. Sin lecturas, «—» y un título que lo dice — nunca un cero |
+| `Estado operativo · líneas` | `estado_operativo[]` completo. Columna **Unid./min** (2026-08-19; se llamaba «Fundas/min» hasta el 2026-08-21): la **última** lectura como cifra, y el promedio, el nº de lecturas y la hora en el `title`. Sin lecturas, «—» y un título que lo dice — nunca un cero. Debajo, `meta 32 – 38` si esa (máquina, presentación) tiene estándar, y la cifra en verde si está dentro y en ámbar si se sale por cualquiera de los dos lados; el `title` dice cuál. **Sin estándar, sin color y sin meta** |
 | `Estadísticas de producción` | `estadisticas?dim=…&desde=&hasta=` + segmentadores. **Sin ningún control propio**: ni los presets `Hoy/7d/30d/Todo` de la versión vieja, ni los tabs de agrupación (`Máquina`, `Operario`, `Marca+Pres.`, `Marca+Pres.+Frag.`). Rango, franja y filtros son los de la cabecera, y la agrupación se deduce de lo segmentado (tabla en §2) |
 | `Actividad en vivo` | `logs[]` |
 | `Checklist de mantenimiento · 8 recientes` | `mantenimiento/checklist?limit=8` |
@@ -1383,7 +1493,7 @@ equipo con la hora mal puesta inventaría paros de horas o duraciones negativas.
 | Operarios | `GET`/`POST` `/admin/operadores`, `PUT /admin/operadores/{id}` |
 | Producción | `GET /admin/sesiones`, `PUT /admin/sesiones/{id}`, `POST /admin/sesiones/{id}/cerrar`, `DELETE /admin/sesiones/{id}`, `GET /admin/sesiones_activas` (para saber si la tablet sigue conectada); el desplegable de pacas usa `GET /admin/sesiones/{id}/pallets`, `PUT`/`DELETE /admin/pallets/{id}`; selects desde `/admin/catalogos` |
 | Checklists | `GET /admin/checklists`, `PUT /admin/checklists/{id}` |
-| Jerarquía | `GET /admin/maquina_productos`, `GET /admin/maquina_fragancias`, `GET /admin/catalogos`, `POST`/`PUT`/`DELETE /admin/maquina_productos`, `POST`/`PUT /admin/maquina_fragancias`, `POST`/`PUT /admin/maquinas`, `POST /admin/marcas`, `POST /admin/presentaciones`, `POST /admin/fragancias` |
+| Jerarquía | `GET /admin/maquina_productos`, `GET /admin/maquina_fragancias`, `GET /admin/velocidad_estandar`, `GET /admin/catalogos`, `POST`/`PUT`/`DELETE /admin/maquina_productos`, `POST`/`PUT /admin/maquina_fragancias`, `POST`/`PUT /admin/velocidad_estandar`, `POST`/`PUT /admin/maquinas`, `POST /admin/marcas`, `POST /admin/presentaciones`, `POST /admin/fragancias` |
 | Mensajes | `GET /admin/sesiones_activas`, `POST /admin/mensajes/masivo` |
 | Paros | `GET`/`PUT /admin/paros`, `POST /admin/paros/{id}/cerrar`, `DELETE /admin/paros/{id}`, `DELETE /admin/paros/{id}/foto` |
 | Insumos (solo `ADMINBODEGA` y `SUPERADMIN`) | lectura del público `/api/insumos/dashboard`; `PUT`/`DELETE` de `/admin/pedidos/{id}` y `/admin/entregas/{id}` |
