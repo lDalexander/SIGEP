@@ -26,6 +26,6 @@ local.properties
 CLAUDE.md
 
 # Firma de release: NUNCA versionar el keystore ni las claves
-/keystore.properties
+/keystore.properties*
 *.jks
 *.keystore

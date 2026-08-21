@@ -46,15 +46,37 @@ cp keystore.properties.example keystore.properties
 ```
 
 ```properties
-storeFile=sigep-release.jks          # ruta al .jks (absoluta o relativa a la raíz)
+storeFile=C:/Users/.../llave_detcuador.jks   # ruta al .jks (ver 2.3)
 storePassword=********
-keyAlias=sigep
+keyAlias=sigep_key
 keyPassword=********
 ```
 
 > `keystore.properties` y los archivos `*.jks` están en `.gitignore`. **Nunca** los
 > subas al repositorio. Gradle firma el release solo si `keystore.properties` existe;
 > si no, compila el release **sin firmar** (no rompe el build).
+
+### 2.3 Cuál llave es la oficial (importante)
+
+**Llave oficial: `llave_detcuador.jks`, alias `sigep_key`.** Es la que firma el APK
+`1.5.1` que está instalado en las tablets:
+
+```
+CN=John Garcia, O=Detcuador S.A., L=Duran, ST=Guyas, C=EC
+SHA-256: 16dc6993b2dce83bbf4a68f4f3bfe9dfb49d620c7e76b95ac6ce37c65d71a2fa
+```
+
+> ⚠️ Existe un **segundo** keystore histórico, `sigep-release.jks` (`CN=SIGEP`,
+> SHA-256 `1d773b04…`), con el que se firmaron las versiones hasta la `1.3.1`/`1.4.0`.
+> **No usarlo.** Un APK firmado con él no instala encima de la `1.5.1`: Android exige
+> desinstalar, y **desinstalar borra la cola offline** (`sigep_db`) y el turno activo.
+> Se conserva solo para poder actualizar alguna tablet que se haya quedado en `1.4.0`.
+
+Las contraseñas viven en el gestor del asistente «Generate Signed APK» de Android
+Studio (`.idea/workspace.xml` → `GenerateSignedApkSettings` guarda ruta y alias, no las
+claves). Para firmar por línea de comandos hay que ponerlas en `keystore.properties`;
+mientras estén como `PENDIENTE_PONER_CLAVE`, el build de release **falla a propósito**,
+que es preferible a producir en silencio un APK con la firma equivocada.
 
 ---
 
@@ -114,9 +136,13 @@ Confirma versión y firma antes de distribuir:
 # versión y paquete
 "$ANDROID_SDK/build-tools/<ver>/aapt.exe" dump badging app/build/outputs/apk/release/app-release.apk | grep -E "package|versionName"
 
-# firma presente
-"$JAVA_HOME/bin/keytool" -printcert -jarfile app/build/outputs/apk/release/app-release.apk
+# firma: la huella DEBE coincidir con la llave oficial (ver 2.3)
+"$ANDROID_SDK/build-tools/<ver>/apksigner.bat" verify --print-certs app/build/outputs/apk/release/app-release.apk
+#   esperado -> SHA-256 digest: 16dc6993b2dce83bbf4a68f4f3bfe9dfb49d620c7e76b95ac6ce37c65d71a2fa
 ```
+
+> Si la huella no coincide, **no distribuyas el APK**: no instalará encima de lo que hay
+> en las tablets y obligaría a desinstalarlas.
 
 ---
 
@@ -137,8 +163,13 @@ git push origin v1.5.1
 
 1. Copia `app-release.apk` a cada tablet (USB, MDM, enlace de descarga, etc.).
 2. Instálalo encima de la versión anterior (el `versionCode` mayor lo permite).
-3. Si cambió la firma respecto a la instalada, Android pedirá **desinstalar antes**.
-   Por eso es crítico usar **siempre el mismo keystore**.
+3. Si cambió la firma respecto a la instalada, Android **rechaza la actualización** y hay
+   que desinstalar antes. **Desinstalar borra los datos de la app**: la cola offline
+   (`sigep_db`) y el turno activo. Si no hay más remedio, hazlo **al cerrar el turno y con
+   el badge de pendientes en 0** (verde), nunca a media jornada: lo que esté en la cola se
+   pierde. Por eso es crítico usar **siempre la llave oficial** (ver 2.3).
+4. Comprueba en la tablet que la versión que muestra la pantalla coincide con la que
+   instalaste (rótulo al pie de Splash / selección de perfil / producción).
 
 ---
 
@@ -151,7 +182,7 @@ git push origin v1.5.1
       `adb shell dumpsys package com.example.controller | grep versionName`.
 - [ ] Contrato cliente↔backend en sincronía (endpoints Retrofit en `ProduccionApi.kt`
       coinciden con el OpenAPI del backend).
-- [ ] APK firmado y verificado (`aapt dump badging`).
+- [ ] APK firmado con la llave oficial: huella `16dc6993…` verificada con `apksigner verify --print-certs` (ver 2.3).
 - [ ] Commit + tag `vX.Y.Z` + push.
 - [ ] APK distribuido e instalado en al menos una tablet de prueba.
 
