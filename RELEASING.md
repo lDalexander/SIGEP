@@ -85,8 +85,8 @@ que es preferible a producir en silencio un APK con la firma equivocada.
 Edita `app/build.gradle.kts` → bloque `defaultConfig`:
 
 ```kotlin
-versionCode = 12           // SIEMPRE +1 respecto a la versión anterior (última: 12)
-versionName = "1.5.1"      // versión legible (semver) — última publicada: 1.4.0
+versionCode = 13           // SIEMPRE +1 respecto a la versión anterior (última: 13)
+versionName = "1.6.0"      // versión legible (semver) — última publicada: 1.5.1
 ```
 
 Reglas:
@@ -150,11 +150,11 @@ Confirma versión y firma antes de distribuir:
 
 ```bash
 git add app/build.gradle.kts
-git commit -m "chore: version 1.5.1 (versionCode 12)"
+git commit -m "chore: version 1.6.0 (versionCode 13)"
 git checkout master && git merge --no-ff <rama>          # si venías de una rama de feature
-git tag -a v1.5.1 -m "SIGEP v1.5.1"
+git tag -a v1.6.0 -m "SIGEP v1.6.0"
 git push origin master
-git push origin v1.5.1
+git push origin v1.6.0
 ```
 
 ---
