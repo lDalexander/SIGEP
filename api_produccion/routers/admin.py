@@ -37,6 +37,7 @@ from models import (
     MantenimientoChecklistItemDB,
     MaquinaDB,
     MaquinaProductoDB,
+    ProductoDB,
     MaquinaMarcaFraganciaDB,
     MaquinaPresentacionVelocidadDB,
     MarcaDB,
@@ -365,6 +366,9 @@ def _rango(desde, hasta):
 class SesionUpdate(BaseModel):
     maquina: str | None = None
     operador: str | None = None
+    # El producto se puede corregir como cualquier otro campo del turno: si una
+    # tablet vieja abrio el turno sin mandarlo, aqui se rellena a mano.
+    producto: str | None = None
     marca: str | None = None
     presentacion: str | None = None
     fragancia: str | None = None
@@ -407,6 +411,7 @@ def listar_sesiones(desde: str = Query(None), hasta: str = Query(None), db: Sess
         vel_prom, vel_n = (vel or (None, 0))
         out.append({
             "id": s.id, "maquina": s.maquina, "operador": s.operador,
+            "producto": s.producto or "",
             "marca": s.marca, "presentacion": s.presentacion, "fragancia": s.fragancia,
             "inicio": s.inicio_turno.strftime("%Y-%m-%d %H:%M") if s.inicio_turno else "",
             "fin": s.fin_turno.strftime("%H:%M") if s.fin_turno else None,
@@ -427,13 +432,14 @@ def actualizar_sesion(sesion_id: int, datos: SesionUpdate, db: Session = Depends
     s = db.query(SesionTrabajoDB).filter(SesionTrabajoDB.id == sesion_id).first()
     if not s:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
-    for campo in ("maquina", "operador", "marca", "presentacion", "fragancia"):
+    for campo in ("maquina", "operador", "producto", "marca", "presentacion", "fragancia"):
         val = getattr(datos, campo)
         if val is not None:
             setattr(s, campo, val.strip())
     db.commit()
     logger.info(f"Sesión {sesion_id} editada por admin {ctx.get('username')}")
-    return {"id": s.id, "maquina": s.maquina, "operador": s.operador, "marca": s.marca,
+    return {"id": s.id, "maquina": s.maquina, "operador": s.operador,
+            "producto": s.producto or "", "marca": s.marca,
             "presentacion": s.presentacion, "fragancia": s.fragancia}
 
 
@@ -720,11 +726,17 @@ def actualizar_checklist(checklist_id: int, datos: ChecklistUpdate, db: Session 
 
 class MaquinaProductoIn(BaseModel):
     maquina_id: int
+    # None / cadena vacia = COMODIN: la combinacion vale para cualquier producto.
+    # Es lo que permite dejar la jerarquia de liquidos a medio clasificar sin que
+    # una maquina se quede sin poder abrir turno.
+    producto: str | None = None
     marca: str
     presentacion: str
 
 
 class MaquinaProductoUpdate(BaseModel):
+    # Cadena vacia borra el producto (vuelve a comodin); None deja el valor igual.
+    producto: str | None = None
     marca: str | None = None
     presentacion: str | None = None
     activo: bool | None = None
@@ -747,11 +759,17 @@ def catalogos_jerarquia(db: Session = Depends(get_db), ctx=Depends(require_plant
     fragancias = [f.nombre for f in db.query(FraganciaDB)
                   .filter(FraganciaDB.activa.is_(True))
                   .order_by(FraganciaDB.nombre).all()]
+    # `productos` se anadio el 2026-08-27, cuando el producto paso a formar parte de
+    # la jerarquia: la linea liquida hace cloro, detergente, quitamanchas y suavizante.
+    productos = [{"nombre": p.nombre, "tipo": p.tipo} for p in db.query(ProductoDB)
+                 .filter(ProductoDB.activo.is_(True))
+                 .order_by(ProductoDB.tipo, ProductoDB.nombre).all()]
     return {
         "maquinas": [{"id": m.id, "nombre": m.nombre, "tipo": m.tipo} for m in maquinas],
         "marcas": marcas,
         "presentaciones": presentaciones,
         "fragancias": fragancias,
+        "productos": productos,
     }
 
 
@@ -763,7 +781,8 @@ def listar_maquina_productos(db: Session = Depends(get_db), ctx=Depends(require_
     por_maquina: dict[int, list] = {}
     for f in filas:
         por_maquina.setdefault(f.maquina_id, []).append(
-            {"id": f.id, "marca": f.marca, "presentacion": f.presentacion, "activo": bool(f.activo)}
+            {"id": f.id, "producto": f.producto or "", "marca": f.marca,
+             "presentacion": f.presentacion, "activo": bool(f.activo)}
         )
     return [
         {"maquina_id": m.id, "maquina": m.nombre, "tipo": m.tipo, "activa": bool(m.activa),
@@ -779,10 +798,17 @@ def crear_maquina_producto(datos: MaquinaProductoIn, db: Session = Depends(get_d
         raise HTTPException(status_code=404, detail="Máquina no encontrada")
     marca = (datos.marca or "").strip()
     presentacion = (datos.presentacion or "").strip()
+    producto = (datos.producto or "").strip() or None
     if not marca or not presentacion:
         raise HTTPException(status_code=400, detail="Marca y presentación son obligatorias")
+    # El duplicado se busca CON el producto, y con IS NULL cuando es comodin: en MySQL
+    # `producto = NULL` nunca es cierto, asi que sin esto el aviso lo daria el UNIQUE
+    # de la BD con un 500 en vez de este 409 explicado.
+    filtro_producto = (MaquinaProductoDB.producto.is_(None) if producto is None
+                       else MaquinaProductoDB.producto == producto)
     existente = db.query(MaquinaProductoDB).filter(
         MaquinaProductoDB.maquina_id == datos.maquina_id,
+        filtro_producto,
         MaquinaProductoDB.marca == marca,
         MaquinaProductoDB.presentacion == presentacion,
     ).first()
@@ -792,14 +818,17 @@ def crear_maquina_producto(datos: MaquinaProductoIn, db: Session = Depends(get_d
         existente.activo = True
         db.commit()
         logger.info(f"Jerarquía reactivada: maq {datos.maquina_id} {marca} {presentacion} (admin {ctx.get('username')})")
-        return {"id": existente.id, "maquina_id": existente.maquina_id, "marca": marca,
+        return {"id": existente.id, "maquina_id": existente.maquina_id,
+                "producto": producto or "", "marca": marca,
                 "presentacion": presentacion, "activo": True, "reactivado": True}
-    fila = MaquinaProductoDB(maquina_id=datos.maquina_id, marca=marca, presentacion=presentacion, activo=True)
+    fila = MaquinaProductoDB(maquina_id=datos.maquina_id, producto=producto, marca=marca,
+                             presentacion=presentacion, activo=True)
     db.add(fila)
     db.commit()
     db.refresh(fila)
     logger.info(f"Jerarquía creada: maq {datos.maquina_id} {marca} {presentacion} (admin {ctx.get('username')})")
-    return {"id": fila.id, "maquina_id": fila.maquina_id, "marca": marca, "presentacion": presentacion, "activo": True}
+    return {"id": fila.id, "maquina_id": fila.maquina_id, "producto": producto or "",
+            "marca": marca, "presentacion": presentacion, "activo": True}
 
 
 @router.put("/maquina_productos/{fila_id}")
@@ -807,6 +836,9 @@ def actualizar_maquina_producto(fila_id: int, datos: MaquinaProductoUpdate, db: 
     fila = db.query(MaquinaProductoDB).filter(MaquinaProductoDB.id == fila_id).first()
     if not fila:
         raise HTTPException(status_code=404, detail="Combinación no encontrada")
+    if datos.producto is not None:
+        # Cadena vacia = volver a comodin (NULL en la columna), no guardar "".
+        fila.producto = datos.producto.strip() or None
     if datos.marca is not None:
         fila.marca = datos.marca.strip()
     if datos.presentacion is not None:
@@ -815,9 +847,100 @@ def actualizar_maquina_producto(fila_id: int, datos: MaquinaProductoUpdate, db: 
         fila.activo = datos.activo
     db.commit()
     logger.info(f"Jerarquía editada: id {fila.id} (admin {ctx.get('username')})")
-    return {"id": fila.id, "maquina_id": fila.maquina_id, "marca": fila.marca,
-            "presentacion": fila.presentacion, "activo": bool(fila.activo)}
+    return {"id": fila.id, "maquina_id": fila.maquina_id, "producto": fila.producto or "",
+            "marca": fila.marca, "presentacion": fila.presentacion, "activo": bool(fila.activo)}
 
+
+# ----------------------------------------------------------------------------
+# Catalogo de productos por linea (2026-08-27)
+# ----------------------------------------------------------------------------
+# SOLIDO solo hace detergente en polvo; LIQUIDO hace cloro, detergente liquido,
+# quitamanchas y suavizante, y el operario elige cual al abrir turno. Vive en BD y
+# no en la app porque las tablets se actualizan a mano por sideload: anadir un
+# producto no puede obligar a compilar, firmar y reinstalar un APK en toda la planta.
+
+class ProductoIn(BaseModel):
+    nombre: str
+    tipo: str = "LIQUIDO"
+
+
+class ProductoUpdate(BaseModel):
+    nombre: str | None = None
+    tipo: str | None = None
+    activo: bool | None = None
+
+
+def _canon_linea(tipo: str) -> str:
+    return "LIQUIDO" if (tipo or "").strip().upper().startswith("L") else "SOLIDO"
+
+
+@router.get("/productos")
+def listar_productos_admin(db: Session = Depends(get_db), ctx=Depends(require_planta_lectura)):
+    """Catalogo completo, incluidos los inactivos (la web los enseña en gris)."""
+    return [
+        {"id": p.id, "nombre": p.nombre, "tipo": p.tipo, "activo": bool(p.activo)}
+        for p in db.query(ProductoDB).order_by(ProductoDB.tipo, ProductoDB.nombre).all()
+    ]
+
+
+@router.post("/productos")
+def crear_producto(datos: ProductoIn, db: Session = Depends(get_db), ctx=Depends(require_planta)):
+    nombre = (datos.nombre or "").strip()
+    if not nombre:
+        raise HTTPException(status_code=400, detail="El nombre es obligatorio")
+    tipo = _canon_linea(datos.tipo)
+    existente = db.query(ProductoDB).filter(ProductoDB.nombre == nombre).first()
+    if existente:
+        if existente.activo:
+            raise HTTPException(status_code=409, detail=f"El producto {nombre} ya existe")
+        existente.activo = True
+        existente.tipo = tipo
+        db.commit()
+        logger.info(f"Producto reactivado: {nombre} (admin {ctx.get('username')})")
+        return {"id": existente.id, "nombre": nombre, "tipo": tipo, "activo": True, "reactivado": True}
+    fila = ProductoDB(nombre=nombre, tipo=tipo, activo=True)
+    db.add(fila)
+    db.commit()
+    db.refresh(fila)
+    logger.info(f"Producto creado: {nombre} ({tipo}) (admin {ctx.get('username')})")
+    return {"id": fila.id, "nombre": fila.nombre, "tipo": fila.tipo, "activo": True}
+
+
+@router.put("/productos/{producto_id}")
+def actualizar_producto(producto_id: int, datos: ProductoUpdate, db: Session = Depends(get_db), ctx=Depends(require_planta)):
+    fila = db.query(ProductoDB).filter(ProductoDB.id == producto_id).first()
+    if not fila:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+    if datos.nombre is not None:
+        nuevo = datos.nombre.strip()
+        if not nuevo:
+            raise HTTPException(status_code=400, detail="El nombre es obligatorio")
+        fila.nombre = nuevo
+    if datos.tipo is not None:
+        fila.tipo = _canon_linea(datos.tipo)
+    if datos.activo is not None:
+        fila.activo = datos.activo
+    db.commit()
+    logger.info(f"Producto editado: id {fila.id} (admin {ctx.get('username')})")
+    return {"id": fila.id, "nombre": fila.nombre, "tipo": fila.tipo, "activo": bool(fila.activo)}
+
+
+@router.delete("/productos/{producto_id}")
+def eliminar_producto(producto_id: int, db: Session = Depends(get_db), ctx=Depends(require_superadmin)):
+    """Baja LOGICA (activo = 0), no borrado.
+
+    Las sesiones y las filas de `maquina_productos` guardan el producto por NOMBRE:
+    borrarlo de verdad dejaria el historico apuntando a algo que ya no existe y las
+    combinaciones huerfanas. Desactivado deja de ofrecerse en las tablets y conserva
+    intacto todo lo ya registrado.
+    """
+    fila = db.query(ProductoDB).filter(ProductoDB.id == producto_id).first()
+    if not fila:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+    fila.activo = False
+    db.commit()
+    logger.info(f"Producto desactivado: {fila.nombre} (admin {ctx.get('username')})")
+    return {"id": fila.id, "nombre": fila.nombre, "activo": False}
 
 # ----------------------------------------------------------------------------
 # Jerarquía de fragancias: (máquina, marca) -> fragancias  (2026-08-06)

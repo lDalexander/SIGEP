@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 
 from database import get_db, logger
-from models import OperadorDB, MaquinaDB, SesionTrabajoDB, PalletDB, ParoMaquinaDB, PedidoBodegaDB, UsuarioDB, InsumoDB, RecetaProductoDB, MaquinaProductoDB, MaquinaMarcaFraganciaDB, FraganciaDB, ComentarioTurnoDB, ReporteAppDB, VelocidadMaquinaDB
+from models import OperadorDB, MaquinaDB, SesionTrabajoDB, PalletDB, ParoMaquinaDB, PedidoBodegaDB, UsuarioDB, InsumoDB, RecetaProductoDB, MaquinaProductoDB, MaquinaMarcaFraganciaDB, FraganciaDB, ComentarioTurnoDB, ReporteAppDB, VelocidadMaquinaDB, ProductoDB
 from schemas import IniciarTurno, RegistrarPalletRequest, FinalizarTurno, IniciarParo, FinalizarParo, ComentarioTurnoRequest, ReporteAppRequest, RegistrarVelocidad
 from ws_manager import manager
 from services.email_service import notificar_reporte_app
@@ -93,6 +93,11 @@ def obtener_maquinas(db: Session = Depends(get_db)):
 
     # maquina_id -> { marca -> [presentaciones] }, solo combinaciones activas.
     por_maquina: dict[int, dict[str, list]] = {}
+    # maquina_id -> [ {producto, marca, presentacion} ]: la misma jerarquia PLANA,
+    # para que la app pueda filtrar por producto sin red. Es un campo ADITIVO: se
+    # mantiene `marcas` tal cual porque las tablets anteriores a la 1.6.0 no
+    # conocen el producto y seguirian poblando sus selectores con el.
+    combinaciones: dict[int, list] = {}
     filas = (
         db.query(MaquinaProductoDB)
         .filter(MaquinaProductoDB.activo.is_(True))
@@ -105,6 +110,12 @@ def obtener_maquinas(db: Session = Depends(get_db)):
         pres = marcas.setdefault(f.marca, [])
         if f.presentacion and f.presentacion not in pres:
             pres.append(f.presentacion)
+        combinaciones.setdefault(f.maquina_id, []).append({
+            # "" = COMODIN: fila sin producto asignado, valida para cualquiera.
+            "producto": f.producto or "",
+            "marca": f.marca,
+            "presentacion": f.presentacion or "",
+        })
 
     def _catalogo(maquina_id: int) -> list:
         marcas = por_maquina.get(maquina_id, {})
@@ -114,9 +125,33 @@ def obtener_maquinas(db: Session = Depends(get_db)):
         ]
 
     return [
-        {"id": maq.id, "nombre": maq.nombre, "tipo": maq.tipo, "marcas": _catalogo(maq.id)}
+        {
+            "id": maq.id,
+            "nombre": maq.nombre,
+            "tipo": maq.tipo,
+            "marcas": _catalogo(maq.id),
+            "combinaciones": combinaciones.get(maq.id, []),
+        }
         for maq in maquinas
     ]
+
+@router.get("/productos")
+def obtener_productos(tipo: str = Query(None), db: Session = Depends(get_db)):
+    """Catalogo de productos de una linea (`?tipo=SOLIDO|LIQUIDO`).
+
+    Existe para que la app no lleve la lista escrita en el codigo: las tablets se
+    actualizan a mano por sideload, asi que anadir SUAVIZANTE no puede obligar a
+    compilar, firmar y reinstalar un APK en toda la planta.
+
+    Devuelve solo nombres, como `/api/fragancias`, y **nunca** falla por
+    configuracion: si la linea no tiene productos configurados devuelve lista vacia
+    y la app cae a su fallback en fuente, para que nadie se quede sin abrir turno.
+    """
+    q = db.query(ProductoDB).filter(ProductoDB.activo.is_(True))
+    if tipo:
+        canon = "LIQUIDO" if tipo.strip().upper().startswith("L") else "SOLIDO"
+        q = q.filter(ProductoDB.tipo == canon)
+    return [p.nombre for p in q.order_by(ProductoDB.nombre).all()]
 
 @router.get("/fragancias")
 def obtener_fragancias(maquina: str = Query(None), marca: str = Query(None),
@@ -300,6 +335,9 @@ def iniciar(datos: IniciarTurno, db: Session = Depends(get_db)):
     try:
         nueva_sesion = SesionTrabajoDB(
             tipo=datos.tipo,
+            # "" -> None: Gson manda cadena vacia cuando la tablet no eligio
+            # producto (linea SOLIDO), y en la columna queremos NULL, no "".
+            producto=(datos.producto or None),
             maquina=datos.maquina,
             operador=datos.operador,
             marca=datos.marca,

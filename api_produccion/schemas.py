@@ -15,6 +15,9 @@ class IniciarTurno(BaseModel):
     marca: str
     presentacion: str
     fragancia: str
+    # Producto de la linea. Opcional a proposito: las tablets anteriores a la 1.6.0
+    # no lo mandan y tienen que seguir abriendo turno igual.
+    producto: Optional[str] = None
 
 class RegistrarPalletRequest(BaseModel):
     """Esquema para registrar la producción de un pallet.

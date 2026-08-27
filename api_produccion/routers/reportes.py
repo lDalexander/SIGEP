@@ -126,6 +126,7 @@ def descargar_excel(desde: str = Query(None), hasta: str = Query(None), db: Sess
                 "Fecha": s.inicio_turno.strftime("%Y-%m-%d") if s.inicio_turno else "",
                 "Máquina": s.maquina,
                 "Operador": s.operador,
+                "Producto": s.producto or "",
                 "Marca": s.marca,
                 "Presentación": s.presentacion,
                 "Fragancia": s.fragancia,

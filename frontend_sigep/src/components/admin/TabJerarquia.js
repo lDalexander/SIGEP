@@ -66,6 +66,8 @@ export default function TabJerarquia() {
   const [nuevaMarca, setNuevaMarca] = useState('');
   const [nuevaPresentacion, setNuevaPresentacion] = useState('');
   const [nuevaFragancia, setNuevaFragancia] = useState('');
+  const [nuevoProducto, setNuevoProducto] = useState('');
+  const [tipoProducto, setTipoProducto] = useState('Líquido');
 
   /* Combinación en preparación, por máquina: { [maquina_id]: {marca, presentacion} } */
   const [combo, setCombo] = useState({});
@@ -80,6 +82,8 @@ export default function TabJerarquia() {
   const marcas = catalogos.datos?.marcas || [];
   const presentaciones = catalogos.datos?.presentaciones || [];
   const fragancias = catalogos.datos?.fragancias || [];
+  /* [{nombre, tipo}] — el producto entro en la jerarquia el 2026-08-27. */
+  const productos = catalogos.datos?.productos || [];
 
   /* maquina_id -> marcas[] con sus fragancias, tal como lo devuelve la API. */
   const fragPorMaquina = {};
@@ -92,6 +96,12 @@ export default function TabJerarquia() {
   (Array.isArray(velMatriz.datos) ? velMatriz.datos : []).forEach((m) => {
     velPorMaquina[m.maquina_id] = m.presentaciones || [];
   });
+
+  /* Productos de una linea, solo nombres, para los Select. */
+  const productosDeLinea = (tipo) => {
+    const canon = (tipo || '').toUpperCase().startsWith('L') ? 'LIQUIDO' : 'SOLIDO';
+    return productos.filter((p) => p.tipo === canon).map((p) => p.nombre);
+  };
 
   const recargarTodo = () => {
     matriz.recargar();
@@ -146,6 +156,9 @@ export default function TabJerarquia() {
     try {
       await admin.post('/maquina_productos', {
         maquina_id: maquina.maquina_id,
+        // Vacio = comodin: la combinacion vale para cualquier producto. Es lo que
+        // deja la jerarquia usable mientras no se clasifica del todo.
+        producto: eleccion.producto || '',
         marca: eleccion.marca,
         presentacion: eleccion.presentacion,
       });
@@ -162,6 +175,21 @@ export default function TabJerarquia() {
     try {
       await admin.put(`/maquina_productos/${producto.id}`, { activo });
       ok(`${producto.marca} · ${producto.presentacion} ${activo ? 'reactivada' : 'desactivada'}`);
+      matriz.recargar();
+    } catch (err) {
+      fallo(mensajeDeError(err));
+    }
+  };
+
+  /* Reasigna el producto de una combinacion. Cadena vacia la devuelve a comodin. */
+  const cambiarComboProducto = async (fila, producto) => {
+    try {
+      await admin.put(`/maquina_productos/${fila.id}`, { producto });
+      ok(
+        producto
+          ? `${fila.marca} · ${fila.presentacion} → ${producto}`
+          : `${fila.marca} · ${fila.presentacion} vale para cualquier producto`
+      );
       matriz.recargar();
     } catch (err) {
       fallo(mensajeDeError(err));
@@ -384,6 +412,35 @@ export default function TabJerarquia() {
                 Agregar fragancia
               </Button>
             </div>
+
+            {/* Productos: SOLIDO solo hace detergente en polvo, LIQUIDO hace varios
+                y el operario elige cual al abrir turno. */}
+            <div className="flex flex-wrap items-center gap-3">
+              <Input
+                value={nuevoProducto}
+                onChange={(e) => setNuevoProducto(e.target.value)}
+                placeholder="Nuevo producto (ej. DESINFECTANTE)"
+                aria-label="Nuevo producto"
+                className="flex-1 min-w-[220px]"
+              />
+              <Select
+                value={tipoProducto}
+                onChange={(e) => setTipoProducto(e.target.value)}
+                opciones={['Sólido', 'Líquido']}
+                aria-label="Línea del producto"
+                className="w-[150px]"
+              />
+              <Button
+                variante="primary"
+                className="px-5 py-2.5"
+                onClick={() =>
+                  crear('/productos', { nombre: nuevoProducto.trim(), tipo: tipoProducto },
+                    'Producto', () => setNuevoProducto(''))
+                }
+              >
+                Agregar producto
+              </Button>
+            </div>
           </div>
         </Card>
 
@@ -429,6 +486,19 @@ export default function TabJerarquia() {
                         <span className="flex-1 min-w-0 truncate text-[13px] font-bold text-sig-text">
                           {p.marca} · {p.presentacion}
                         </span>
+                        {/* El producto solo se enseña en LIQUIDO: en SOLIDO es
+                            siempre detergente en polvo y seria ruido en cada fila.
+                            Vacio = vale para cualquier producto. */}
+                        {(maquina.tipo || '').toUpperCase().startsWith('L') && (
+                          <Select
+                            value={p.producto || ''}
+                            onChange={(e) => cambiarComboProducto(p, e.target.value)}
+                            opciones={productosDeLinea(maquina.tipo)}
+                            vacio="cualquier producto"
+                            aria-label={`Producto de ${p.marca} ${p.presentacion}`}
+                            className="w-[185px]"
+                          />
+                        )}
                         {p.activo ? (
                           <>
                             <Button tamano="sm" onClick={() => cambiarComboActivo(p, false)}>
@@ -459,6 +529,21 @@ export default function TabJerarquia() {
 
                 {/* Alta de combinación para esta máquina */}
                 <div className="flex flex-wrap items-center gap-2.5 border-t border-sig-line px-5 py-3">
+                  {(maquina.tipo || '').toUpperCase().startsWith('L') && (
+                    <Select
+                      value={eleccion.producto || ''}
+                      onChange={(e) =>
+                        setCombo((prev) => ({
+                          ...prev,
+                          [maquina.maquina_id]: { ...eleccion, producto: e.target.value },
+                        }))
+                      }
+                      opciones={productosDeLinea(maquina.tipo)}
+                      vacio="cualquier producto"
+                      aria-label={`Producto para ${maquina.maquina}`}
+                      className="w-[185px]"
+                    />
+                  )}
                   <Select
                     value={eleccion.marca || ''}
                     onChange={(e) =>

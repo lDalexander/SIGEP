@@ -40,6 +40,21 @@ class MaquinaDB(Base):
     tipo = Column(String(20), nullable=False, default="SOLIDO")
     activa = Column(Boolean, default=True)
 
+class ProductoDB(Base):
+    """Catalogo de productos por linea de produccion.
+
+    SOLIDO tiene uno solo (detergente en polvo); LIQUIDO tiene varios y el operario
+    debe elegir cual al abrir turno, porque determina que marcas/presentaciones
+    aplican. Es catalogo en BD y no una lista fija en la app: las tablets se
+    actualizan a mano por sideload, asi que anadir un producto no puede exigir
+    compilar, firmar y reinstalar un APK en toda la planta.
+    """
+    __tablename__ = "productos"
+    id = Column(Integer, primary_key=True, index=True)
+    nombre = Column(String(100), unique=True, nullable=False)
+    tipo = Column(String(20), nullable=False)   # SOLIDO | LIQUIDO
+    activo = Column(Boolean, default=True)
+
 class MaquinaProductoDB(Base):
     """Jerarquía máquina → marca → presentación.
 
@@ -54,10 +69,14 @@ class MaquinaProductoDB(Base):
     """
     __tablename__ = "maquina_productos"
     __table_args__ = (
-        UniqueConstraint("maquina_id", "marca", "presentacion", name="uq_maquina_marca_presentacion"),
+        UniqueConstraint("maquina_id", "producto", "marca", "presentacion", name="uq_maq_prod_marca_pres"),
     )
     id = Column(Integer, primary_key=True, index=True)
     maquina_id = Column(Integer, ForeignKey("maquinas.id"), index=True, nullable=False)
+    # Producto de la linea (ver ProductoDB). NULL = COMODIN: la fila vale para
+    # cualquier producto. Es lo que evita que una jerarquia a medio configurar deje
+    # una maquina sin poder abrir turno; mismo criterio que el fallback de fragancias.
+    producto = Column(String(100), nullable=True)
     marca = Column(String(100), nullable=False)
     presentacion = Column(String(100), nullable=False)
     activo = Column(Boolean, default=True)
@@ -174,6 +193,9 @@ class SesionTrabajoDB(Base):
     __tablename__ = "sesiones_trabajo"
     id = Column(Integer, primary_key=True, index=True)
     tipo = Column(String(50))
+    # Producto con el que se trabajo el turno. En SOLIDO es siempre detergente en
+    # polvo; en LIQUIDO distingue cloro / detergente liquido / quitamanchas / suavizante.
+    producto = Column(String(100), nullable=True)
     maquina = Column(String(100))
     operador = Column(String(150))
     marca = Column(String(100))

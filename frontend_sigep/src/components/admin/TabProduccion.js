@@ -7,7 +7,7 @@ import FiltroRango from './FiltroRango';
 import useApi from '../../lib/useApi';
 import { admin, mensajeDeError, esSuperadmin, puedeEditar } from '../../lib/adminApi';
 
-const CAMPOS = ['maquina', 'operador', 'marca', 'presentacion', 'fragancia'];
+const CAMPOS = ['maquina', 'operador', 'producto', 'marca', 'presentacion', 'fragancia'];
 
 /* La API devuelve «YYYY-MM-DD HH:MM:SS»; `datetime-local` quiere «YYYY-MM-DDTHH:MM».
    Se recorta a minutos a propósito: el control no maneja segundos, y por eso la hora
@@ -70,6 +70,9 @@ export default function TabProduccion() {
   const opcionesDe = {
     maquina: nombresMaquina,
     operador: nombresOperario,
+    /* Los dos tipos de linea: una sesion de solido y otra de liquido se corrigen
+       en la misma pantalla, asi que no se filtra por linea. */
+    producto: (catalogos.datos?.productos || []).map((p) => p.nombre),
     marca: catalogos.datos?.marcas || [],
     presentacion: catalogos.datos?.presentaciones || [],
     fragancia: fragancias,
