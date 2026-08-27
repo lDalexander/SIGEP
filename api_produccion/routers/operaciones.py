@@ -268,6 +268,33 @@ def obtener_historial_sesion(sesion_id: int, db: Session = Depends(get_db)):
         logger.error(f"Error en /api/sesion/historial: {e}")
         raise HTTPException(status_code=500, detail="Error al recuperar historial")
 
+def _producto_del_turno(db: Session, datos) -> str | None:
+    """Producto con el que se abre el turno.
+
+    En LIQUIDO lo elige el operario y llega en la peticion. En SOLIDO el selector
+    ni se muestra (hay un unico producto), asi que se deduce del catalogo: sin esto
+    la columna quedaria vacia solo para los turnos nuevos de solido, mientras el
+    historico si la tiene, y la columna del Excel no serviria para agrupar.
+
+    Se deduce del catalogo y no de una constante para que siga siendo cierto si
+    algun dia la linea solida hace mas de un producto: con dos o mas activos ya no
+    es deducible y se deja en NULL, que es honesto, en vez de adivinar.
+
+    Tambien cubre a las tablets anteriores a la 1.6.0, que no mandan el campo.
+    """
+    elegido = (getattr(datos, "producto", None) or "").strip()
+    if elegido:
+        return elegido
+    if (datos.tipo or "").strip().upper().startswith("L"):
+        return None
+    unicos = (
+        db.query(ProductoDB.nombre)
+        .filter(ProductoDB.activo.is_(True), ProductoDB.tipo == "SOLIDO")
+        .all()
+    )
+    return unicos[0][0] if len(unicos) == 1 else None
+
+
 @router.post("/iniciar_turno")
 def iniciar(datos: IniciarTurno, db: Session = Depends(get_db)):
     # --- Control de Idempotencia ---
@@ -335,9 +362,7 @@ def iniciar(datos: IniciarTurno, db: Session = Depends(get_db)):
     try:
         nueva_sesion = SesionTrabajoDB(
             tipo=datos.tipo,
-            # "" -> None: Gson manda cadena vacia cuando la tablet no eligio
-            # producto (linea SOLIDO), y en la columna queremos NULL, no "".
-            producto=(datos.producto or None),
+            producto=_producto_del_turno(db, datos),
             maquina=datos.maquina,
             operador=datos.operador,
             marca=datos.marca,
