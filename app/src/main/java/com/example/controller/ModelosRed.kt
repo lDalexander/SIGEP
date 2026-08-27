@@ -12,7 +12,11 @@ data class IniciarTurnoRequest(
     val marca: String,
     val presentacion: String,
     val fragancia: String,
-    val request_id: String
+    val request_id: String,
+    // Producto de la línea (CLORO, DETERGENTE LIQUIDO, QUITAMANCHAS, SUAVIZANTE). Solo
+    // aplica a LÍQUIDO: en SÓLIDO hay uno solo y viaja null. El server lo acepta como
+    // opcional, así que una tablet que aún no lo mande sigue abriendo turno igual.
+    val producto: String? = null
 )
 
 data class RegistrarPalletRequest(
@@ -66,6 +70,16 @@ data class MarcaResponse(
     val presentaciones: List<String>
 )
 
+// Una combinación válida de la jerarquía, con el producto incluido. Es la misma
+// información que `marcas` pero PLANA, y es lo que permite filtrar por producto sin
+// red. `producto` vacío = COMODÍN: la fila vale para cualquier producto (jerarquía de
+// líquidos todavía sin clasificar).
+data class CombinacionResponse(
+    val producto: String = "",
+    val marca: String = "",
+    val presentacion: String = ""
+)
+
 // El campo marcas es nulo mientras el backend no devuelva la jerarquía completa.
 // Ver TAREA 1: migración de datos hardcodeados a api/maquinas.
 data class MaquinaResponse(
@@ -74,7 +88,10 @@ data class MaquinaResponse(
     // Tipo de línea: "SOLIDO" | "LIQUIDO". Nullable por compatibilidad con caché viejo
     // o backend que aún no lo envíe → se asume SOLIDO al filtrar (ver CAMBIO 2).
     val tipo: String? = null,
-    val marcas: List<MarcaResponse>? = null
+    val marcas: List<MarcaResponse>? = null,
+    // Nullable a propósito: un servidor anterior al 2026-08-27 no lo manda y la app
+    // debe seguir poblando los selectores con `marcas`, sin filtrar por producto.
+    val combinaciones: List<CombinacionResponse>? = null
 )
 
 data class RespuestaGenerica(

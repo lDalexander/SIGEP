@@ -78,6 +78,13 @@ interface ProduccionApi {
     @GET("api/maquinas")
     suspend fun obtenerMaquinas(): Response<List<MaquinaResponse>>
 
+    // Catálogo de productos de una línea ("SOLIDO" / "LIQUIDO"). En LÍQUIDO el operario
+    // elige uno al iniciar turno y eso filtra marca y presentación; en SÓLIDO hay uno
+    // solo. Vive en la BD para que añadir un producto no obligue a reinstalar el APK en
+    // toda la planta. Si devuelve vacío, la app cae a su fallback en fuente.
+    @GET("api/productos")
+    suspend fun obtenerProductos(@Query("tipo") tipo: String): Response<List<String>>
+
     // Fragancias disponibles para una combinación máquina+marca concretas. El server
     // NUNCA devuelve lista vacía: si la combinación no está configurada devuelve el
     // catálogo completo, para que una configuración incompleta en la web no deje a

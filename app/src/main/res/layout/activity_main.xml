@@ -54,6 +54,13 @@
             android:orientation="vertical">
 
             <Spinner android:id="@+id/spinnerTipo" android:layout_width="match_parent" android:layout_height="50dp" android:layout_marginBottom="8dp"/>
+
+            <!-- PRODUCTO: solo la línea LÍQUIDA (cloro, detergente líquido, quitamanchas,
+                 suavizante). En SÓLIDO hay un único producto, así que el selector se
+                 oculta: un paso que no decide nada solo estorba en planta. Va ANTES de la
+                 máquina porque filtra la marca y la presentación que vienen detrás. -->
+            <Spinner android:id="@+id/spinnerProducto" android:layout_width="match_parent" android:layout_height="50dp" android:layout_marginBottom="8dp" android:visibility="gone"/>
+
             <Spinner android:id="@+id/spinnerMaquina" android:layout_width="match_parent" android:layout_height="50dp" android:layout_marginBottom="8dp"/>
             <Spinner android:id="@+id/spinnerOperador" android:layout_width="match_parent" android:layout_height="50dp" android:layout_marginBottom="8dp"/>
             <Spinner android:id="@+id/spinnerMarca" android:layout_width="match_parent" android:layout_height="50dp" android:layout_marginBottom="8dp"/>

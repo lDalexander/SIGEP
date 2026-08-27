@@ -122,6 +122,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var spinnerMarca: Spinner
     private lateinit var spinnerPresentacion: Spinner
     private lateinit var spinnerFragancia: Spinner
+    // Solo visible en la línea LÍQUIDA (ver el layout y configurarFiltrosEnCascada).
+    private lateinit var spinnerProducto: Spinner
 
     private val NOMBRE_PREFS = "DetcuadorPrefs"
 
@@ -234,6 +236,25 @@ class MainActivity : AppCompatActivity() {
     // Versión del esquema de caché de fragancias, independiente de la jerarquía para
     // poder invalidar una sin tirar la otra. Subirlo descarta las cachés anteriores.
     private val cacheVersionFragancias = 1
+
+    // Productos por línea ("SOLIDO"/"LIQUIDO"), de api/productos. En LÍQUIDO el operario
+    // elige uno y eso filtra marca y presentación; en SÓLIDO hay uno solo y el selector
+    // no se muestra.
+    private var productosPorTipo: Map<String, List<String>> = emptyMap()
+
+    // Jerarquía PLANA por máquina, con el producto incluido (campo `combinaciones` de
+    // api/maquinas). Es lo que permite filtrar por producto sin red. Si no llega —server
+    // viejo o caché anterior— se sigue usando `jerarquiaMaquinas` como hasta ahora.
+    private var combinacionesPorMaquina: Map<String, List<CombinacionResponse>> = emptyMap()
+
+    private val cacheVersionProductos = 1
+
+    // Fallback en fuente, mismo papel que listaMaquinasLocal: una tablet recién
+    // instalada y sin red tiene que poder abrir turno. La lista real vive en la BD.
+    private val productosLocal = mapOf(
+        "SOLIDO"  to listOf("DETERGENTE EN POLVO"),
+        "LIQUIDO" to listOf("CLORO", "DETERGENTE LIQUIDO", "QUITAMANCHAS", "SUAVIZANTE")
+    )
 
     // Fallback local hasta que el backend devuelva la jerarquía en api/maquinas.
     // Eliminar estos mapas cuando el servidor implemente el campo `marcas` en MaquinaResponse.
@@ -595,6 +616,7 @@ class MainActivity : AppCompatActivity() {
         spinnerMarca         = findViewById(R.id.spinnerMarca)
         spinnerPresentacion  = findViewById(R.id.spinnerPresentacion)
         spinnerFragancia     = findViewById(R.id.spinnerFragancia)
+        spinnerProducto      = findViewById(R.id.spinnerProducto)
         etCantidadPacas      = findViewById(R.id.etCantidadPacas)
         btnIniciarTurno      = findViewById(R.id.btnIniciarTurno)
         btnEnviarPallet      = findViewById(R.id.btnEnviarPallet)
@@ -618,19 +640,31 @@ class MainActivity : AppCompatActivity() {
         spinnerTipo.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 if (position > 0) {
-                    // Filtra las máquinas por el tipo de línea elegido (Sólido/Líquido).
-                    val maquinas = maquinasParaTipo(tipos[position])
-                    if (maquinas.size > 1) {
-                        spinnerMaquina.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, maquinas)
-                        spinnerMaquina.isEnabled = true
+                    if (tipos[position].startsWith("L", ignoreCase = true)) {
+                        // LÍQUIDO: el producto va antes de la máquina y manda sobre lo que
+                        // viene detrás, así que hasta elegirlo el resto queda bloqueado.
+                        aplicarProductos(productosParaTipo("LIQUIDO"))
+                        refrescarProductosDesdeServidor("LIQUIDO")
+                        bloquearSpinnersDesdeMaquina()
                     } else {
-                        spinnerMaquina.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, arrayOf("-- Sin máquinas de este tipo --"))
-                        spinnerMaquina.isEnabled = false
+                        // SÓLIDO: un único producto (detergente en polvo), el selector no
+                        // aporta nada y se oculta.
+                        spinnerProducto.visibility = View.GONE
+                        poblarMaquinasParaTipoActual()
                     }
-                    bloquearSpinnersDesdeOperador()
                 } else {
+                    spinnerProducto.visibility = View.GONE
                     bloquearSpinnersDesdeMaquina()
                 }
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+
+        // El producto solo existe en LÍQUIDO: al elegirlo se desbloquea el resto de la
+        // cascada, ya filtrada por él.
+        spinnerProducto.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                if (position > 0) poblarMaquinasParaTipoActual() else bloquearSpinnersDesdeMaquina()
             }
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
@@ -652,12 +686,17 @@ class MainActivity : AppCompatActivity() {
                         arrayOf("-- Seleccione primero la Marca --"))
                     spinnerFragancia.isEnabled = false
 
-                    // Usamos la jerarquía del servidor cuando ya está disponible;
-                    // el fallback local mantiene funcionalidad hasta que el backend la implemente.
-                    val marcas: List<String> = if (jerarquiaMaquinas.containsKey(maquinaSeleccionada)) {
-                        listOf("-- Seleccione Marca --") + jerarquiaMaquinas[maquinaSeleccionada]!!.map { it.nombre }
-                    } else {
-                        (marcasPorMaquinaLocal[maquinaSeleccionada] ?: arrayOf("-- Sin Configurar --")).toList()
+                    // Marcas de esta máquina para el producto elegido. Si el servidor no
+                    // mandó `combinaciones` (o la caché es anterior), se sigue por el
+                    // camino de siempre sin filtrar: nunca se deja el selector vacío.
+                    val marcasFiltradas = marcasPara(maquinaSeleccionada, productoElegido())
+                    val marcas: List<String> = when {
+                        marcasFiltradas != null ->
+                            listOf("-- Seleccione Marca --") + marcasFiltradas
+                        jerarquiaMaquinas.containsKey(maquinaSeleccionada) ->
+                            listOf("-- Seleccione Marca --") + jerarquiaMaquinas[maquinaSeleccionada]!!.map { it.nombre }
+                        else ->
+                            (marcasPorMaquinaLocal[maquinaSeleccionada] ?: arrayOf("-- Sin Configurar --")).toList()
                     }
                     spinnerMarca.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, marcas)
                     spinnerMarca.isEnabled = true
@@ -678,12 +717,18 @@ class MainActivity : AppCompatActivity() {
                     val maquinaActual = spinnerMaquina.selectedItem.toString()
                     val marcaActual   = spinnerMarca.selectedItem.toString()
 
-                    val presentaciones: List<String> = if (jerarquiaMaquinas.containsKey(maquinaActual)) {
-                        val marcaEncontrada = jerarquiaMaquinas[maquinaActual]?.find { it.nombre == marcaActual }
-                        listOf("-- Seleccione Presentación --") + (marcaEncontrada?.presentaciones ?: emptyList())
-                    } else {
-                        val clave = "$maquinaActual|$marcaActual"
-                        (presentacionesPorMaquinaMarcaLocal[clave] ?: arrayOf("-- Sin Configurar --")).toList()
+                    val presFiltradas = presentacionesPara(maquinaActual, marcaActual, productoElegido())
+                    val presentaciones: List<String> = when {
+                        presFiltradas != null ->
+                            listOf("-- Seleccione Presentación --") + presFiltradas
+                        jerarquiaMaquinas.containsKey(maquinaActual) -> {
+                            val marcaEncontrada = jerarquiaMaquinas[maquinaActual]?.find { it.nombre == marcaActual }
+                            listOf("-- Seleccione Presentación --") + (marcaEncontrada?.presentaciones ?: emptyList())
+                        }
+                        else -> {
+                            val clave = "$maquinaActual|$marcaActual"
+                            (presentacionesPorMaquinaMarcaLocal[clave] ?: arrayOf("-- Sin Configurar --")).toList()
+                        }
                     }
                     spinnerPresentacion.adapter = ArrayAdapter(this@MainActivity, R.layout.spinner_item, presentaciones)
                     spinnerPresentacion.isEnabled = true
@@ -706,6 +751,109 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
     }
+
+    // ===== PRODUCTO de la línea (solo LÍQUIDO) =====
+
+    // Pobla el spinner de máquinas para el tipo elegido. Lo llaman dos caminos: SÓLIDO
+    // (directo desde el tipo) y LÍQUIDO (después de elegir el producto).
+    private fun poblarMaquinasParaTipoActual() {
+        val pos = spinnerTipo.selectedItemPosition
+        if (pos <= 0) return
+        val maquinas = maquinasParaTipo(tipos[pos])
+        if (maquinas.size > 1) {
+            spinnerMaquina.adapter = ArrayAdapter(this, R.layout.spinner_item, maquinas)
+            spinnerMaquina.isEnabled = true
+        } else {
+            spinnerMaquina.adapter = ArrayAdapter(this, R.layout.spinner_item, arrayOf("-- Sin máquinas de este tipo --"))
+            spinnerMaquina.isEnabled = false
+        }
+        bloquearSpinnersDesdeOperador()
+    }
+
+    // El producto elegido, o null si no aplica (línea sólida, o líquida sin elegir aún).
+    // null significa "no filtrar", que es justo lo que hace falta en SÓLIDO.
+    private fun productoElegido(): String? =
+        if (spinnerProducto.visibility == View.VISIBLE && spinnerProducto.selectedItemPosition > 0)
+            spinnerProducto.selectedItem?.toString()
+        else null
+
+    // Productos de una línea sin tocar la red: 1) lo descargado/cacheado, 2) el fallback
+    // en fuente. Devuelve solo las opciones reales, sin placeholder.
+    private fun productosParaTipo(tipoCanon: String): List<String> =
+        productosPorTipo[tipoCanon]
+            ?.takeIf { it.isNotEmpty() }
+            ?: productosLocal[tipoCanon].orEmpty()
+
+    // Muestra el selector de producto con el placeholder delante. Nunca lo deja solo con
+    // el placeholder: el guard de INICIAR TURNO exige selección y el turno sería
+    // imposible de abrir (mismo criterio que aplicarFragancias).
+    private fun aplicarProductos(opciones: List<String>) {
+        val lista = opciones.takeIf { it.isNotEmpty() } ?: productosLocal["LIQUIDO"].orEmpty()
+        val items = listOf("-- Seleccione Producto --") + lista
+
+        // No reasignamos el adapter si ya está esta misma lista: hacerlo resetea la
+        // selección y le borraría al operario el producto que ya había elegido.
+        val actual = spinnerProducto.adapter?.let { ad ->
+            (0 until ad.count).map { ad.getItem(it)?.toString() }
+        }
+        if (actual != items) {
+            spinnerProducto.adapter = ArrayAdapter(this, R.layout.spinner_item, items)
+        }
+        spinnerProducto.isEnabled = true
+        spinnerProducto.visibility = View.VISIBLE
+    }
+
+    // Refresco contra el servidor por detrás de la UI: el spinner ya quedó poblado con
+    // caché/fallback antes de entrar aquí, así que esto nunca bloquea a nadie.
+    private fun refrescarProductosDesdeServidor(tipoCanon: String) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val resp  = RetrofitClient.apiService.obtenerProductos(tipoCanon)
+                val lista = resp.body().orEmpty()
+                // Si falla o llega vacío conservamos lo que ya se ve, en vez de degradarlo.
+                if (!resp.isSuccessful || lista.isEmpty()) return@launch
+                withContext(Dispatchers.Main) {
+                    productosPorTipo = productosPorTipo + (tipoCanon to lista)
+                    guardarProductosEnCache()
+                    // El operario puede haber cambiado de línea mientras llegaba esto.
+                    val sigueVigente = spinnerTipo.selectedItemPosition > 0 &&
+                        tipos[spinnerTipo.selectedItemPosition]
+                            .startsWith(if (tipoCanon == "LIQUIDO") "L" else "S", ignoreCase = true)
+                    if (sigueVigente) aplicarProductos(lista)
+                }
+            } catch (e: Exception) {
+                ErrorReporter.report("Productos", "No se pudo actualizar productos — usando caché local", e)
+            }
+        }
+    }
+
+    // Marcas de una máquina filtradas por producto, desde la jerarquía plana.
+    // Devuelve null cuando esa máquina no tiene `combinaciones` (server viejo o caché
+    // anterior) para que el llamador siga por el camino de antes.
+    private fun marcasPara(maquina: String, producto: String?): List<String>? {
+        val combos = combinacionesPorMaquina[maquina]?.takeIf { it.isNotEmpty() } ?: return null
+        return combos
+            .filter { aplicaProducto(it, producto) }
+            .map { it.marca }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .sorted()
+    }
+
+    private fun presentacionesPara(maquina: String, marca: String, producto: String?): List<String>? {
+        val combos = combinacionesPorMaquina[maquina]?.takeIf { it.isNotEmpty() } ?: return null
+        return combos
+            .filter { it.marca == marca && aplicaProducto(it, producto) }
+            .map { it.presentacion }
+            .filter { it.isNotBlank() }
+            .distinct()
+    }
+
+    // Una fila con producto en blanco es COMODÍN: vale para cualquier producto. Es lo
+    // que evita que una jerarquía de líquidos a medio clasificar en /admin deje una
+    // máquina sin poder abrir turno.
+    private fun aplicaProducto(c: CombinacionResponse, producto: String?): Boolean =
+        producto == null || c.producto.isBlank() || c.producto.equals(producto, ignoreCase = true)
 
     // Fragancias a mostrar para una combinación "máquina|marca", sin tocar la red:
     // 1) lo cacheado/descargado para esa combinación, 2) el fallback en fuente.
@@ -798,11 +946,16 @@ class MainActivity : AppCompatActivity() {
             btnIniciarTurno.isEnabled = false
             btnIniciarTurno.text = "Iniciando..."
 
+            // El producto solo se exige cuando el selector está visible (línea líquida).
+            val faltaProducto = spinnerProducto.visibility == View.VISIBLE &&
+                                spinnerProducto.selectedItemPosition == 0
+
             if (spinnerMaquina.selectedItemPosition == 0 ||
                 spinnerOperador.selectedItemPosition == 0 ||
                 spinnerMarca.selectedItemPosition == 0 ||
                 spinnerPresentacion.selectedItemPosition == 0 ||
-                spinnerFragancia.selectedItemPosition == 0) {
+                spinnerFragancia.selectedItemPosition == 0 ||
+                faltaProducto) {
 
                 Toast.makeText(this, "Debe completar todos los campos obligatorios.", Toast.LENGTH_LONG).show()
                 btnIniciarTurno.isEnabled = true
@@ -836,7 +989,8 @@ class MainActivity : AppCompatActivity() {
                         marca        = spinnerMarca.selectedItem.toString(),
                         presentacion = spinnerPresentacion.selectedItem.toString(),
                         fragancia    = spinnerFragancia.selectedItem.toString(),
-                        request_id   = ""   // ColaSyncRepository asigna el UUID real al insertar
+                        request_id   = "",  // ColaSyncRepository asigna el UUID real al insertar
+                        producto     = productoElegido()
                     )
                 )
             }
@@ -1126,11 +1280,30 @@ class MainActivity : AppCompatActivity() {
                     // De paso recogemos el tipo de línea por máquina (default SOLIDO).
                     val jerarquia = mutableMapOf<String, List<MarcaResponse>>()
                     val tiposMap = mutableMapOf<String, String>()
+                    // Jerarquía plana con producto: si el server no la manda queda vacía
+                    // y el filtrado por producto simplemente no se aplica.
+                    val combos = mutableMapOf<String, List<CombinacionResponse>>()
                     respMaqs.body()?.forEach { maquina ->
                         if (!maquina.marcas.isNullOrEmpty()) {
                             jerarquia[maquina.nombre] = maquina.marcas
                         }
+                        if (!maquina.combinaciones.isNullOrEmpty()) {
+                            combos[maquina.nombre] = maquina.combinaciones
+                        }
                         tiposMap[maquina.nombre] = (maquina.tipo ?: "SOLIDO").uppercase()
+                    }
+
+                    // Catálogo de productos de las dos líneas, para tenerlo offline.
+                    val prods = productosPorTipo.toMutableMap()
+                    listOf("SOLIDO", "LIQUIDO").forEach { linea ->
+                        try {
+                            val r = RetrofitClient.apiService.obtenerProductos(linea)
+                            val lista = r.body().orEmpty()
+                            // Una respuesta fallida o vacía NO borra la caché previa.
+                            if (r.isSuccessful && lista.isNotEmpty()) prods[linea] = lista
+                        } catch (e: Exception) {
+                            ErrorReporter.warn("Catalogos", "Sin productos de $linea: ${e.message}")
+                        }
                     }
 
                     withContext(Dispatchers.Main) {
@@ -1139,7 +1312,10 @@ class MainActivity : AppCompatActivity() {
                         tipoPorMaquina          = tiposMap
                         operadoresPorTipo       = opsPorTipo
                         if (jerarquia.isNotEmpty()) jerarquiaMaquinas = jerarquia
+                        if (combos.isNotEmpty()) combinacionesPorMaquina = combos
+                        productosPorTipo = prods
                         guardarCatalogosEnCache(operadores, maquinas, jerarquia, tiposMap, opsPorTipo)
+                        guardarProductosEnCache()
                         // Si ya hay un tipo elegido, refrescamos el spinner de máquina con el filtro vigente.
                         val pos = spinnerTipo.selectedItemPosition
                         if (pos > 0) {
@@ -1474,6 +1650,23 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Caché de productos por línea y de la jerarquía plana con producto. Van juntas
+    // porque se llenan en el mismo momento (al descargar catálogos) y con su propia
+    // versión, para poder invalidarlas sin tirar la de fragancias ni la de la jerarquía.
+    private fun guardarProductosEnCache() {
+        val gson = Gson()
+        getSharedPreferences("SIGEP_CATALOGOS", MODE_PRIVATE).edit().apply {
+            putInt("cache_version_productos", cacheVersionProductos)
+            if (productosPorTipo.isNotEmpty()) {
+                putString("cache_productos", gson.toJson(productosPorTipo))
+            }
+            if (combinacionesPorMaquina.isNotEmpty()) {
+                putString("cache_combinaciones", gson.toJson(combinacionesPorMaquina))
+            }
+            apply()
+        }
+    }
+
     // Caché de fragancias por "máquina|marca". Se guarda aparte del resto del catálogo
     // porque se actualiza en otro momento (al elegir marca, no al descargar catálogos).
     private fun guardarFraganciasEnCache() {
@@ -1530,6 +1723,21 @@ class MainActivity : AppCompatActivity() {
         if (versionCache >= cacheVersionJerarquia && jsonJerarquia != null) {
             val tipoJerarquia = object : TypeToken<Map<String, List<MarcaResponse>>>() {}.type
             jerarquiaMaquinas = gson.fromJson(jsonJerarquia, tipoJerarquia) ?: emptyMap()
+        }
+
+        // Productos por línea y jerarquía plana con producto (2026-08-27). Con caché
+        // anterior quedan vacíos: el selector cae a su fallback en fuente y el filtrado
+        // por producto se desactiva hasta la próxima descarga (retro-compatible).
+        val versionProductos = prefs.getInt("cache_version_productos", 0)
+        if (versionProductos >= cacheVersionProductos) {
+            prefs.getString("cache_productos", null)?.let { json ->
+                val tipoMapa = object : TypeToken<Map<String, List<String>>>() {}.type
+                productosPorTipo = gson.fromJson(json, tipoMapa) ?: emptyMap()
+            }
+            prefs.getString("cache_combinaciones", null)?.let { json ->
+                val tipoCombos = object : TypeToken<Map<String, List<CombinacionResponse>>>() {}.type
+                combinacionesPorMaquina = gson.fromJson(json, tipoCombos) ?: emptyMap()
+            }
         }
 
         // Fragancias por "máquina|marca", con su propio versionado: una caché escrita
