@@ -799,6 +799,17 @@ def crear_maquina_producto(datos: MaquinaProductoIn, db: Session = Depends(get_d
     marca = (datos.marca or "").strip()
     presentacion = (datos.presentacion or "").strip()
     producto = (datos.producto or "").strip() or None
+    # SOLIDO tiene un unico producto y su selector no se muestra en la web, asi que
+    # se deduce del catalogo: si no, las combinaciones nuevas quedarian como comodin
+    # mientras las que ya existen si tienen el producto, y la tabla seria incoherente.
+    if producto is None and not (maquina.tipo or "").upper().startswith("L"):
+        unicos = (
+            db.query(ProductoDB.nombre)
+            .filter(ProductoDB.activo.is_(True), ProductoDB.tipo == "SOLIDO")
+            .all()
+        )
+        if len(unicos) == 1:
+            producto = unicos[0][0]
     if not marca or not presentacion:
         raise HTTPException(status_code=400, detail="Marca y presentación son obligatorias")
     # El duplicado se busca CON el producto, y con IS NULL cuando es comodin: en MySQL

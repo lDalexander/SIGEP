@@ -468,7 +468,9 @@ test('Jerarquía: se puede añadir una combinación marca + presentación', asyn
 
   await waitFor(() =>
     expect(mockAdmin.post).toHaveBeenCalledWith('/maquina_productos', {
-      maquina_id: 1, marca: 'ULTREX', presentacion: '1 KG',
+      /* Máquina 7 es SÓLIDO: su selector de producto no se muestra, asi que la web
+         manda vacio = comodin y el backend lo deduce (DETERGENTE EN POLVO). */
+      maquina_id: 1, producto: '', marca: 'ULTREX', presentacion: '1 KG',
     })
   );
 });

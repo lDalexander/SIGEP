@@ -90,7 +90,8 @@ def _aplicar_horas(query, columna, hora_desde, hora_hasta):
     return query.filter(cond) if cond is not None else query
 
 
-def _aplicar_filtros(query, maquina=None, operador=None, marca=None, presentacion=None, fragancia=None):
+def _aplicar_filtros(query, maquina=None, operador=None, marca=None, presentacion=None,
+                     fragancia=None, producto=None):
     """Aplica los segmentadores (multi-selección) sobre columnas de SesionTrabajoDB.
 
     Cada parámetro es una lista de valores; si viene vacío/None esa dimensión no filtra.
@@ -105,6 +106,8 @@ def _aplicar_filtros(query, maquina=None, operador=None, marca=None, presentacio
         query = query.filter(SesionTrabajoDB.presentacion.in_(presentacion))
     if fragancia:
         query = query.filter(SesionTrabajoDB.fragancia.in_(fragancia))
+    if producto:
+        query = query.filter(SesionTrabajoDB.producto.in_(producto))
     return query
 
 
@@ -114,6 +117,9 @@ _FiltroOperador = Query(None)
 _FiltroMarca = Query(None)
 _FiltroPresentacion = Query(None)
 _FiltroFragancia = Query(None)
+# Sexta dimension (2026-08-27). Va aparte y no dentro de `marca` porque en la linea
+# liquida un mismo (marca, presentacion) puede ser cloro o suavizante.
+_FiltroProducto = Query(None)
 
 # Franja horaria del día, opcional y compartida por todos los endpoints del dashboard.
 # Sin estos parámetros la respuesta es idéntica a la de antes de existir el filtro, así
@@ -126,7 +132,8 @@ def obtener_kpis(desde: str = Query(None), hasta: str = Query(None),
                  hora_desde: str = _FiltroHoraDesde, hora_hasta: str = _FiltroHoraHasta,
                  maquina: List[str] = _FiltroMaquina, operador: List[str] = _FiltroOperador,
                  marca: List[str] = _FiltroMarca, presentacion: List[str] = _FiltroPresentacion,
-                 fragancia: List[str] = _FiltroFragancia, db: Session = Depends(get_db)):
+                 fragancia: List[str] = _FiltroFragancia,
+                 producto: List[str] = _FiltroProducto, db: Session = Depends(get_db)):
     """KPIs (pacas/sacos/turnos activos) del rango seleccionado (default: hoy).
 
     `hora_desde`/`hora_hasta` (opcionales, "HH:MM") recortan además a una franja del
@@ -145,7 +152,7 @@ def obtener_kpis(desde: str = Query(None), hasta: str = Query(None),
             .outerjoin(SesionTrabajoDB, SesionTrabajoDB.id == PalletDB.session_id)
             .filter(PalletDB.fecha_hora >= inicio, PalletDB.fecha_hora < fin)
         )
-        q = _aplicar_filtros(q, maquina, operador, marca, presentacion, fragancia)
+        q = _aplicar_filtros(q, maquina, operador, marca, presentacion, fragancia, producto)
         q = _aplicar_horas(q, PalletDB.fecha_hora, hora_desde, hora_hasta)
         fila = q.first()
         pacas_hoy = int(fila.pacas or 0) if fila else 0
@@ -155,7 +162,7 @@ def obtener_kpis(desde: str = Query(None), hasta: str = Query(None),
             .filter(SesionTrabajoDB.fin_turno.is_(None),
                     SesionTrabajoDB.inicio_turno >= inicio, SesionTrabajoDB.inicio_turno < fin)
         )
-        q_turnos = _aplicar_filtros(q_turnos, maquina, operador, marca, presentacion, fragancia)
+        q_turnos = _aplicar_filtros(q_turnos, maquina, operador, marca, presentacion, fragancia, producto)
         q_turnos = _aplicar_horas(q_turnos, SesionTrabajoDB.inicio_turno, hora_desde, hora_hasta)
         turnos_activos = q_turnos.scalar()
         return {
@@ -198,7 +205,8 @@ def obtener_produccion_hora(desde: str = Query(None), hasta: str = Query(None),
                             hora_desde: str = _FiltroHoraDesde, hora_hasta: str = _FiltroHoraHasta,
                             maquina: List[str] = _FiltroMaquina, operador: List[str] = _FiltroOperador,
                             marca: List[str] = _FiltroMarca, presentacion: List[str] = _FiltroPresentacion,
-                            fragancia: List[str] = _FiltroFragancia, db: Session = Depends(get_db)):
+                            fragancia: List[str] = _FiltroFragancia,
+                            producto: List[str] = _FiltroProducto, db: Session = Depends(get_db)):
     """Producción para la gráfica, con DETALLE por punto para el tooltip.
 
     Cada punto trae `detalle`: lista de {maquina, operario, producto, pacas} de lo
@@ -224,6 +232,7 @@ def obtener_produccion_hora(desde: str = Query(None), hasta: str = Query(None),
                 hora_col.label("hora"),
                 SesionTrabajoDB.maquina.label("maquina"),
                 SesionTrabajoDB.operador.label("operador"),
+                SesionTrabajoDB.producto.label("producto"),
                 SesionTrabajoDB.marca.label("marca"),
                 SesionTrabajoDB.presentacion.label("presentacion"),
                 SesionTrabajoDB.fragancia.label("fragancia"),
@@ -232,11 +241,12 @@ def obtener_produccion_hora(desde: str = Query(None), hasta: str = Query(None),
             .outerjoin(SesionTrabajoDB, SesionTrabajoDB.id == PalletDB.session_id)
             .filter(PalletDB.fecha_hora >= inicio, PalletDB.fecha_hora < fin)
         )
-        q = _aplicar_filtros(q, maquina, operador, marca, presentacion, fragancia)
+        q = _aplicar_filtros(q, maquina, operador, marca, presentacion, fragancia, producto)
         q = _aplicar_horas(q, PalletDB.fecha_hora, hora_desde, hora_hasta)
         filas = (
             q.group_by(hora_col, SesionTrabajoDB.maquina, SesionTrabajoDB.operador,
-                       SesionTrabajoDB.marca, SesionTrabajoDB.presentacion, SesionTrabajoDB.fragancia)
+                       SesionTrabajoDB.producto, SesionTrabajoDB.marca,
+                       SesionTrabajoDB.presentacion, SesionTrabajoDB.fragancia)
              .order_by(hora_col)
              .all()
         )
@@ -246,7 +256,11 @@ def obtener_produccion_hora(desde: str = Query(None), hasta: str = Query(None),
             bucket = por_hora.setdefault(hk, {"pallets": 0, "detalle": []})
             pacas = int(r.pacas or 0)
             bucket["pallets"] += pacas
-            producto = " · ".join([x for x in [r.marca, r.presentacion, r.fragancia] if x]) or "—"
+            # Con el producto delante (2026-08-27): sin el, cloro y suavizante de la
+            # misma marca y gramaje se leen como la misma linea de detalle.
+            producto = " · ".join(
+                [x for x in [r.producto, r.marca, r.presentacion, r.fragancia] if x]
+            ) or "—"
             bucket["detalle"].append({
                 "maquina": r.maquina or "—",
                 "operario": r.operador or "—",
@@ -269,7 +283,8 @@ def obtener_estado_operativo(desde: str = Query(None), hasta: str = Query(None),
                              hora_desde: str = _FiltroHoraDesde, hora_hasta: str = _FiltroHoraHasta,
                              maquina: List[str] = _FiltroMaquina, operador: List[str] = _FiltroOperador,
                              marca: List[str] = _FiltroMarca, presentacion: List[str] = _FiltroPresentacion,
-                             fragancia: List[str] = _FiltroFragancia, db: Session = Depends(get_db)):
+                             fragancia: List[str] = _FiltroFragancia,
+                             producto: List[str] = _FiltroProducto, db: Session = Depends(get_db)):
     """Estado de las máquinas y turnos del rango seleccionado (default: hoy).
 
     `hora_desde`/`hora_hasta` (opcionales, "HH:MM") filtran por la HORA DE INICIO del
@@ -281,7 +296,7 @@ def obtener_estado_operativo(desde: str = Query(None), hasta: str = Query(None),
         q = db.query(SesionTrabajoDB).filter(
             SesionTrabajoDB.inicio_turno >= inicio, SesionTrabajoDB.inicio_turno < fin
         )
-        q = _aplicar_filtros(q, maquina, operador, marca, presentacion, fragancia)
+        q = _aplicar_filtros(q, maquina, operador, marca, presentacion, fragancia, producto)
         q = _aplicar_horas(q, SesionTrabajoDB.inicio_turno, hora_desde, hora_hasta)
         sesiones = q.order_by(SesionTrabajoDB.inicio_turno.desc()).all()
 
@@ -341,6 +356,9 @@ def obtener_estado_operativo(desde: str = Query(None), hasta: str = Query(None),
         for s in sesiones:
             pallets_sesion = db.query(func.coalesce(func.sum(PalletDB.cantidad_pacas), 0)).filter(PalletDB.session_id == s.id).scalar()
             producto = f"{s.marca or ''} - {s.fragancia or ''} - {s.presentacion or ''}".strip(" -")
+            # El producto real va delante: es lo que identifica el turno en liquidos.
+            if s.producto:
+                producto = f"{s.producto} · {producto}" if producto else s.producto
             
             if s.fin_turno:
                 estado = "Finalizado"
@@ -376,7 +394,8 @@ def obtener_top_produccion(desde: str = Query(None), hasta: str = Query(None),
                            hora_desde: str = _FiltroHoraDesde, hora_hasta: str = _FiltroHoraHasta,
                            maquina: List[str] = _FiltroMaquina, operador: List[str] = _FiltroOperador,
                            marca: List[str] = _FiltroMarca, presentacion: List[str] = _FiltroPresentacion,
-                           fragancia: List[str] = _FiltroFragancia, db: Session = Depends(get_db)):
+                           fragancia: List[str] = _FiltroFragancia,
+                           producto: List[str] = _FiltroProducto, db: Session = Depends(get_db)):
     """Ranking de marcas más producidas en el rango seleccionado (default: hoy).
 
     `hora_desde`/`hora_hasta` (opcionales, "HH:MM") recortan por la hora del pallet."""
@@ -387,7 +406,7 @@ def obtener_top_produccion(desde: str = Query(None), hasta: str = Query(None),
             .join(PalletDB, PalletDB.session_id == SesionTrabajoDB.id)
             .filter(PalletDB.fecha_hora >= inicio, PalletDB.fecha_hora < fin)
         )
-        q = _aplicar_filtros(q, maquina, operador, marca, presentacion, fragancia)
+        q = _aplicar_filtros(q, maquina, operador, marca, presentacion, fragancia, producto)
         q = _aplicar_horas(q, PalletDB.fecha_hora, hora_desde, hora_hasta)
         resultados = (
             q.group_by(SesionTrabajoDB.marca)
@@ -406,6 +425,7 @@ def obtener_opciones_filtros(desde: str = Query(None), hasta: str = Query(None),
                              maquina: List[str] = _FiltroMaquina, operador: List[str] = _FiltroOperador,
                              marca: List[str] = _FiltroMarca, presentacion: List[str] = _FiltroPresentacion,
                              fragancia: List[str] = _FiltroFragancia,
+                             producto: List[str] = _FiltroProducto,
                              db: Session = Depends(get_db)):
     """Valores distintos disponibles por dimensión, para llenar los segmentadores.
 
@@ -437,7 +457,8 @@ def obtener_opciones_filtros(desde: str = Query(None), hasta: str = Query(None),
         base = _aplicar_horas(base, SesionTrabajoDB.inicio_turno, hora_desde, hora_hasta)
 
         seleccion = {"maquina": maquina, "operador": operador, "marca": marca,
-                     "presentacion": presentacion, "fragancia": fragancia}
+                     "presentacion": presentacion, "fragancia": fragancia,
+                     "producto": producto}
 
         def distintos(clave, col):
             otros = {k: v for k, v in seleccion.items() if k != clave}
@@ -451,6 +472,7 @@ def obtener_opciones_filtros(desde: str = Query(None), hasta: str = Query(None),
             "marca": distintos("marca", SesionTrabajoDB.marca),
             "presentacion": distintos("presentacion", SesionTrabajoDB.presentacion),
             "fragancia": distintos("fragancia", SesionTrabajoDB.fragancia),
+            "producto": distintos("producto", SesionTrabajoDB.producto),
         }
     except Exception as e:
         logger.error(f"Error en /dashboard/opciones_filtros: {e}")
@@ -463,10 +485,12 @@ def obtener_estadisticas(dim: str = "maquina", rango: str = "semana",
                          maquina: List[str] = _FiltroMaquina, operador: List[str] = _FiltroOperador,
                          marca: List[str] = _FiltroMarca, presentacion: List[str] = _FiltroPresentacion,
                          fragancia: List[str] = _FiltroFragancia,
+                         producto: List[str] = _FiltroProducto,
                          db: Session = Depends(get_db)):
     """Estadisticas de produccion agregadas por dimension y rango temporal.
 
-    dim   : "maquina" | "operario" | "marca_presentacion" | "marca_presentacion_fragancia"
+    dim   : "maquina" | "operario" | "producto" | "marca_presentacion"
+            | "marca_presentacion_fragancia"
     Rango: si se envían desde/hasta (YYYY-MM-DD) se usan esas fechas (lo que permite
     que el dashboard comparta el mismo rango global); si no, se usa el preset `rango`
     ("hoy" | "semana" | "mes" | "todo").
@@ -503,6 +527,9 @@ def obtener_estadisticas(dim: str = "maquina", rango: str = "semana",
 
         if dim == "operario":
             etiqueta = SesionTrabajoDB.operador
+        elif dim == "producto":
+            # Agrupacion propia (2026-08-27): "cuanto se produjo de cada producto".
+            etiqueta = func.coalesce(SesionTrabajoDB.producto, "Sin producto")
         elif dim == "marca_presentacion":
             etiqueta = func.concat(
                 func.coalesce(SesionTrabajoDB.marca, "Sin marca"),
@@ -536,7 +563,7 @@ def obtener_estadisticas(dim: str = "maquina", rango: str = "semana",
         if hasta_dt is not None:
             q = q.filter(SesionTrabajoDB.inicio_turno < hasta_dt)
         q = _aplicar_horas(q, PalletDB.fecha_hora, hora_desde, hora_hasta)
-        q = _aplicar_filtros(q, maquina, operador, marca, presentacion, fragancia)
+        q = _aplicar_filtros(q, maquina, operador, marca, presentacion, fragancia, producto)
         filas = q.group_by(etiqueta).order_by(suma.desc()).all()
 
         items = []
@@ -672,6 +699,7 @@ def obtener_paros(desde: str = Query(None), hasta: str = Query(None),
             categoria, comentario = _desglosar_motivo(p.motivo)
             nombre_maq = (s.maquina if s is not None else None) or "—"
             producto = " · ".join([x for x in [
+                s.producto if s is not None else None,
                 s.marca if s is not None else None,
                 s.presentacion if s is not None else None,
                 s.fragancia if s is not None else None,

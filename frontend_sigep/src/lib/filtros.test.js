@@ -3,12 +3,12 @@ import {
   resumenFiltros, dimAutomatica,
 } from './filtros';
 
-/* Estas cinco claves son a la vez el query-param del backend y la clave que devuelve
+/* Estas seis claves son a la vez el query-param del backend y la clave que devuelve
    /dashboard/opciones_filtros. Si alguna se renombra, el filtro deja de aplicarse en
    silencio: la API ignora los parámetros que no conoce. */
 test('las dimensiones son exactamente las que acepta el backend', () => {
   expect(DIMENSIONES.map((d) => d.key))
-    .toEqual(['maquina', 'operador', 'marca', 'presentacion', 'fragancia']);
+    .toEqual(['maquina', 'operador', 'producto', 'marca', 'presentacion', 'fragancia']);
 });
 
 test('sin selección no se envía ningún parámetro de filtro', () => {
@@ -24,6 +24,16 @@ test('una dimensión vacía no viaja, aunque otras estén seleccionadas', () => 
 
 test('contarFiltros suma los valores de todas las dimensiones', () => {
   expect(contarFiltros({ ...SIN_FILTROS, maquina: ['A', 'B'], operador: ['X'] })).toBe(3);
+  expect(contarFiltros({ ...SIN_FILTROS, producto: ['CLORO', 'SUAVIZANTE'] })).toBe(2);
+});
+
+/* El producto es la dimension nueva (2026-08-27): si no viajara como query-param, la
+   web mostraria datos sin segmentar como si lo estuvieran. */
+test('el producto viaja como cualquier otra dimension', () => {
+  const params = paramsDeFiltros({ ...SIN_FILTROS, producto: ['CLORO', 'SUAVIZANTE'] });
+  expect(params).toEqual({ producto: ['CLORO', 'SUAVIZANTE'] });
+  expect(new URLSearchParams(serializarParams(params)).getAll('producto'))
+    .toEqual(['CLORO', 'SUAVIZANTE']);
 });
 
 /* El punto crítico: FastAPI lee `List[str]` de claves repetidas. Con la forma que usa
@@ -59,6 +69,8 @@ test('la agrupación automática responde a lo que se ha segmentado', () => {
   // Marca, presentación y fragancia no cambian la agrupación: siguen siendo máquinas.
   expect(dimAutomatica({ ...SIN_FILTROS, marca: ['ULTREX'] })).toBe('maquina');
   expect(dimAutomatica({ ...SIN_FILTROS, fragancia: ['Floral'] })).toBe('maquina');
+  /* Acotar un producto no debe agrupar por producto: daria una sola barra. */
+  expect(dimAutomatica({ ...SIN_FILTROS, producto: ['CLORO'] })).toBe('maquina');
   // Con máquina y operario manda el operario: lo que queda es el producto.
   expect(dimAutomatica({ ...SIN_FILTROS, maquina: ['Máquina 7'], operador: ['A'] }))
     .toBe('marca_presentacion');

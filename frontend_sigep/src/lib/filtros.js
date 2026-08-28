@@ -1,7 +1,7 @@
 /**
  * Segmentación multi-selección del dashboard.
  *
- * Las cinco dimensiones son las columnas de `sesiones` que el backend acepta como
+ * Las seis dimensiones son las columnas de `sesiones` que el backend acepta como
  * filtro repetible (`?maquina=A&maquina=B`) en `kpis`, `produccion_hora`,
  * `estado_operativo` y `top_produccion`. Las claves de este archivo son a la vez el
  * nombre del query-param y la clave que devuelve `/dashboard/opciones_filtros`: son
@@ -11,6 +11,10 @@
 export const DIMENSIONES = [
   { key: 'maquina',      label: 'Máquina' },
   { key: 'operador',     label: 'Operario' },
+  /* Producto (2026-08-27): va antes de la marca porque manda sobre ella. En SÓLIDO
+     hay uno solo (DETERGENTE EN POLVO) y el menú tendrá una única opción; en
+     LÍQUIDO es lo que distingue cloro de suavizante con la misma marca y gramaje. */
+  { key: 'producto',     label: 'Producto' },
   { key: 'marca',        label: 'Marca' },
   { key: 'presentacion', label: 'Presentación' },
   { key: 'fragancia',    label: 'Fragancia' },
@@ -84,6 +88,9 @@ export function serializarParams(params) {
 export function dimAutomatica(filtros) {
   if (filtros?.operador?.length > 0) return 'marca_presentacion';
   if (filtros?.maquina?.length > 0) return 'operario';
+  /* Con un producto acotado lo que falta saber es en qué máquinas se hizo, no
+     desglosarlo por sí mismo: agrupar por «producto» daría una sola barra. */
+  if (filtros?.producto?.length > 0) return 'maquina';
   return 'maquina';
 }
 

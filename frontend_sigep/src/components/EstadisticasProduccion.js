@@ -9,6 +9,7 @@ import { dimAutomatica, paramsDeFiltros, serializarParams } from '../lib/filtros
 const RESUMEN_DIM = {
   maquina: 'por máquina',
   operario: 'por operario',
+  producto: 'por producto',
   marca_presentacion: 'por marca y presentación',
   marca_presentacion_fragancia: 'por marca, presentación y fragancia',
 };
