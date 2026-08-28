@@ -23,6 +23,13 @@ def obtener_estado_planta(db: Session = Depends(get_db)):
             producto_base = " ".join(producto_partes)
             
             producto = f"{producto_base} ({sesion.fragancia})" if sesion.fragancia else producto_base
+            # El producto real va DELANTE (2026-08-27): en la linea liquida, cloro y
+            # suavizante pueden compartir marca y gramaje, y sin esto el supervisor no
+            # puede distinguir que esta corriendo la maquina. Se antepone en vez de
+            # sustituir porque el campo es contrato congelado con la app y la marca y
+            # la presentacion siguen haciendo falta.
+            if sesion.producto:
+                producto = f"{sesion.producto} · {producto}" if producto.strip() else sesion.producto
             if not producto.strip():
                 producto = "Desconocido"
             

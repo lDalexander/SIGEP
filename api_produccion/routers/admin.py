@@ -1657,7 +1657,11 @@ def listar_sesiones_activas(db: Session = Depends(get_db), ctx=Depends(require_p
 
     out = []
     for s in sesiones:
-        producto = " · ".join([x for x in [s.marca, s.presentacion, s.fragancia] if x]) or "—"
+        # Con el producto delante: es lo que identifica el turno en la linea liquida
+        # (misma marca y gramaje para productos distintos).
+        producto = " · ".join(
+            [x for x in [s.producto, s.marca, s.presentacion, s.fragancia] if x]
+        ) or "—"
         out.append({
             "sesion_id": s.id,
             "maquina": s.maquina,
