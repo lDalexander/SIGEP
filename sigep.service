@@ -8,10 +8,10 @@ Wants=mysql.service
 Type=exec
 User=john
 Group=john
-WorkingDirectory=/home/john/Proyectos/App_Llenadora/api_produccion
-Environment="PATH=/home/john/Proyectos/App_Llenadora/api_produccion/venv/bin:/usr/local/bin:/usr/bin"
-EnvironmentFile=-/home/john/Proyectos/App_Llenadora/api_produccion/.env
-ExecStart=/home/john/Proyectos/App_Llenadora/api_produccion/venv/bin/gunicorn main:app -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+WorkingDirectory=/home/john/workspace/apps/sigep/api_produccion
+Environment="PATH=/home/john/workspace/apps/sigep/api_produccion/venv/bin:/usr/local/bin:/usr/bin"
+EnvironmentFile=-/home/john/workspace/apps/sigep/api_produccion/.env
+ExecStart=/home/john/workspace/apps/sigep/api_produccion/venv/bin/gunicorn main:app -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
 Restart=always
 RestartSec=5
 StandardOutput=journal

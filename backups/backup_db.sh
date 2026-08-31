@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Respaldo diario de la BD produccion_detg + fotos de evidencia. Retiene 14 días.
 set -uo pipefail
-BK="/home/john/Proyectos/App_Llenadora/backups"
+BK="/home/john/workspace/apps/sigep/backups"
 CNF="$BK/.dbcreds.cnf"
-FOTOS="/home/john/Proyectos/App_Llenadora/api_produccion/static/entregas"
+FOTOS="/home/john/workspace/apps/sigep/api_produccion/static/entregas"
 RET=14
 TS="$(date +%Y%m%d_%H%M%S)"
 LOG="$BK/backup.log"
