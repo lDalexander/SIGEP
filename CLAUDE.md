@@ -13,7 +13,9 @@ industriales con sincronización offline-first.
 ## 0. Estado actual
 
 **Las combinaciones de la Jerarquía se agrupan por producto** (2026-08-31). Solo
-frontend; **escrito y validado, sin desplegar**. Tag previo: `v1.18-pre-jerarquia-producto`.
+frontend, y **ya está en producción** (`main.5303e47c.js`; el backend no se tocó, worker
+`3976349` sin recargar). Tag previo: `v1.18-pre-jerarquia-producto`; respaldo del build
+anterior: `~/respaldos_build_sigep/build_2026-08-31_141538`.
 
 La línea líquida rompió un supuesto que la pantalla daba por bueno: que una máquina hace
 **un solo producto**. La Máquina 3 llena SUAVIZANTE y DETERGENTE LIQUIDO, y los dos
@@ -393,6 +395,7 @@ heartbeat, sin errores en el log del servicio.
 | Tag previo al estándar de velocidad | `v1.16-pre-estandar-velocidad` (en GitHub) |
 | Tag previo al visor de fotos de paro | `v1.17-pre-visor-fotos-paro` (en GitHub) |
 | Tag previo a agrupar la jerarquía por producto | `v1.18-pre-jerarquia-producto` (en GitHub) |
+| Build previo a agrupar por producto | `~/respaldos_build_sigep/build_2026-08-31_141538` |
 | Build previo al estándar de velocidad | `~/respaldos_build_sigep/build_2026-08-21_152227` |
 | Build previo a la contingencia de paros | `~/respaldos_build_sigep/build_2026-08-19_165958` |
 | BD previa al `ALTER` de reportes | `backups/produccion_detg_pre_reportes_atendido_20260807_124057.sql.gz` |
