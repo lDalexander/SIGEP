@@ -33,6 +33,50 @@ function tipoContrario(tipo) {
   return String(tipo || '').toUpperCase() === 'LIQUIDO' ? 'Sólido' : 'Líquido';
 }
 
+/** Un producto vacío es comodín —vale para cualquiera—, no un hueco sin rellenar. */
+const SIN_PRODUCTO = 'Sin producto · vale para cualquiera';
+
+/**
+ * Nombra una combinación entera, con su producto delante.
+ *
+ * Hace falta porque la misma marca y presentación puede existir DOS veces en la misma
+ * máquina con productos distintos: la Máquina 3 tiene COMISARIATO · 2.9 LT como
+ * SUAVIZANTE y como DETERGENTE LIQUIDO. Sin el producto, «¿Eliminar COMISARIATO ·
+ * 2.9 LT?» no dice cuál de las dos se está borrando.
+ */
+function etiquetaCombo(p) {
+  return p.producto
+    ? `${p.producto} · ${p.marca} · ${p.presentacion}`
+    : `${p.marca} · ${p.presentacion}`;
+}
+
+/**
+ * Agrupa las combinaciones de una máquina por producto, con el comodín al final.
+ *
+ * La lista plana miente en cuanto una máquina hace dos productos: las filas repetidas
+ * de marca + presentación se leían como duplicados y el producto quedaba escondido en
+ * un desplegable al otro extremo de la fila. El producto es justo lo que las distingue,
+ * así que es él quien manda la estructura.
+ *
+ * El grupo sin producto va el último a propósito: es lo que falta por clasificar, no
+ * una categoría más.
+ */
+function agruparPorProducto(filas) {
+  const grupos = new Map();
+  filas.forEach((f) => {
+    const clave = f.producto || '';
+    if (!grupos.has(clave)) grupos.set(clave, []);
+    grupos.get(clave).push(f);
+  });
+  return [...grupos.entries()]
+    .map(([producto, items]) => ({ producto, items }))
+    .sort((a, b) => {
+      if (!a.producto) return 1;
+      if (!b.producto) return -1;
+      return a.producto.localeCompare(b.producto, 'es');
+    });
+}
+
 /**
  * Pestaña «Jerarquía» — qué produce cada máquina: marca + presentación, y las
  * fragancias que hace de cada marca.
@@ -174,7 +218,7 @@ export default function TabJerarquia() {
     if (confirmar && !window.confirm(confirmar)) return;
     try {
       await admin.put(`/maquina_productos/${producto.id}`, { activo });
-      ok(`${producto.marca} · ${producto.presentacion} ${activo ? 'reactivada' : 'desactivada'}`);
+      ok(`${etiquetaCombo(producto)} ${activo ? 'reactivada' : 'desactivada'}`);
       matriz.recargar();
     } catch (err) {
       fallo(mensajeDeError(err));
@@ -187,8 +231,8 @@ export default function TabJerarquia() {
       await admin.put(`/maquina_productos/${fila.id}`, { producto });
       ok(
         producto
-          ? `${fila.marca} · ${fila.presentacion} → ${producto}`
-          : `${fila.marca} · ${fila.presentacion} vale para cualquier producto`
+          ? `${etiquetaCombo(fila)} → ${producto}`
+          : `${etiquetaCombo(fila)} vale para cualquier producto`
       );
       matriz.recargar();
     } catch (err) {
@@ -455,6 +499,65 @@ export default function TabJerarquia() {
         ) : (
           maquinas.map((maquina) => {
             const eleccion = combo[maquina.maquina_id] || {};
+            const grupos = agruparPorProducto(maquina.productos);
+            /* Con un solo producto la cabecera no distinguiría nada, y sería ruido en
+               cada máquina SÓLIDO: todas hacen DETERGENTE EN POLVO y nada más. */
+            const agrupar = grupos.length > 1;
+
+            /* Una fila por combinación: es la unidad que se activa, se borra y se
+               reasigna, así que sobrevive igual dentro de un grupo que suelta. */
+            const filaCombo = (p) => (
+              <li
+                key={p.id}
+                /* La fila se nombra entera, con su producto: en pantalla lo dice la
+                   cabecera del grupo, pero quien la escucha oye la fila suelta y dos
+                   de la misma marca y presentación sonarían idénticas. */
+                aria-label={etiquetaCombo(p)}
+                className={`flex items-center gap-3 py-3 pr-5 ${agrupar ? 'pl-9' : 'pl-5'}`}
+              >
+                <Dot tono={p.activo ? 'ok' : 'off'} />
+                <span className="flex-1 min-w-0 truncate text-[13px] font-bold text-sig-text">
+                  {p.marca} · {p.presentacion}
+                </span>
+                {/* El producto solo se enseña en LIQUIDO: en SOLIDO es siempre
+                    detergente en polvo y seria ruido en cada fila.
+                    Vacio = vale para cualquier producto. */}
+                {(maquina.tipo || '').toUpperCase().startsWith('L') && (
+                  <Select
+                    value={p.producto || ''}
+                    onChange={(e) => cambiarComboProducto(p, e.target.value)}
+                    opciones={productosDeLinea(maquina.tipo)}
+                    vacio="cualquier producto"
+                    aria-label={`Producto de ${etiquetaCombo(p)}`}
+                    className="w-[185px]"
+                  />
+                )}
+                {p.activo ? (
+                  <>
+                    <Button tamano="sm" onClick={() => cambiarComboActivo(p, false)}>
+                      Desactivar
+                    </Button>
+                    <Button
+                      tamano="sm"
+                      onClick={() =>
+                        cambiarComboActivo(
+                          p,
+                          false,
+                          `¿Eliminar ${etiquetaCombo(p)} de ${maquina.maquina}?\n\nSe da de baja para las tablets, pero se conserva el histórico.`
+                        )
+                      }
+                    >
+                      Eliminar
+                    </Button>
+                  </>
+                ) : (
+                  <Button tamano="sm" onClick={() => cambiarComboActivo(p, true)}>
+                    Reactivar
+                  </Button>
+                )}
+              </li>
+            );
+
             return (
               <Card
                 key={maquina.maquina_id}
@@ -466,6 +569,7 @@ export default function TabJerarquia() {
                   <Badge tono="gray">{tipoBonito(maquina.tipo)}</Badge>
                   <Label caja="normal" className="flex-1">
                     {plural(maquina.productos.length, 'combinación', 'combinaciones')}
+                    {agrupar && ` · ${plural(grupos.length, 'producto', 'productos')}`}
                   </Label>
                   <Button tamano="sm" onClick={() => alternarTipo(maquina)}>
                     → {tipoContrario(maquina.tipo)}
@@ -478,54 +582,37 @@ export default function TabJerarquia() {
                   </Button>
                 </header>
 
-                {maquina.productos.length > 0 && (
-                  <ul className="divide-y divide-sig-line border-t border-sig-line">
-                    {maquina.productos.map((p) => (
-                      <li key={p.id} className="flex items-center gap-3 px-5 py-3">
-                        <Dot tono={p.activo ? 'ok' : 'off'} />
-                        <span className="flex-1 min-w-0 truncate text-[13px] font-bold text-sig-text">
-                          {p.marca} · {p.presentacion}
-                        </span>
-                        {/* El producto solo se enseña en LIQUIDO: en SOLIDO es
-                            siempre detergente en polvo y seria ruido en cada fila.
-                            Vacio = vale para cualquier producto. */}
-                        {(maquina.tipo || '').toUpperCase().startsWith('L') && (
-                          <Select
-                            value={p.producto || ''}
-                            onChange={(e) => cambiarComboProducto(p, e.target.value)}
-                            opciones={productosDeLinea(maquina.tipo)}
-                            vacio="cualquier producto"
-                            aria-label={`Producto de ${p.marca} ${p.presentacion}`}
-                            className="w-[185px]"
-                          />
-                        )}
-                        {p.activo ? (
-                          <>
-                            <Button tamano="sm" onClick={() => cambiarComboActivo(p, false)}>
-                              Desactivar
-                            </Button>
-                            <Button
-                              tamano="sm"
-                              onClick={() =>
-                                cambiarComboActivo(
-                                  p,
-                                  false,
-                                  `¿Eliminar ${p.marca} · ${p.presentacion} de ${maquina.maquina}?\n\nSe da de baja para las tablets, pero se conserva el histórico.`
-                                )
-                              }
+                {maquina.productos.length > 0 &&
+                  (agrupar ? (
+                    <div className="divide-y divide-sig-line border-t border-sig-line">
+                      {/* El prefijo hace única la clave del grupo comodín: ningún
+                          producto real es cadena vacía. */}
+                      {grupos.map((g) => (
+                        <section key={`p:${g.producto}`}>
+                          <header className="flex items-center gap-3 border-b border-sig-line
+                                             bg-white/[0.02] px-5 py-2">
+                            {/* Encabezado de verdad y no un span: es lo que separa
+                                un producto de otro, y un lector de pantalla debe
+                                poder saltar de grupo en grupo. */}
+                            <Label
+                              as="h3"
+                              className={g.producto ? 'text-sig-text' : 'text-sig-dim'}
                             >
-                              Eliminar
-                            </Button>
-                          </>
-                        ) : (
-                          <Button tamano="sm" onClick={() => cambiarComboActivo(p, true)}>
-                            Reactivar
-                          </Button>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                              {g.producto || SIN_PRODUCTO}
+                            </Label>
+                            <Label caja="normal" className="ml-auto text-sig-dim">
+                              {plural(g.items.length, 'combinación', 'combinaciones')}
+                            </Label>
+                          </header>
+                          <ul className="divide-y divide-sig-line">{g.items.map(filaCombo)}</ul>
+                        </section>
+                      ))}
+                    </div>
+                  ) : (
+                    <ul className="divide-y divide-sig-line border-t border-sig-line">
+                      {maquina.productos.map(filaCombo)}
+                    </ul>
+                  ))}
 
                 {/* Alta de combinación para esta máquina */}
                 <div className="flex flex-wrap items-center gap-2.5 border-t border-sig-line px-5 py-3">

@@ -475,6 +475,107 @@ test('Jerarquía: se puede añadir una combinación marca + presentación', asyn
   );
 });
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   Combinaciones agrupadas por producto (2026-08-31)
+
+   La línea líquida rompió el supuesto de que una máquina hace un solo producto: la
+   Máquina 3 llena SUAVIZANTE y DETERGENTE LIQUIDO, y ambos existen en COMISARIATO ·
+   2.9 LT. NO son la misma combinación —el producto las distingue— pero la fila solo
+   pintaba marca y presentación, así que en pantalla se leían como repetidas y el
+   producto quedaba escondido en un desplegable al otro extremo de la fila.
+   ───────────────────────────────────────────────────────────────────────────── */
+const MAQUINA_3 = [{
+  maquina_id: 8, maquina: 'Máquina 3', tipo: 'LIQUIDO', activa: true,
+  productos: [
+    /* Tal como los ordena el backend: por marca y presentación, sin mirar el producto. */
+    { id: 61, producto: '', marca: 'COMISARIATO', presentacion: '1 LT', activo: true },
+    { id: 62, producto: 'SUAVIZANTE', marca: 'COMISARIATO', presentacion: '2.9 LT', activo: true },
+    { id: 63, producto: 'DETERGENTE LIQUIDO', marca: 'COMISARIATO', presentacion: '2.9 LT', activo: true },
+    { id: 64, producto: 'SUAVIZANTE', marca: 'ULTREX', presentacion: '3 LT', activo: true },
+    { id: 65, producto: 'DETERGENTE LIQUIDO', marca: 'ULTREX', presentacion: '3 LT', activo: true },
+  ],
+}];
+
+function jerarquiaCon(maquinas) {
+  const previo = mockAdmin.get.getMockImplementation();
+  mockAdmin.get.mockImplementation((url) => {
+    if (url === '/maquina_productos') return Promise.resolve({ data: maquinas });
+    if (url === '/catalogos') return Promise.resolve({
+      data: { ...CATALOGOS, productos: [
+        { nombre: 'SUAVIZANTE', tipo: 'LIQUIDO' },
+        { nombre: 'DETERGENTE LIQUIDO', tipo: 'LIQUIDO' },
+      ] },
+    });
+    return previo(url);
+  });
+}
+
+test('Jerarquía: las combinaciones se agrupan por producto cuando hay más de uno', async () => {
+  jerarquiaCon(MAQUINA_3);
+  render(<AdminApp />);
+  irA('Jerarquía');
+
+  await screen.findByText('Máquina 3');
+  /* El producto pasa a ser la cabecera del grupo, no un dato perdido al final de la
+     fila. Se busca por encabezado y no por texto: «SUAVIZANTE» aparece también en
+     cada desplegable de producto, que es exactamente el sitio donde no se veía. */
+  const cabeceras = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent);
+  expect(cabeceras).toContain('SUAVIZANTE');
+  expect(cabeceras).toContain('DETERGENTE LIQUIDO');
+  // Y la máquina dice de cuántos productos habla, no solo de cuántas filas.
+  expect(screen.getByText('5 combinaciones · 3 productos')).toBeInTheDocument();
+});
+
+test('Jerarquía: el grupo sin producto se rotula y va el último', async () => {
+  jerarquiaCon(MAQUINA_3);
+  render(<AdminApp />);
+  irA('Jerarquía');
+
+  await screen.findByText('Máquina 3');
+  /* Un producto vacío es comodín, no un hueco: si no se dijera, la fila parecería
+     estar a medio configurar. Va al final porque es lo que falta por clasificar. */
+  const grupos = screen.getAllByRole('heading', { level: 3 });
+  expect(grupos.map((g) => g.textContent)).toEqual([
+    'DETERGENTE LIQUIDO', 'SUAVIZANTE', 'Sin producto · vale para cualquiera',
+  ]);
+});
+
+test('Jerarquía: dos combinaciones de la misma marca y presentación se borran sin confundirse', async () => {
+  jerarquiaCon(MAQUINA_3);
+  render(<AdminApp />);
+  irA('Jerarquía');
+
+  await screen.findByText('Máquina 3');
+  /* COMISARIATO · 2.9 LT existe dos veces con productos distintos. La confirmación
+     tiene que decir CUÁL se borra: sin el producto delante, las dos preguntan lo
+     mismo y se puede dar de baja la que no era. */
+  expect(screen.getAllByText('COMISARIATO · 2.9 LT')).toHaveLength(2);
+
+  /* La fila se localiza por su nombre accesible, que sí las distingue. */
+  const fila = screen.getByRole('listitem', {
+    name: 'DETERGENTE LIQUIDO · COMISARIATO · 2.9 LT',
+  });
+  fireEvent.click(within(fila).getByRole('button', { name: 'Eliminar' }));
+  expect(window.confirm).toHaveBeenCalledWith(
+    expect.stringContaining('DETERGENTE LIQUIDO · COMISARIATO · 2.9 LT')
+  );
+  await waitFor(() =>
+    expect(mockAdmin.put).toHaveBeenCalledWith('/maquina_productos/63', { activo: false })
+  );
+});
+
+test('Jerarquía: una máquina de un solo producto no gana cabeceras de grupo', async () => {
+  render(<AdminApp />);
+  irA('Jerarquía');
+
+  /* Máquina 7 es SÓLIDO y solo hace detergente en polvo: agrupar ahí sería una
+     cabecera que no distingue nada, repetida en cada máquina de la planta. */
+  await screen.findByText('Máquina 7');
+  expect(screen.getByText('COMISARIATO · 1.2 KG')).toBeInTheDocument();
+  expect(screen.getByText('2 combinaciones')).toBeInTheDocument();
+  expect(screen.queryAllByRole('heading', { level: 3 })).toHaveLength(0);
+});
+
 test('Jerarquía: las fragancias van por marca, no por presentación', async () => {
   render(<AdminApp />);
   irA('Jerarquía');

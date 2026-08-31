@@ -12,6 +12,41 @@ industriales con sincronización offline-first.
 
 ## 0. Estado actual
 
+**Las combinaciones de la Jerarquía se agrupan por producto** (2026-08-31). Solo
+frontend; **escrito y validado, sin desplegar**. Tag previo: `v1.18-pre-jerarquia-producto`.
+
+La línea líquida rompió un supuesto que la pantalla daba por bueno: que una máquina hace
+**un solo producto**. La Máquina 3 llena SUAVIZANTE y DETERGENTE LIQUIDO, y los dos
+existen en `COMISARIATO · 2.9 LT` y en `ULTREX · 3 LT`. **No son la misma combinación**
+—el producto las distingue— pero la fila solo pintaba marca y presentación, así que en
+`/admin` → Jerarquía salían dos filas de texto idéntico y el producto quedaba escondido
+en un desplegable al otro extremo de una fila ancha. Se leía «SUAVIZANTE» sin saber de
+qué marca.
+
+- **El producto pasa a mandar la estructura**, que es lo que ya era en los datos: cabecera
+  por producto con su recuento, y debajo sus marcas y presentaciones. La fila sigue siendo
+  la unidad que se activa, se borra y se reasigna; lo único que cambia es dónde vive.
+- **Solo se agrupa cuando la máquina tiene más de un producto.** Con uno solo la cabecera
+  no distinguiría nada y sería una línea repetida en cada máquina SÓLIDO, que todas hacen
+  DETERGENTE EN POLVO y nada más. La condición es exactamente aquella en la que la lista
+  plana miente.
+- **El comodín se rotula y va el último**: «Sin producto · vale para cualquiera». Un
+  producto vacío significa que la combinación vale para todos, no que falte un dato, y
+  callarlo dejaba la fila con aspecto de estar a medio configurar. Va al final porque es
+  lo que queda por clasificar, no una categoría más.
+- **La confirmación de borrado nombra el producto, y eso era un fallo de verdad.** Decía
+  «¿Eliminar COMISARIATO · 2.9 LT de Máquina 3?» con dos filas así en pantalla: no había
+  forma de saber cuál se daba de baja. Lo mismo en el aviso de éxito y en el de reasignar.
+- **La fila lleva su nombre accesible completo** (`aria-label` con el producto delante).
+  En pantalla lo dice la cabecera del grupo, pero quien la escucha oye la fila suelta y
+  dos de la misma marca y presentación sonarían idénticas.
+- **La cabecera de la máquina cuenta también los productos** («8 combinaciones ·
+  2 productos»), y solo cuando hay más de uno.
+- **Nada de esto toca `api_produccion/` ni la BD**, ninguna respuesta de la API cambia y
+  no se pidió ningún endpoint nuevo: la agrupación se hace en cliente sobre el
+  `producto` que `/admin/maquina_productos` ya devuelve. **Las tablets no se ven
+  afectadas.**
+
 **Última sesión: 2026-08-21.** El frontend está reconstruido y **desplegado en producción**
 (nginx, puerto 3000). Dashboard y las cinco pestañas de administración equivalentes a las
 capturas de `referencia_ui/`. 236 tests en verde.
@@ -357,6 +392,7 @@ heartbeat, sin errores en el log del servicio.
 | Tag previo a la foto y la velocidad | `v1.15-pre-foto-velocidad` (en GitHub) |
 | Tag previo al estándar de velocidad | `v1.16-pre-estandar-velocidad` (en GitHub) |
 | Tag previo al visor de fotos de paro | `v1.17-pre-visor-fotos-paro` (en GitHub) |
+| Tag previo a agrupar la jerarquía por producto | `v1.18-pre-jerarquia-producto` (en GitHub) |
 | Build previo al estándar de velocidad | `~/respaldos_build_sigep/build_2026-08-21_152227` |
 | Build previo a la contingencia de paros | `~/respaldos_build_sigep/build_2026-08-19_165958` |
 | BD previa al `ALTER` de reportes | `backups/produccion_detg_pre_reportes_atendido_20260807_124057.sql.gz` |
@@ -1098,6 +1134,15 @@ fragancias de Jerarquía hace `PUT {activo: false}` tras confirmación, porque l
 de borrado del backend son físicos y dejarían huérfano el histórico. Hay tests que lo
 verifican.
 
+**Las combinaciones de cada máquina se agrupan por producto** desde el 2026-08-31,
+cuando la máquina tiene más de uno. Con un solo producto la lista queda plana, como
+siempre: la cabecera solo aparece donde de verdad separa algo. El grupo del comodín va
+el último y se rotula «Sin producto · vale para cualquiera», porque un producto vacío es
+una decisión (vale para todos) y no un hueco. Cada fila lleva su nombre accesible
+completo, producto incluido, y también lo llevan la confirmación de borrado y los avisos:
+con dos combinaciones que solo se diferencian en el producto, un mensaje que nombre solo
+la marca y la presentación no dice cuál se está tocando.
+
 **La pestaña Jerarquía administra tres jerarquías con granularidad distinta**, y no es un
 descuido: `maquina_productos` va por (máquina, marca, presentación),
 `maquina_marca_fragancias` por (máquina, marca) —la fragancia no depende del gramaje— y
@@ -1235,6 +1280,16 @@ npx eslint --ext .js src/
   curso emparejando `paro_actual.id` con `paros[]`. El fixture da foto al paro EN CURSO
   (108) y deja sin foto el SIN CIERRE (105) por esto. En el admin, que es el **mismo**
   componente y la misma URL resuelta.
+  De la agrupación por producto (2026-08-31): que dos productos en la misma máquina
+  producen cabeceras de grupo —buscadas por encabezado y no por texto, porque
+  «SUAVIZANTE» aparece también en cada desplegable, que es justo el sitio donde no se
+  veía—, que el recuento de la máquina cuenta productos además de combinaciones, que el
+  grupo sin producto se rotula y sale **el último**, que una máquina de un solo producto
+  **no gana ninguna cabecera**, y que con dos filas de la misma marca y presentación la
+  confirmación de borrado nombra el producto y el `PUT` va al `id` correcto. El fixture
+  `MAQUINA_3` reproduce la máquina real, con `COMISARIATO · 2.9 LT` y `ULTREX · 3 LT`
+  repetidos con productos distintos, y en el orden en que los manda el backend (por marca
+  y presentación, sin mirar el producto).
   De la contingencia de paros (2026-08-19): que un paro **EN CURSO** avisa de que hay una
   tablet detrás con su botón local, que su confirmación de cierre nombra la consecuencia
   concreta —el «no hay paro activo» que verá el operario— y la salida, mientras la de un
