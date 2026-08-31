@@ -13,7 +13,9 @@ industriales con sincronización offline-first.
 ## 0. Estado actual
 
 **El logo original de la empresa sustituye al SVG dibujado a mano** (2026-08-31). Solo
-frontend; se despliega junto con la agrupación por producto.
+frontend, y **ya está en producción**: `main.62e53954.js`, el bundle vigente, que trae
+también la agrupación por producto. Respaldo del build anterior:
+`~/respaldos_build_sigep/build_2026-08-31_142715`. El backend no se tocó.
 
 `logo/logo_sigep.png` apareció el 2026-08-31 y con él se cierra el pendiente que estaba
 abierto desde la reconstrucción: la cabecera enseñaba un SVG hecho a partir de las
@@ -423,6 +425,7 @@ heartbeat, sin errores en el log del servicio.
 | Tag previo al visor de fotos de paro | `v1.17-pre-visor-fotos-paro` (en GitHub) |
 | Tag previo a agrupar la jerarquía por producto | `v1.18-pre-jerarquia-producto` (en GitHub) |
 | Build previo a agrupar por producto | `~/respaldos_build_sigep/build_2026-08-31_141538` |
+| Build previo al logo original | `~/respaldos_build_sigep/build_2026-08-31_142715` |
 | Build previo al estándar de velocidad | `~/respaldos_build_sigep/build_2026-08-21_152227` |
 | Build previo a la contingencia de paros | `~/respaldos_build_sigep/build_2026-08-19_165958` |
 | BD previa al `ALTER` de reportes | `backups/produccion_detg_pre_reportes_atendido_20260807_124057.sql.gz` |
