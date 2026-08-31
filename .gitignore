@@ -58,3 +58,16 @@ agents/
 # bloquea deploy.sh, que exige el árbol limpio).
 *.swp
 *.swo
+
+# Evidencia fotográfica que generan las tablets en runtime: una foto por paro y por
+# entrega, para siempre. En git haría crecer el repo sin fin y no aporta nada al
+# fuente. Las de entregas las copia el respaldo diario de backups/backup_db.sh.
+# (Las 2 que ya estaban versionadas siguen estándolo: .gitignore no afecta a lo
+# que git ya rastrea.)
+api_produccion/static/paros/
+api_produccion/static/entregas/
+
+# Respaldos manuales «por si acaso» de antes de un cambio. El respaldo de verdad son
+# los commits y los tags; estos solo ensucian el árbol y ya hay 28 versionados de más.
+*.bak-*
+*.bak_*
