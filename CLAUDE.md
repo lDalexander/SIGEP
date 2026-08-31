@@ -13,7 +13,9 @@ industriales con sincronización offline-first.
 ## 0. Estado actual
 
 **La velocidad estándar baja a la fila de su presentación, y «Mover» gana Aplicar y
-Cancelar** (2026-08-31, tercera vuelta). Solo frontend.
+Cancelar** (2026-08-31, tercera vuelta). Solo frontend, y **ya está en producción**
+(`main.8150c86a.js`); respaldo del build anterior:
+`~/respaldos_build_sigep/build_2026-08-31_163607`.
 
 - **La meta se teclea en la propia fila.** Las casillas mín/máx, el equivalente por hora
   y los botones estaban en un bloque al final de la tarjeta: para saber a qué ritmo debe
@@ -495,6 +497,7 @@ heartbeat, sin errores en el log del servicio.
 | Build previo a agrupar por producto | `~/respaldos_build_sigep/build_2026-08-31_141538` |
 | Build previo al logo original | `~/respaldos_build_sigep/build_2026-08-31_142715` |
 | Build previo a la fragancia en la jerarquía | `~/respaldos_build_sigep/build_2026-08-31_145150` |
+| Build previo a la meta en la fila | `~/respaldos_build_sigep/build_2026-08-31_163607` |
 | Build previo al estándar de velocidad | `~/respaldos_build_sigep/build_2026-08-21_152227` |
 | Build previo a la contingencia de paros | `~/respaldos_build_sigep/build_2026-08-19_165958` |
 | BD previa al `ALTER` de reportes | `backups/produccion_detg_pre_reportes_atendido_20260807_124057.sql.gz` |
