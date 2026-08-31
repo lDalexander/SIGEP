@@ -12,6 +12,32 @@ industriales con sincronización offline-first.
 
 ## 0. Estado actual
 
+**La velocidad estándar baja a la fila de su presentación, y «Mover» gana Aplicar y
+Cancelar** (2026-08-31, tercera vuelta). Solo frontend.
+
+- **La meta se teclea en la propia fila.** Las casillas mín/máx, el equivalente por hora
+  y los botones estaban en un bloque al final de la tarjeta: para saber a qué ritmo debe
+  ir una presentación había que bajar y buscarla en otra lista. Ahora la jerarquía enseña
+  de un vistazo qué hace la máquina, con qué fragancia y a qué ritmo.
+- **El aviso de que la meta es una sola.** `maquina_presentacion_velocidad` va por
+  (máquina, presentación) y **no** por marca ni producto, así que `2.9 LT` es **una sola
+  fila en la BD** aunque salga bajo SUAVIZANTE y bajo DETERGENTE LIQUIDO: comparten el
+  estado de edición y teclear en una mueve la otra. Es correcto, pero sin decirlo parece
+  un fallo.
+- **Los nombres accesibles llevan el contexto solo cuando el gramaje se repite.** Si no,
+  «Velocidad mínima de 2.9 LT» señalaría a dos casillas distintas. Donde la presentación
+  es única el nombre se queda corto, como estaba.
+- **El bloque del final queda solo para presentaciones que la máquina ya no produce**,
+  igual que con las marcas huérfanas: sin combinación no tienen fila donde salir y su
+  rango sigue comparándose con lo que mande cualquier sesión vieja.
+- **«sin configurar» pasa a decir «sin meta»**, que es el vocabulario del dashboard
+  («meta 32 – 38») y cabe en una fila ya cargada.
+- **«Mover» se aplica o se cancela.** Aplicaba al vuelo, y eso dejaba la fila atrapada:
+  elegir el producto que ya tenía no dispara el `onChange`, así que el desplegable se
+  quedaba abierto sin salida. Ahora elegir no confirma —el destino se guarda en el
+  estado— y hay **Aplicar** (deshabilitado si el destino es el producto actual, con un
+  `title` que dice por qué) y **Cancelar**; Escape sobre el desplegable también cierra.
+
 **La fragancia entra en la jerarquía, y el producto deja de repetirse fila a fila**
 (2026-08-31, segunda vuelta sobre la agrupación de ese mismo día). Solo frontend, y **ya
 está en producción** (`main.e8116b7f.js`). Tag previo: `v1.19-pre-jerarquia-fragancia`;
@@ -1221,7 +1247,14 @@ Tres detalles que no son evidentes:
   por (máquina, marca), así que quitar una bajo SUAVIZANTE la quita también en DETERGENTE
   LIQUIDO. Es la limitación de la tabla, no de la vista.
 - **Reasignar el producto es «Mover»**, no un desplegable fijo por fila: repetía en cada
-  línea lo que ya dice la cabecera del grupo. Solo una fila puede estar abierta a la vez.
+  línea lo que ya dice la cabecera del grupo. Solo una fila puede estar abierta a la vez,
+  y elegir en el desplegable **no** aplica: hay **Aplicar** y **Cancelar**. Aplicar al
+  vuelo dejaba la fila atrapada, porque elegir el producto que ya tenía no dispara el
+  `onChange` y no había forma de cerrarla.
+- **La velocidad estándar se teclea en la fila de su presentación**, pero es de la
+  presentación y no de la combinación: el mismo gramaje en otra marca o en otro producto
+  comparte esa única fila de la BD, y la pantalla lo avisa («misma meta en …»). El bloque
+  del final solo conserva las presentaciones que la máquina ya no produce.
 - **Las confirmaciones y los avisos nombran el producto.** Con dos combinaciones que solo
   se diferencian en él, un mensaje con la marca y la presentación no dice cuál se toca.
 
@@ -1362,6 +1395,13 @@ npx eslint --ext .js src/
   curso emparejando `paro_actual.id` con `paros[]`. El fixture da foto al paro EN CURSO
   (108) y deja sin foto el SIN CIERRE (105) por esto. En el admin, que es el **mismo**
   componente y la misma URL resuelta.
+  De la velocidad en la fila y del «Mover» confirmable (2026-08-31): que ya **no** existe
+  el bloque «Velocidad estándar por presentación» y que las casillas están dentro de la
+  fila de su gramaje, que dos combinaciones del mismo gramaje avisan de que la meta es
+  una sola, que una presentación que la máquina ya no produce baja al bloque de sueltas
+  conservando su rango, que elegir en el desplegable de «Mover» **no** manda nada hasta
+  pulsar «Aplicar», que «Cancelar» cierra sin tocar nada, y que «Aplicar» nace
+  deshabilitado cuando el destino es el producto que la fila ya tiene.
   De la fragancia en la jerarquía (2026-08-31): que el chip de una marca se pinta en
   **cada** producto donde esa marca aparece (COMISARIATO sale en los tres grupos de la
   Máquina 3, y su FLORAL con ella), que una marca presente en varios productos avisa de

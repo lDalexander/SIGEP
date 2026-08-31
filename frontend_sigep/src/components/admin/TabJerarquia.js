@@ -156,9 +156,12 @@ export default function TabJerarquia() {
      Se guarda como TEXTO y no como número: es lo que hay en el input, y convertirlo en
      cada tecla haría que borrar el último dígito reescribiera un 0 en la casilla. */
   const [velEditada, setVelEditada] = useState({});
-  /* Fila cuyo producto se está reasignando, por id. Vive fuera de la fila para que solo
-     una esté abierta a la vez: dos desplegables abiertos en la misma tarjeta invitan a
-     mover la que no era. */
+  /* Fila cuyo producto se está reasignando: `{id, destino}`. Vive fuera de la fila para
+     que solo una esté abierta a la vez —dos desplegables abiertos en la misma tarjeta
+     invitan a mover la que no era— y guarda el destino elegido en vez de aplicarlo al
+     vuelo: elegir en un `select` no es confirmar, y sin un paso aparte no había forma
+     de arrepentirse ni de cerrar la fila si se elegía el producto que ya tenía (el
+     `onChange` no llega a dispararse y la fila se quedaba abierta para siempre). */
   const [moviendo, setMoviendo] = useState(null);
 
   const maquinas = Array.isArray(matriz.datos) ? matriz.datos : [];
@@ -558,6 +561,99 @@ export default function TabJerarquia() {
               (mf) => !marcaEnProductos.has(mf.marca),
             );
 
+            /* presentación -> su estándar, tal como lo da la API. */
+            const velDePresentacion = {};
+            (velPorMaquina[maquina.maquina_id] || []).forEach((item) => {
+              velDePresentacion[item.presentacion] = item;
+            });
+            /* Presentaciones con estándar que la máquina ya no produce: como las marcas
+               huérfanas, no tienen fila donde salir y su rango sigue vivo. */
+            const velHuerfanas = (velPorMaquina[maquina.maquina_id] || []).filter(
+              (item) => !item.produce,
+            );
+
+            /* Rango estándar de una presentación, para la fila que la muestra.
+               `maquina_presentacion_velocidad` va por (máquina, presentación) y NO por
+               marca ni producto, así que dos filas del mismo gramaje enseñan el MISMO
+               rango y comparten el estado de edición: teclear en una mueve la otra. Es
+               correcto —es una sola fila en la BD— pero hay que decirlo. */
+            const velocidadDe = (p) => {
+              const item = velDePresentacion[p.presentacion];
+              if (!item) return null;
+              const clave = `${maquina.maquina_id}|${p.presentacion}`;
+              const min = valorVel(clave, item, 'min');
+              const max = valorVel(clave, item, 'max');
+              const activo = Boolean(item.estandar?.activo);
+              const hora = porHora(min, max);
+              /* Los nombres accesibles tienen que ser únicos: si el gramaje sale en
+                 varias combinaciones, «Velocidad mínima de 2.9 LT» señalaría a dos
+                 casillas distintas. Se añade el contexto solo entonces, para no alargar
+                 el nombre donde no hace falta. */
+              const repetida =
+                maquina.productos.filter((q) => q.presentacion === p.presentacion).length > 1;
+              const donde = repetida
+                ? `${p.presentacion} en ${maquina.maquina} (${etiquetaCombo(p)})`
+                : `${p.presentacion} en ${maquina.maquina}`;
+              return (
+                <>
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    min={VEL_MIN}
+                    max={VEL_MAX}
+                    step="0.1"
+                    value={min}
+                    onChange={(e) => escribirVel(clave, 'min', e.target.value)}
+                    placeholder="mín"
+                    aria-label={`Velocidad mínima de ${donde}`}
+                    className="w-[72px]"
+                  />
+                  <span className="text-sig-dim" aria-hidden="true">–</span>
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    min={VEL_MIN}
+                    max={VEL_MAX}
+                    step="0.1"
+                    value={max}
+                    onChange={(e) => escribirVel(clave, 'max', e.target.value)}
+                    placeholder="máx"
+                    aria-label={`Velocidad máxima de ${donde}`}
+                    className="w-[72px]"
+                  />
+
+                  {/* El equivalente por hora, calculado: es como se habla del objetivo
+                      en planta, pero lo que se compara con la tablet es el minuto, así
+                      que se teclea el minuto y se muestra la hora, nunca al revés. */}
+                  <Label caja="normal" className="text-sig-dim">
+                    {hora ? `≈ ${hora} /hora` : 'sin meta'}
+                  </Label>
+
+                  {/* La fila dada de baja sigue guardada pero no compara nada. */}
+                  {item.estandar && !activo && (
+                    <Label caja="normal" className="text-sig-dim line-through">quitada</Label>
+                  )}
+
+                  <Button
+                    tamano="sm"
+                    onClick={() => guardarVelocidad(maquina, item)}
+                    aria-label={`${activo ? 'Guardar' : 'Aplicar'} velocidad de ${donde}`}
+                  >
+                    {activo ? 'Guardar' : 'Aplicar'}
+                  </Button>
+                  {activo && (
+                    <Button
+                      tamano="sm"
+                      onClick={() => quitarVelocidad(maquina, item)}
+                      aria-label={`Quitar velocidad de ${donde}`}
+                    >
+                      Quitar
+                    </Button>
+                  )}
+                </>
+              );
+            };
+
             /* Chips de fragancia de una marca. Se usa dentro de la jerarquía y en el
                bloque de las huérfanas, para que los dos no puedan divergir. */
             const fraganciasDe = (marca) => {
@@ -643,35 +739,62 @@ export default function TabJerarquia() {
                    las cabeceras, pero quien la escucha oye la fila suelta y dos
                    presentaciones iguales sonarían idénticas. */
                 aria-label={etiquetaCombo(p)}
-                className="flex items-center gap-3 py-2.5 pl-11 pr-5"
+                className="flex flex-wrap items-center gap-2 py-2.5 pl-11 pr-5"
               >
                 <Dot tono={p.activo ? 'ok' : 'off'} />
-                <span className="flex-1 min-w-0 truncate text-[13px] font-bold text-sig-text">
+                {/* Ancho fijo, no `flex-1`: alinea las casillas de velocidad en columna
+                    entre las filas del bloque, que si no bailan con el largo del
+                    gramaje. */}
+                <span className="w-[124px] shrink-0 truncate text-[13px] font-bold text-sig-text">
                   {p.presentacion}
                 </span>
+
+                {velocidadDe(p)}
 
                 {/* Reasignar el producto es excepcional —se hace al clasificar— así que
                     el desplegable aparece solo al pedirlo. Fijo en cada fila repetía el
                     nombre del producto tantas veces como presentaciones tuviera el
                     grupo, que es lo que ya dice la cabecera.
                     Solo en LIQUIDO: en SOLIDO es siempre detergente en polvo. */}
+                <div className="ml-auto flex items-center gap-2">
                 {(maquina.tipo || '').toUpperCase().startsWith('L') &&
-                  (moviendo === p.id ? (
-                    <Select
-                      value={p.producto || ''}
-                      onChange={(e) => {
-                        cambiarComboProducto(p, e.target.value);
-                        setMoviendo(null);
-                      }}
-                      opciones={productosDeLinea(maquina.tipo)}
-                      vacio="cualquier producto"
-                      aria-label={`Mover ${etiquetaCombo(p)} a otro producto`}
-                      className="w-[185px]"
-                    />
+                  (moviendo?.id === p.id ? (
+                    <>
+                      <Select
+                        value={moviendo.destino}
+                        onChange={(e) =>
+                          setMoviendo((prev) => ({ ...prev, destino: e.target.value }))
+                        }
+                        onKeyDown={(e) => e.key === 'Escape' && setMoviendo(null)}
+                        opciones={productosDeLinea(maquina.tipo)}
+                        vacio="cualquier producto"
+                        aria-label={`Mover ${etiquetaCombo(p)} a otro producto`}
+                        className="w-[185px]"
+                      />
+                      <Button
+                        tamano="sm"
+                        variante="primary"
+                        disabled={moviendo.destino === (p.producto || '')}
+                        title={
+                          moviendo.destino === (p.producto || '')
+                            ? 'Elige un producto distinto del que ya tiene'
+                            : `Mover a ${etiquetaProducto(moviendo.destino)}`
+                        }
+                        onClick={() => {
+                          cambiarComboProducto(p, moviendo.destino);
+                          setMoviendo(null);
+                        }}
+                      >
+                        Aplicar
+                      </Button>
+                      <Button tamano="sm" onClick={() => setMoviendo(null)}>
+                        Cancelar
+                      </Button>
+                    </>
                   ) : (
                     <Button
                       tamano="sm"
-                      onClick={() => setMoviendo(p.id)}
+                      onClick={() => setMoviendo({ id: p.id, destino: p.producto || '' })}
                       title={`Mover ${etiquetaCombo(p)} a otro producto`}
                     >
                       Mover
@@ -700,6 +823,20 @@ export default function TabJerarquia() {
                   <Button tamano="sm" onClick={() => cambiarComboActivo(p, true)}>
                     Reactivar
                   </Button>
+                )}
+                </div>
+
+                {/* La meta es de la presentación, no de esta combinación: el mismo
+                    gramaje en otra marca o en otro producto la comparte, y editarla
+                    aquí la mueve allí también. */}
+                {maquina.productos.filter((q) => q.presentacion === p.presentacion).length > 1 && (
+                  <Label caja="normal" className="basis-full pl-[26px] text-sig-dim">
+                    misma meta en{' '}
+                    {maquina.productos
+                      .filter((q) => q.presentacion === p.presentacion && q.id !== p.id)
+                      .map((q) => `${etiquetaProducto(q.producto)} · ${q.marca}`)
+                      .join(' · ')}
+                  </Label>
                 )}
               </li>
             );
@@ -859,24 +996,18 @@ export default function TabJerarquia() {
                   </div>
                 )}
 
-                {/* Velocidad estándar: cuelga de (máquina, presentación), sin marca —
-                    lo que manda el ritmo es el gramaje y la máquina que lo llena. Es la
-                    referencia contra la que el dashboard lee la velocidad que manda la
-                    tablet; sin ella, la lectura se enseña pero no se juzga. */}
-                <div className="border-t border-sig-line px-5 py-3">
-                  <Label caja="normal" className="mb-2.5 block text-sig-muted">
-                    Velocidad estándar por presentación · unidades/min
-                  </Label>
-
-                  {(velPorMaquina[maquina.maquina_id] || []).length === 0 ? (
-                    <Label caja="normal" className="text-sig-dim">
-                      {velMatriz.cargando
-                        ? 'Cargando…'
-                        : 'Sin presentaciones todavía — agrega una combinación arriba'}
+                {/* La velocidad estándar vive ahora en la fila de su presentación,
+                    dentro de la jerarquía. Aquí abajo solo quedan las presentaciones que
+                    esta máquina ya no produce: sin combinación no tienen fila donde
+                    salir, y su rango sigue configurado y comparándose con lo que mande
+                    cualquier sesión vieja. */}
+                {velHuerfanas.length > 0 && (
+                  <div className="border-t border-sig-line px-5 py-3">
+                    <Label caja="normal" className="mb-2.5 block text-sig-muted">
+                      Velocidad de presentaciones que esta máquina ya no produce · unidades/min
                     </Label>
-                  ) : (
                     <div className="space-y-2">
-                      {(velPorMaquina[maquina.maquina_id] || []).map((item) => {
+                      {velHuerfanas.map((item) => {
                         const clave = `${maquina.maquina_id}|${item.presentacion}`;
                         const min = valorVel(clave, item, 'min');
                         const max = valorVel(clave, item, 'max');
@@ -884,11 +1015,10 @@ export default function TabJerarquia() {
                         const hora = porHora(min, max);
                         return (
                           <div key={item.presentacion} className="flex flex-wrap items-center gap-2">
-                            <span className="w-[112px] shrink-0 font-mono text-[11px] uppercase
-                                             tracking-label text-sig-muted">
+                            <span className="w-[124px] shrink-0 font-mono text-[11px] uppercase
+                                             tracking-label text-sig-dim">
                               {item.presentacion}
                             </span>
-
                             <Input
                               type="number"
                               inputMode="decimal"
@@ -899,7 +1029,7 @@ export default function TabJerarquia() {
                               onChange={(e) => escribirVel(clave, 'min', e.target.value)}
                               placeholder="mín"
                               aria-label={`Velocidad mínima de ${item.presentacion} en ${maquina.maquina}`}
-                              className="w-[78px]"
+                              className="w-[72px]"
                             />
                             <span className="text-sig-dim" aria-hidden="true">–</span>
                             <Input
@@ -912,40 +1042,16 @@ export default function TabJerarquia() {
                               onChange={(e) => escribirVel(clave, 'max', e.target.value)}
                               placeholder="máx"
                               aria-label={`Velocidad máxima de ${item.presentacion} en ${maquina.maquina}`}
-                              className="w-[78px]"
+                              className="w-[72px]"
                             />
-
-                            {/* El equivalente por hora, calculado: es como se habla del
-                                objetivo en planta, pero lo que se compara con la tablet
-                                es el minuto, así que se teclea el minuto y se muestra la
-                                hora, nunca al revés. */}
-                            {hora ? (
-                              <Label caja="normal" className="text-sig-dim">≈ {hora} /hora</Label>
-                            ) : (
-                              <Label caja="normal" className="text-sig-dim">sin configurar</Label>
-                            )}
-
-                            {/* Dos avisos distintos que no hay que confundir: la fila
-                                dada de baja sigue guardada pero no compara nada, y la
-                                presentación que la máquina ya no produce solo está aquí
-                                para poder quitarle el estándar que se le puso antes. */}
+                            <Label caja="normal" className="text-sig-dim">
+                              {hora ? `≈ ${hora} /hora` : 'sin meta'}
+                            </Label>
                             {item.estandar && !activo && (
                               <Label caja="normal" className="text-sig-dim line-through">
                                 quitada
                               </Label>
                             )}
-                            {!item.produce && (
-                              <Label
-                                caja="normal"
-                                className="text-sig-dim"
-                                title="Esta máquina ya no tiene esa presentación en su jerarquía"
-                              >
-                                ya no se produce
-                              </Label>
-                            )}
-
-                            {/* Los botones se nombran con su presentación: hay uno por
-                                fila y «Guardar» a secas no diría cuál. */}
                             <div className="ml-auto flex items-center gap-2">
                               <Button
                                 tamano="sm"
@@ -968,8 +1074,8 @@ export default function TabJerarquia() {
                         );
                       })}
                     </div>
-                  )}
-                </div>
+                  </div>
+                )}
               </Card>
             );
           })

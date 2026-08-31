@@ -581,12 +581,52 @@ test('Jerarquía: el producto se reasigna con «Mover», no con un desplegable p
 
   fireEvent.click(within(fila).getByRole('button', { name: 'Mover' }));
   fireEvent.change(within(fila).getByRole('combobox'), { target: { value: 'SUAVIZANTE' } });
+  /* Elegir en el desplegable no aplica nada: hace falta confirmar. Sin este paso no
+     había forma de arrepentirse, ni de cerrar la fila si se elegía el producto que ya
+     tenía —el `onChange` no llega a dispararse y se quedaba abierta. */
+  expect(mockAdmin.put).not.toHaveBeenCalled();
 
+  fireEvent.click(within(fila).getByRole('button', { name: 'Aplicar' }));
   await waitFor(() =>
     expect(mockAdmin.put).toHaveBeenCalledWith('/maquina_productos/63', {
       producto: 'SUAVIZANTE',
     })
   );
+});
+
+test('Jerarquía: «Cancelar» cierra el mover sin tocar nada', async () => {
+  jerarquiaCon(MAQUINA_3, FRAGANCIAS_M3);
+  render(<AdminApp />);
+  irA('Jerarquía');
+
+  await screen.findByText('Máquina 3');
+  const fila = screen.getByRole('listitem', {
+    name: 'DETERGENTE LIQUIDO · COMISARIATO · 2.9 LT',
+  });
+
+  fireEvent.click(within(fila).getByRole('button', { name: 'Mover' }));
+  fireEvent.change(within(fila).getByRole('combobox'), { target: { value: 'SUAVIZANTE' } });
+  fireEvent.click(within(fila).getByRole('button', { name: 'Cancelar' }));
+
+  expect(mockAdmin.put).not.toHaveBeenCalled();
+  expect(within(fila).getByRole('button', { name: 'Mover' })).toBeInTheDocument();
+});
+
+test('Jerarquía: mover al producto que ya tiene no se puede aplicar', async () => {
+  jerarquiaCon(MAQUINA_3, FRAGANCIAS_M3);
+  render(<AdminApp />);
+  irA('Jerarquía');
+
+  await screen.findByText('Máquina 3');
+  const fila = screen.getByRole('listitem', {
+    name: 'DETERGENTE LIQUIDO · COMISARIATO · 2.9 LT',
+  });
+
+  /* Al abrirlo, el desplegable ya viene con su producto actual: aplicar eso sería un
+     PUT que no cambia nada, así que el botón nace deshabilitado y «Cancelar» es la
+     salida. */
+  fireEvent.click(within(fila).getByRole('button', { name: 'Mover' }));
+  expect(within(fila).getByRole('button', { name: 'Aplicar' })).toBeDisabled();
 });
 
 test('Jerarquía: una marca que ya no se produce conserva sus fragancias, aparte', async () => {
@@ -769,7 +809,12 @@ test('Jerarquía: la velocidad estándar va por presentación, no por marca', as
   irA('Jerarquía');
   await screen.findByText('Máquina 7');
 
-  expect(screen.getByText('Velocidad estándar por presentación · unidades/min')).toBeInTheDocument();
+  /* Ya no hay un bloque «Velocidad estándar por presentación» al final: el rango vive
+     en la fila de su gramaje, dentro de la jerarquía. */
+  expect(screen.queryByText('Velocidad estándar por presentación · unidades/min'))
+    .not.toBeInTheDocument();
+  expect(within(screen.getByRole('listitem', { name: 'COMISARIATO · 1.2 KG' }))
+    .getByLabelText('Velocidad mínima de 1.2 KG en Máquina 7')).toBeInTheDocument();
 
   // Lo guardado se precarga en las casillas: se corrige encima, no se vuelve a teclear.
   expect(screen.getByLabelText('Velocidad mínima de 1.2 KG en Máquina 7')).toHaveValue(32);
@@ -781,12 +826,30 @@ test('Jerarquía: la velocidad estándar va por presentación, no por marca', as
 
   // 1 KG todavía no tiene rango: se dice, en vez de enseñar un 0 – 0 que parecería puesto.
   expect(screen.getByLabelText('Velocidad mínima de 1 KG en Máquina 7')).toHaveValue(null);
-  expect(screen.getByText('sin configurar')).toBeInTheDocument();
+  expect(screen.getAllByText('sin meta').length).toBeGreaterThan(0);
 
-  /* 500 GR lo tuvo y se quitó, y además ya no se produce. Las dos cosas se dicen por
-     separado: son distintas y las dos explican por qué esa fila sigue ahí. */
+  /* 500 GR lo tuvo, se quitó y además ya no se produce: sin combinación no tiene fila
+     en la jerarquía, así que baja al bloque de las que quedaron sueltas — donde se
+     puede seguir viendo y quitando lo que se le configuró. */
+  expect(screen.getByText(
+    'Velocidad de presentaciones que esta máquina ya no produce · unidades/min'
+  )).toBeInTheDocument();
   expect(screen.getByText('quitada')).toBeInTheDocument();
-  expect(screen.getByText('ya no se produce')).toBeInTheDocument();
+  expect(screen.getByLabelText('Velocidad mínima de 500 GR en Máquina 7')).toHaveValue(50);
+});
+
+test('Jerarquía: dos combinaciones del mismo gramaje avisan de que la meta es una sola', async () => {
+  jerarquiaCon(MAQUINA_3, FRAGANCIAS_M3);
+  render(<AdminApp />);
+  irA('Jerarquía');
+
+  await screen.findByText('Máquina 3');
+  /* maquina_presentacion_velocidad va por (máquina, presentación): 2.9 LT es una sola
+     fila en la BD aunque salga bajo SUAVIZANTE y bajo DETERGENTE LIQUIDO. Teclear en
+     una mueve la otra, así que hay que decirlo. */
+  const avisos = screen.getAllByText(/misma meta en/);
+  expect(avisos.length).toBeGreaterThan(0);
+  expect(avisos.map((a) => a.textContent).join(' | ')).toContain('COMISARIATO');
 });
 
 test('Jerarquía: fijar la velocidad de una presentación sin estándar la crea', async () => {
