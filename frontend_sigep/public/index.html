@@ -2,14 +2,24 @@
 <html lang="es">
   <head>
     <meta charset="utf-8" />
-    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
+    <!--
+      El ?v= no es decorativo: el favicon vive en una caché aparte del navegador que no
+      se vacía ni con Ctrl+Shift+R, así que al cambiar el icono hay que cambiar la URL o
+      se sigue viendo el viejo durante días. Si se vuelve a cambiar el logo, subir este
+      número.
+      Los PNG van además del .ico porque los navegadores modernos los prefieren y a 16 y
+      32 px salen más nítidos que el mismo tamaño sacado del ICO.
+    -->
+    <link rel="icon" href="%PUBLIC_URL%/favicon.ico?v=2" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="%PUBLIC_URL%/favicon-32.png?v=2" />
+    <link rel="icon" type="image/png" sizes="16x16" href="%PUBLIC_URL%/favicon-16.png?v=2" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#0A100E" />
     <meta
       name="description"
       content="SIGEP — Sistema Integral de Gestión de Empaque y Producción | Detcuador S.A."
     />
-    <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
+    <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png?v=2" />
     <!--
       manifest.json provides metadata used when your web app is installed on a
       user's mobile device or desktop. See https://developers.google.com/web/fundamentals/web-app-manifest/
