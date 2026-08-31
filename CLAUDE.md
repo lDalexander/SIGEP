@@ -12,6 +12,33 @@ industriales con sincronización offline-first.
 
 ## 0. Estado actual
 
+**El logo original de la empresa sustituye al SVG dibujado a mano** (2026-08-31). Solo
+frontend; se despliega junto con la agrupación por producto.
+
+`logo/logo_sigep.png` apareció el 2026-08-31 y con él se cierra el pendiente que estaba
+abierto desde la reconstrucción: la cabecera enseñaba un SVG hecho a partir de las
+capturas de `referencia_ui/`, y `public/` seguía con los iconos y el `manifest.json` de
+Create React App —la pestaña del navegador llevaba el átomo de React y la app se
+anunciaba como «Create React App Sample»—.
+
+- **`ui/Logo.js` pasa a ser un `<img>`** del archivo real, servido desde `public/`. Las
+  tres cabeceras que ya lo usaban (dashboard, `/admin` y el login) no cambian una línea:
+  la prop `tamano` se conserva, y ahora es el **alto**, con el ancho sacado de la
+  proporción del archivo — el logo es más alto que ancho y cuadrarlo lo deformaba. Se
+  declara para reservar el hueco: sin ancho, la cabecera pegaba un salto al cargar.
+- **El original trae 21 px de margen transparente**, así que se recortó al contenido
+  antes de generar nada; si no, el logo saldría pequeño y descentrado dentro de su caja.
+- **Iconos regenerados desde el mismo archivo**: `favicon.ico` con los cinco tamaños de
+  16 a 64, `logo192.png` y `logo512.png` centrados en un lienzo cuadrado transparente con
+  un 6 % de respiro. El favicon lleva menos margen (2 %): a 16 px lo único que sobrevive
+  es la silueta y los dos colores, y cada píxel cuenta.
+- **`manifest.json` e `index.html` dejan de ser la plantilla**: nombre y `short_name` de
+  SIGEP, `theme_color` y `background_color` al `#0A100E` del sistema (§5) en vez del
+  `#0a0f1a` y el `#ffffff` heredados, y `lang="es"`.
+- **En el login el logo va centrado y a 72 px.** Es la única pantalla sin datos delante y
+  la primera que se ve al entrar; en las cabeceras sigue a 34, que es lo que cabe en la
+  barra.
+
 **Las combinaciones de la Jerarquía se agrupan por producto** (2026-08-31). Solo
 frontend, y **ya está en producción** (`main.5303e47c.js`; el backend no se tocó, worker
 `3976349` sin recargar). Tag previo: `v1.18-pre-jerarquia-producto`; respaldo del build
@@ -786,13 +813,10 @@ Tras la reconstrucción se autorizaron **catorce** excepciones a la regla de oro
    arreglo de fondo está en el backend y **no se ha tocado** (haría falta autorización).
 5. **Máquinas de línea líquida** — ya hay dos dadas de alta (`Máquina 3` y `Maquina 12`),
    sin producción registrada todavía. Total: 8 máquinas activas, una de ellas `PRUEBA`.
-6. **Logo provisional** — `public/logo192.png` es el de Create React App. El de la cabecera
-   es un SVG hecho a partir de las capturas (`components/ui/Logo.js`); si aparece el
-   original, se sustituye por un `<img>`.
-7. **Botón «Insumos» de la cabecera** — aparece en las capturas pero no hay ninguna captura
+6. **Botón «Insumos» de la cabecera** — aparece en las capturas pero no hay ninguna captura
    ni especificación de esa vista. Hoy muestra un aviso de «vista sin especificación de
    referencia». Falta decidir qué debe contener, o quitar el botón.
-8. **El total de estadísticas no cuadra con el KPI de producción**, y es **de siempre**, no
+7. **El total de estadísticas no cuadra con el KPI de producción**, y es **de siempre**, no
    de la segmentación: el rango de fechas de `estadisticas` filtra por `inicio_turno` de la
    sesión mientras `kpis` cuenta por `pallets.fecha_hora`. Sin ningún filtro, el 2026-08-05
    daban 1801 y 2767 pacas respectivamente. Con los segmentadores puestos la diferencia se

@@ -33,8 +33,11 @@ export default function AdminLogin({ onEntrar, onVolver, aviso = null }) {
   return (
     <div className="min-h-screen flex items-center justify-center px-6 py-12">
       <form onSubmit={enviar} className="sig-card w-full max-w-[380px] animate-fade-in p-7">
-        <div className="flex items-center gap-3">
-          <Logo tamano={34} />
+        {/* Aquí la marca sí manda: es la única pantalla sin datos delante y la
+            primera que se ve al entrar, así que el logo va centrado y grande en vez
+            de encogido en una fila, como en las cabeceras. */}
+        <div className="flex flex-col items-center gap-3 text-center">
+          <Logo tamano={72} />
           <div className="leading-none">
             <p className="text-[17px] font-bold tracking-tight text-sig-text">SIGEP</p>
             <Label className="block mt-1 text-sig-dim">Administración</Label>
