@@ -444,7 +444,7 @@ export default function TabJerarquia() {
               <Input
                 value={nuevaMarca}
                 onChange={(e) => setNuevaMarca(e.target.value)}
-                placeholder="Nueva marca (ej. ARIEL)"
+                placeholder="Nueva marca (ej. ULTREX)"
                 aria-label="Nueva marca"
                 className="flex-1 min-w-[220px]"
               />
