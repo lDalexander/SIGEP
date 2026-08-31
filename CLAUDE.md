@@ -13,8 +13,9 @@ industriales con sincronización offline-first.
 ## 0. Estado actual
 
 **La fragancia entra en la jerarquía, y el producto deja de repetirse fila a fila**
-(2026-08-31, segunda vuelta sobre la agrupación de ese mismo día). Solo frontend. Tag
-previo: `v1.19-pre-jerarquia-fragancia`.
+(2026-08-31, segunda vuelta sobre la agrupación de ese mismo día). Solo frontend, y **ya
+está en producción** (`main.e8116b7f.js`). Tag previo: `v1.19-pre-jerarquia-fragancia`;
+respaldo del build anterior: `~/respaldos_build_sigep/build_2026-08-31_145150`.
 
 Agrupar por producto dejó ver dos cosas que antes no se notaban: que la marca se repetía
 en cada línea del grupo, y que el desplegable de producto de cada fila decía otra vez lo
@@ -467,6 +468,7 @@ heartbeat, sin errores en el log del servicio.
 | Tag previo a la fragancia en la jerarquía | `v1.19-pre-jerarquia-fragancia` (en GitHub) |
 | Build previo a agrupar por producto | `~/respaldos_build_sigep/build_2026-08-31_141538` |
 | Build previo al logo original | `~/respaldos_build_sigep/build_2026-08-31_142715` |
+| Build previo a la fragancia en la jerarquía | `~/respaldos_build_sigep/build_2026-08-31_145150` |
 | Build previo al estándar de velocidad | `~/respaldos_build_sigep/build_2026-08-21_152227` |
 | Build previo a la contingencia de paros | `~/respaldos_build_sigep/build_2026-08-19_165958` |
 | BD previa al `ALTER` de reportes | `backups/produccion_detg_pre_reportes_atendido_20260807_124057.sql.gz` |
