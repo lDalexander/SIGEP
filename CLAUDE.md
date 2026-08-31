@@ -37,6 +37,13 @@ anunciaba como «Create React App Sample»—.
 - **`manifest.json` e `index.html` dejan de ser la plantilla**: nombre y `short_name` de
   SIGEP, `theme_color` y `background_color` al `#0A100E` del sistema (§5) en vez del
   `#0a0f1a` y el `#ffffff` heredados, y `lang="es"`.
+- **Los iconos llevan `?v=2` en `index.html`, y no es decorativo.** El favicon vive en
+  una caché aparte del navegador que no se vacía ni con `Ctrl+Shift+R`: tras el
+  despliegue seguía saliendo el átomo de React aunque el servidor ya mandaba el bueno
+  (comprobado por md5). Cambiar la URL es lo único que lo fuerza. **Si algún día se
+  cambia el logo otra vez, hay que subir ese número** o nadie verá el nuevo. Van además
+  `favicon-16.png` y `favicon-32.png` sueltos, que los navegadores modernos prefieren al
+  ICO y a esos tamaños salen más nítidos.
 - **En el login el logo va centrado y a 72 px.** Es la única pantalla sin datos delante y
   la primera que se ve al entrar; en las cabeceras sigue a 34, que es lo que cabe en la
   barra.
