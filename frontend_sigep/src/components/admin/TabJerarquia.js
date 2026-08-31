@@ -50,31 +50,66 @@ function etiquetaCombo(p) {
     : `${p.marca} · ${p.presentacion}`;
 }
 
+/** Nombre legible de un producto en un rótulo, con el comodín dicho y no callado. */
+function etiquetaProducto(producto) {
+  return producto || SIN_PRODUCTO;
+}
+
 /**
- * Agrupa las combinaciones de una máquina por producto, con el comodín al final.
+ * Agrupa las combinaciones de una máquina en producto → marca → presentaciones, con el
+ * comodín al final.
  *
  * La lista plana miente en cuanto una máquina hace dos productos: las filas repetidas
  * de marca + presentación se leían como duplicados y el producto quedaba escondido en
  * un desplegable al otro extremo de la fila. El producto es justo lo que las distingue,
  * así que es él quien manda la estructura.
  *
+ * La marca es el segundo nivel porque es de quien cuelgan las fragancias
+ * (`maquina_marca_fragancias` va por máquina + marca), y así cada una las enseña una
+ * sola vez en lugar de repetirlas en cada presentación.
+ *
  * El grupo sin producto va el último a propósito: es lo que falta por clasificar, no
  * una categoría más.
  */
 function agruparPorProducto(filas) {
-  const grupos = new Map();
+  const porProducto = new Map();
   filas.forEach((f) => {
     const clave = f.producto || '';
-    if (!grupos.has(clave)) grupos.set(clave, []);
-    grupos.get(clave).push(f);
+    if (!porProducto.has(clave)) porProducto.set(clave, new Map());
+    const marcas = porProducto.get(clave);
+    if (!marcas.has(f.marca)) marcas.set(f.marca, []);
+    marcas.get(f.marca).push(f);
   });
-  return [...grupos.entries()]
-    .map(([producto, items]) => ({ producto, items }))
+  return [...porProducto.entries()]
+    .map(([producto, marcas]) => ({
+      producto,
+      total: [...marcas.values()].reduce((n, items) => n + items.length, 0),
+      marcas: [...marcas.entries()]
+        .map(([marca, items]) => ({ marca, items }))
+        .sort((a, b) => a.marca.localeCompare(b.marca, 'es')),
+    }))
     .sort((a, b) => {
       if (!a.producto) return 1;
       if (!b.producto) return -1;
       return a.producto.localeCompare(b.producto, 'es');
     });
+}
+
+/**
+ * Marca → los productos en los que esa marca aparece en esta máquina.
+ *
+ * Hace falta para avisar de algo que si no se lee al revés: las fragancias cuelgan de
+ * (máquina, marca) y **no** del producto, así que COMISARIATO tiene las mismas en
+ * SUAVIZANTE que en DETERGENTE LIQUIDO. Sin el aviso, editarlas bajo un producto
+ * parecería tocar solo ese, y las cambia en todos.
+ */
+function productosDeCadaMarca(filas) {
+  const idx = new Map();
+  filas.forEach((f) => {
+    if (!idx.has(f.marca)) idx.set(f.marca, new Set());
+    idx.get(f.marca).add(f.producto || '');
+  });
+  return idx;
 }
 
 /**
@@ -121,6 +156,10 @@ export default function TabJerarquia() {
      Se guarda como TEXTO y no como número: es lo que hay en el input, y convertirlo en
      cada tecla haría que borrar el último dígito reescribiera un 0 en la casilla. */
   const [velEditada, setVelEditada] = useState({});
+  /* Fila cuyo producto se está reasignando, por id. Vive fuera de la fila para que solo
+     una esté abierta a la vez: dos desplegables abiertos en la misma tarjeta invitan a
+     mover la que no era. */
+  const [moviendo, setMoviendo] = useState(null);
 
   const maquinas = Array.isArray(matriz.datos) ? matriz.datos : [];
   const marcas = catalogos.datos?.marcas || [];
@@ -500,38 +539,145 @@ export default function TabJerarquia() {
           maquinas.map((maquina) => {
             const eleccion = combo[maquina.maquina_id] || {};
             const grupos = agruparPorProducto(maquina.productos);
-            /* Con un solo producto la cabecera no distinguiría nada, y sería ruido en
-               cada máquina SÓLIDO: todas hacen DETERGENTE EN POLVO y nada más. */
+            /* La cabecera de PRODUCTO solo aparece cuando hay más de uno: con uno solo
+               no distinguiría nada y sería ruido en cada máquina SÓLIDO, que todas hacen
+               DETERGENTE EN POLVO y nada más. Por marca, en cambio, se agrupa siempre:
+               es de quien cuelgan las fragancias. */
             const agrupar = grupos.length > 1;
+            const marcaEnProductos = productosDeCadaMarca(maquina.productos);
 
-            /* Una fila por combinación: es la unidad que se activa, se borra y se
-               reasigna, así que sobrevive igual dentro de un grupo que suelta. */
+            /* marca -> lo que la API sabe de sus fragancias en esta máquina. */
+            const fragDeMarca = {};
+            (fragPorMaquina[maquina.maquina_id] || []).forEach((mf) => {
+              fragDeMarca[mf.marca] = mf;
+            });
+            /* Marcas con fragancias configuradas que ya no producen nada aquí: se
+               quedaron sin sitio en la jerarquía, pero sus fragancias siguen vivas y
+               tienen que poder verse y quitarse. */
+            const huerfanas = (fragPorMaquina[maquina.maquina_id] || []).filter(
+              (mf) => !marcaEnProductos.has(mf.marca),
+            );
+
+            /* Chips de fragancia de una marca. Se usa dentro de la jerarquía y en el
+               bloque de las huérfanas, para que los dos no puedan divergir. */
+            const fraganciasDe = (marca) => {
+              const mf = fragDeMarca[marca];
+              const clave = `${maquina.maquina_id}|${marca}`;
+              const contexto = `${marca} · ${maquina.maquina}`;
+              const todas = mf ? mf.fragancias : [];
+              const activas = todas.filter((f) => f.activo);
+              const inactivas = todas.filter((f) => !f.activo);
+              return (
+                <>
+                  {activas.map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => cambiarFraganciaActiva(f, false, contexto)}
+                      aria-label={`Quitar ${f.fragancia} de ${contexto}`}
+                      title={`Quitar ${f.fragancia} de ${marca} en ${maquina.maquina}`}
+                      className="inline-flex items-center gap-1.5 rounded-full border
+                                 border-sig-amber/25 bg-sig-amber/[0.12] px-2 py-[3px]
+                                 font-mono text-[10px] uppercase tracking-label leading-none
+                                 text-sig-amber transition-colors hover:bg-sig-amber/20"
+                    >
+                      {f.fragancia}
+                      <X size={10} aria-hidden="true" />
+                    </button>
+                  ))}
+
+                  {/* Sin ninguna activa la API cae al catálogo completo, así que la
+                      tablet las ofrece TODAS. Decirlo evita leer el hueco como «esta
+                      marca no lleva fragancia». */}
+                  {activas.length === 0 && (
+                    <Label caja="normal" className="text-sig-dim">
+                      sin configurar · se ofrecen todas
+                    </Label>
+                  )}
+
+                  {inactivas.map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => cambiarFraganciaActiva(f, true, contexto)}
+                      aria-label={`Reactivar ${f.fragancia} en ${contexto}`}
+                      title={`Quitada. Pulsa para volver a ofrecer ${f.fragancia} en ${marca}`}
+                      className="inline-flex items-center gap-1.5 rounded-full border
+                                 border-sig-line bg-white/[0.04] px-2 py-[3px] font-mono
+                                 text-[10px] uppercase tracking-label leading-none
+                                 text-sig-dim line-through transition-colors
+                                 hover:text-sig-text"
+                    >
+                      {f.fragancia}
+                    </button>
+                  ))}
+
+                  <div className="ml-auto flex items-center gap-2">
+                    <Select
+                      value={fragElegida[clave] || ''}
+                      onChange={(e) =>
+                        setFragElegida((prev) => ({ ...prev, [clave]: e.target.value }))
+                      }
+                      opciones={fragancias.filter(
+                        (nombre) => !activas.some((f) => f.fragancia === nombre),
+                      )}
+                      vacio="Fragancia…"
+                      aria-label={`Fragancia para ${marca} en ${maquina.maquina}`}
+                      className="w-[160px]"
+                    />
+                    <Button tamano="sm" onClick={() => agregarFragancia(maquina, marca)}>
+                      Añadir
+                    </Button>
+                  </div>
+                </>
+              );
+            };
+
+            /* Una fila por presentación. La marca ya la dice su bloque, así que aquí
+               solo va el gramaje: repetirla en cada línea era justo lo que hacía
+               ilegible la lista. */
             const filaCombo = (p) => (
               <li
                 key={p.id}
-                /* La fila se nombra entera, con su producto: en pantalla lo dice la
-                   cabecera del grupo, pero quien la escucha oye la fila suelta y dos
-                   de la misma marca y presentación sonarían idénticas. */
+                /* La fila se nombra entera, con producto y marca: en pantalla los dicen
+                   las cabeceras, pero quien la escucha oye la fila suelta y dos
+                   presentaciones iguales sonarían idénticas. */
                 aria-label={etiquetaCombo(p)}
-                className={`flex items-center gap-3 py-3 pr-5 ${agrupar ? 'pl-9' : 'pl-5'}`}
+                className="flex items-center gap-3 py-2.5 pl-11 pr-5"
               >
                 <Dot tono={p.activo ? 'ok' : 'off'} />
                 <span className="flex-1 min-w-0 truncate text-[13px] font-bold text-sig-text">
-                  {p.marca} · {p.presentacion}
+                  {p.presentacion}
                 </span>
-                {/* El producto solo se enseña en LIQUIDO: en SOLIDO es siempre
-                    detergente en polvo y seria ruido en cada fila.
-                    Vacio = vale para cualquier producto. */}
-                {(maquina.tipo || '').toUpperCase().startsWith('L') && (
-                  <Select
-                    value={p.producto || ''}
-                    onChange={(e) => cambiarComboProducto(p, e.target.value)}
-                    opciones={productosDeLinea(maquina.tipo)}
-                    vacio="cualquier producto"
-                    aria-label={`Producto de ${etiquetaCombo(p)}`}
-                    className="w-[185px]"
-                  />
-                )}
+
+                {/* Reasignar el producto es excepcional —se hace al clasificar— así que
+                    el desplegable aparece solo al pedirlo. Fijo en cada fila repetía el
+                    nombre del producto tantas veces como presentaciones tuviera el
+                    grupo, que es lo que ya dice la cabecera.
+                    Solo en LIQUIDO: en SOLIDO es siempre detergente en polvo. */}
+                {(maquina.tipo || '').toUpperCase().startsWith('L') &&
+                  (moviendo === p.id ? (
+                    <Select
+                      value={p.producto || ''}
+                      onChange={(e) => {
+                        cambiarComboProducto(p, e.target.value);
+                        setMoviendo(null);
+                      }}
+                      opciones={productosDeLinea(maquina.tipo)}
+                      vacio="cualquier producto"
+                      aria-label={`Mover ${etiquetaCombo(p)} a otro producto`}
+                      className="w-[185px]"
+                    />
+                  ) : (
+                    <Button
+                      tamano="sm"
+                      onClick={() => setMoviendo(p.id)}
+                      title={`Mover ${etiquetaCombo(p)} a otro producto`}
+                    >
+                      Mover
+                    </Button>
+                  ))}
+
                 {p.activo ? (
                   <>
                     <Button tamano="sm" onClick={() => cambiarComboActivo(p, false)}>
@@ -558,6 +704,37 @@ export default function TabJerarquia() {
               </li>
             );
 
+            /* Bloque de una marca dentro de un producto: su nombre, sus fragancias y
+               sus presentaciones. */
+            const bloqueMarca = (bm) => {
+              const otros = [...(marcaEnProductos.get(bm.marca) || [])].filter(
+                (prod) => prod !== (bm.items[0].producto || ''),
+              );
+              return (
+                <div key={bm.marca} className="border-b border-sig-line last:border-b-0">
+                  <div className="flex flex-wrap items-center gap-2 px-5 py-2.5">
+                    <h4 className="w-[124px] shrink-0 font-mono text-[11px] uppercase
+                                   tracking-label text-sig-text">
+                      {bm.marca}
+                    </h4>
+                    {fraganciasDe(bm.marca)}
+
+                    {/* Las fragancias cuelgan de (máquina, marca) y NO del producto, así
+                        que quitar una aquí la quita también en los demás productos de
+                        esta marca. Sin decirlo, el cambio parecería local. */}
+                    {otros.length > 0 && (
+                      <Label caja="normal" className="basis-full text-sig-dim">
+                        las mismas fragancias en {otros.map(etiquetaProducto).join(' · ')}
+                      </Label>
+                    )}
+                  </div>
+                  <ul className="divide-y divide-sig-line border-t border-sig-line">
+                    {bm.items.map(filaCombo)}
+                  </ul>
+                </div>
+              );
+            };
+
             return (
               <Card
                 key={maquina.maquina_id}
@@ -582,37 +759,34 @@ export default function TabJerarquia() {
                   </Button>
                 </header>
 
-                {maquina.productos.length > 0 &&
-                  (agrupar ? (
-                    <div className="divide-y divide-sig-line border-t border-sig-line">
-                      {/* El prefijo hace única la clave del grupo comodín: ningún
-                          producto real es cadena vacía. */}
-                      {grupos.map((g) => (
-                        <section key={`p:${g.producto}`}>
+                {maquina.productos.length > 0 && (
+                  <div className="divide-y divide-sig-line border-t border-sig-line">
+                    {/* El prefijo hace única la clave del grupo comodín: ningún producto
+                        real es cadena vacía. */}
+                    {grupos.map((g) => (
+                      <section key={`p:${g.producto}`}>
+                        {agrupar && (
                           <header className="flex items-center gap-3 border-b border-sig-line
                                              bg-white/[0.02] px-5 py-2">
-                            {/* Encabezado de verdad y no un span: es lo que separa
-                                un producto de otro, y un lector de pantalla debe
-                                poder saltar de grupo en grupo. */}
+                            {/* Encabezado de verdad y no un span: es lo que separa un
+                                producto de otro, y un lector de pantalla debe poder
+                                saltar de grupo en grupo. */}
                             <Label
                               as="h3"
                               className={g.producto ? 'text-sig-text' : 'text-sig-dim'}
                             >
-                              {g.producto || SIN_PRODUCTO}
+                              {etiquetaProducto(g.producto)}
                             </Label>
                             <Label caja="normal" className="ml-auto text-sig-dim">
-                              {plural(g.items.length, 'combinación', 'combinaciones')}
+                              {plural(g.total, 'combinación', 'combinaciones')}
                             </Label>
                           </header>
-                          <ul className="divide-y divide-sig-line">{g.items.map(filaCombo)}</ul>
-                        </section>
-                      ))}
-                    </div>
-                  ) : (
-                    <ul className="divide-y divide-sig-line border-t border-sig-line">
-                      {maquina.productos.map(filaCombo)}
-                    </ul>
-                  ))}
+                        )}
+                        {g.marcas.map(bloqueMarca)}
+                      </section>
+                    ))}
+                  </div>
+                )}
 
                 {/* Alta de combinación para esta máquina */}
                 <div className="flex flex-wrap items-center gap-2.5 border-t border-sig-line px-5 py-3">
@@ -662,103 +836,28 @@ export default function TabJerarquia() {
                   </Button>
                 </div>
 
-                {/* Fragancias: cuelgan de (máquina, marca), no de la presentación.
-                    Solo se ofrecen las marcas que esta máquina produce, para que no
-                    se puedan configurar fragancias de una marca que nunca hará. */}
-                <div className="border-t border-sig-line px-5 py-3">
-                  <Label caja="normal" className="mb-2.5 block text-sig-muted">
-                    Fragancias por marca
-                  </Label>
-
-                  {(fragPorMaquina[maquina.maquina_id] || []).length === 0 ? (
-                    <Label caja="normal" className="text-sig-dim">
-                      {fragMatriz.cargando
-                        ? 'Cargando…'
-                        : 'Sin marcas todavía — agrega una combinación arriba'}
+                {/* Las fragancias viven ahora en su marca, dentro de la jerarquía. Aquí
+                    abajo solo quedan las de marcas que esta máquina ya no produce: sin
+                    combinación activa no tienen dónde salir arriba, pero siguen
+                    configuradas y hay que poder quitarlas. */}
+                {huerfanas.length > 0 && (
+                  <div className="border-t border-sig-line px-5 py-3">
+                    <Label caja="normal" className="mb-2.5 block text-sig-muted">
+                      Fragancias de marcas que esta máquina ya no produce
                     </Label>
-                  ) : (
                     <div className="space-y-2">
-                      {(fragPorMaquina[maquina.maquina_id] || []).map((mf) => {
-                        const clave = `${maquina.maquina_id}|${mf.marca}`;
-                        const contexto = `${mf.marca} · ${maquina.maquina}`;
-                        const activas = mf.fragancias.filter((f) => f.activo);
-                        const inactivas = mf.fragancias.filter((f) => !f.activo);
-                        return (
-                          <div key={mf.marca} className="flex flex-wrap items-center gap-2">
-                            <span className="w-[112px] shrink-0 font-mono text-[11px] uppercase
-                                             tracking-label text-sig-muted">
-                              {mf.marca}
-                            </span>
-
-                            {activas.map((f) => (
-                              <button
-                                key={f.id}
-                                type="button"
-                                onClick={() => cambiarFraganciaActiva(f, false, contexto)}
-                                aria-label={`Quitar ${f.fragancia} de ${contexto}`}
-                                title={`Quitar ${f.fragancia} de ${mf.marca} en ${maquina.maquina}`}
-                                className="inline-flex items-center gap-1.5 rounded-full border
-                                           border-sig-amber/25 bg-sig-amber/[0.12] px-2 py-[3px]
-                                           font-mono text-[10px] uppercase tracking-label leading-none
-                                           text-sig-amber transition-colors hover:bg-sig-amber/20"
-                              >
-                                {f.fragancia}
-                                <X size={10} aria-hidden="true" />
-                              </button>
-                            ))}
-
-                            {/* Sin ninguna activa la API cae al catálogo completo, así que
-                                la tablet las ofrece TODAS. Decirlo evita leer el hueco
-                                como «esta marca no lleva fragancia». */}
-                            {activas.length === 0 && (
-                              <Label caja="normal" className="text-sig-dim">
-                                sin configurar · se ofrecen todas
-                              </Label>
-                            )}
-
-                            {inactivas.map((f) => (
-                              <button
-                                key={f.id}
-                                type="button"
-                                onClick={() => cambiarFraganciaActiva(f, true, contexto)}
-                                aria-label={`Reactivar ${f.fragancia} en ${contexto}`}
-                                title={`Quitada. Pulsa para volver a ofrecer ${f.fragancia} en ${mf.marca}`}
-                                className="inline-flex items-center gap-1.5 rounded-full border
-                                           border-sig-line bg-white/[0.04] px-2 py-[3px] font-mono
-                                           text-[10px] uppercase tracking-label leading-none
-                                           text-sig-dim line-through transition-colors
-                                           hover:text-sig-text"
-                              >
-                                {f.fragancia}
-                              </button>
-                            ))}
-
-                            <div className="ml-auto flex items-center gap-2">
-                              <Select
-                                value={fragElegida[clave] || ''}
-                                onChange={(e) =>
-                                  setFragElegida((prev) => ({ ...prev, [clave]: e.target.value }))
-                                }
-                                opciones={fragancias.filter(
-                                  (nombre) => !activas.some((f) => f.fragancia === nombre),
-                                )}
-                                vacio="Fragancia…"
-                                aria-label={`Fragancia para ${mf.marca} en ${maquina.maquina}`}
-                                className="w-[160px]"
-                              />
-                              <Button
-                                tamano="sm"
-                                onClick={() => agregarFragancia(maquina, mf.marca)}
-                              >
-                                Añadir
-                              </Button>
-                            </div>
-                          </div>
-                        );
-                      })}
+                      {huerfanas.map((mf) => (
+                        <div key={mf.marca} className="flex flex-wrap items-center gap-2">
+                          <span className="w-[124px] shrink-0 font-mono text-[11px] uppercase
+                                           tracking-label text-sig-dim">
+                            {mf.marca}
+                          </span>
+                          {fraganciasDe(mf.marca)}
+                        </div>
+                      ))}
                     </div>
-                  )}
-                </div>
+                  </div>
+                )}
 
                 {/* Velocidad estándar: cuelga de (máquina, presentación), sin marca —
                     lo que manda el ritmo es el gramaje y la máquina que lo llena. Es la

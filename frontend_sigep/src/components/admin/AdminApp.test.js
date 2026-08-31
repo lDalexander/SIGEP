@@ -432,7 +432,10 @@ test('Jerarquía: combinaciones por máquina y alternar el tipo de línea', asyn
   irA('Jerarquía');
 
   expect(await screen.findByText('Máquina 7')).toBeInTheDocument();
-  expect(screen.getByText('COMISARIATO · 1.2 KG')).toBeInTheDocument();
+  /* La marca encabeza su bloque y la fila lleva solo el gramaje; el nombre accesible
+     de la fila sigue diciendo la combinación entera. */
+  expect(screen.getByRole('heading', { level: 4, name: 'COMISARIATO' })).toBeInTheDocument();
+  expect(screen.getByRole('listitem', { name: 'COMISARIATO · 1.2 KG' })).toBeInTheDocument();
   expect(screen.getByText('2 combinaciones')).toBeInTheDocument();
 
   // La máquina es SOLIDO, así que el botón ofrece pasarla a Líquido.
@@ -496,10 +499,13 @@ const MAQUINA_3 = [{
   ],
 }];
 
-function jerarquiaCon(maquinas) {
+function jerarquiaCon(maquinas, fragancias) {
   const previo = mockAdmin.get.getMockImplementation();
   mockAdmin.get.mockImplementation((url) => {
     if (url === '/maquina_productos') return Promise.resolve({ data: maquinas });
+    if (url === '/maquina_fragancias' && fragancias) {
+      return Promise.resolve({ data: fragancias });
+    }
     if (url === '/catalogos') return Promise.resolve({
       data: { ...CATALOGOS, productos: [
         { nombre: 'SUAVIZANTE', tipo: 'LIQUIDO' },
@@ -509,6 +515,96 @@ function jerarquiaCon(maquinas) {
     return previo(url);
   });
 }
+
+/* Las fragancias de la Máquina 3, tal como están configuradas en planta. HIT es el
+   caso de la marca que ya no se produce ahí pero conserva su fragancia: sin sitio en la
+   jerarquía, y aun así hay que poder verla y quitarla. */
+const FRAGANCIAS_M3 = [{
+  maquina_id: 8, maquina: 'Máquina 3', tipo: 'LIQUIDO', activa: true,
+  marcas: [
+    { marca: 'COMISARIATO', produce: true, fragancias: [{ id: 71, fragancia: 'FLORAL', activo: true }] },
+    { marca: 'ULTREX', produce: true, fragancias: [
+      { id: 72, fragancia: 'FLORAL', activo: true },
+      { id: 73, fragancia: 'FRUTOS ROJOS', activo: true },
+    ] },
+    { marca: 'HIT', produce: false, fragancias: [{ id: 74, fragancia: 'LAVANDA', activo: true }] },
+  ],
+}];
+
+test('Jerarquía: la fragancia sale en su marca, dentro de la jerarquía del producto', async () => {
+  jerarquiaCon(MAQUINA_3, FRAGANCIAS_M3);
+  render(<AdminApp />);
+  irA('Jerarquía');
+
+  await screen.findByText('Máquina 3');
+  /* La fragancia cuelga de la marca, y la marca vive dentro de su producto: se ve
+     entera la cadena producto → marca → presentación → fragancia sin bajar a otro
+     bloque. */
+  expect(screen.getAllByRole('button', {
+    name: 'Quitar FRUTOS ROJOS de ULTREX · Máquina 3',
+  }).length).toBeGreaterThan(0);
+
+  /* COMISARIATO produce en los tres grupos (SUAVIZANTE, DETERGENTE LIQUIDO y el
+     comodín) y su FLORAL se pinta en los tres: la fragancia acompaña a la marca allá
+     donde la marca aparezca, en vez de vivir en un bloque suelto al final. */
+  expect(screen.getAllByRole('button', {
+    name: 'Quitar FLORAL de COMISARIATO · Máquina 3',
+  })).toHaveLength(3);
+});
+
+test('Jerarquía: una marca en dos productos avisa de que la fragancia es la misma', async () => {
+  jerarquiaCon(MAQUINA_3, FRAGANCIAS_M3);
+  render(<AdminApp />);
+  irA('Jerarquía');
+
+  await screen.findByText('Máquina 3');
+  /* maquina_marca_fragancias va por (máquina, marca) y NO por producto: quitar FLORAL
+     bajo SUAVIZANTE lo quita también en DETERGENTE LIQUIDO. Sin decirlo, el cambio
+     parecería local y se tocaría a ciegas. */
+  const avisos = screen.getAllByText(/las mismas fragancias en/);
+  expect(avisos.length).toBeGreaterThan(0);
+  expect(avisos.map((a) => a.textContent).join(' | ')).toContain('DETERGENTE LIQUIDO');
+});
+
+test('Jerarquía: el producto se reasigna con «Mover», no con un desplegable por fila', async () => {
+  jerarquiaCon(MAQUINA_3, FRAGANCIAS_M3);
+  render(<AdminApp />);
+  irA('Jerarquía');
+
+  await screen.findByText('Máquina 3');
+  const fila = screen.getByRole('listitem', {
+    name: 'DETERGENTE LIQUIDO · COMISARIATO · 2.9 LT',
+  });
+  /* La cabecera del grupo ya dice el producto: repetirlo en un desplegable fijo por
+     fila era lo que ensuciaba la lista. */
+  expect(within(fila).queryByRole('combobox')).not.toBeInTheDocument();
+
+  fireEvent.click(within(fila).getByRole('button', { name: 'Mover' }));
+  fireEvent.change(within(fila).getByRole('combobox'), { target: { value: 'SUAVIZANTE' } });
+
+  await waitFor(() =>
+    expect(mockAdmin.put).toHaveBeenCalledWith('/maquina_productos/63', {
+      producto: 'SUAVIZANTE',
+    })
+  );
+});
+
+test('Jerarquía: una marca que ya no se produce conserva sus fragancias, aparte', async () => {
+  jerarquiaCon(MAQUINA_3, FRAGANCIAS_M3);
+  render(<AdminApp />);
+  irA('Jerarquía');
+
+  await screen.findByText('Máquina 3');
+  /* HIT no tiene ninguna combinación, así que no tiene sitio en la jerarquía. Si no
+     saliera en ningún lado, su LAVANDA quedaría configurada sin que nadie pudiera
+     verla ni quitarla. */
+  expect(screen.getByText('Fragancias de marcas que esta máquina ya no produce'))
+    .toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Quitar LAVANDA de HIT · Máquina 3' }))
+    .toBeInTheDocument();
+  // Y no se cuela como marca de la jerarquía.
+  expect(screen.queryByRole('heading', { level: 4, name: 'HIT' })).not.toBeInTheDocument();
+});
 
 test('Jerarquía: las combinaciones se agrupan por producto cuando hay más de uno', async () => {
   jerarquiaCon(MAQUINA_3);
@@ -549,7 +645,9 @@ test('Jerarquía: dos combinaciones de la misma marca y presentación se borran 
   /* COMISARIATO · 2.9 LT existe dos veces con productos distintos. La confirmación
      tiene que decir CUÁL se borra: sin el producto delante, las dos preguntan lo
      mismo y se puede dar de baja la que no era. */
-  expect(screen.getAllByText('COMISARIATO · 2.9 LT')).toHaveLength(2);
+  /* Las dos filas dicen «2.9 LT» a secas: lo que las separa es el producto que
+     encabeza su grupo. */
+  expect(screen.getAllByText('2.9 LT')).toHaveLength(2);
 
   /* La fila se localiza por su nombre accesible, que sí las distingue. */
   const fila = screen.getByRole('listitem', {
@@ -571,9 +669,13 @@ test('Jerarquía: una máquina de un solo producto no gana cabeceras de grupo', 
   /* Máquina 7 es SÓLIDO y solo hace detergente en polvo: agrupar ahí sería una
      cabecera que no distingue nada, repetida en cada máquina de la planta. */
   await screen.findByText('Máquina 7');
-  expect(screen.getByText('COMISARIATO · 1.2 KG')).toBeInTheDocument();
+  expect(screen.getByRole('listitem', { name: 'COMISARIATO · 1.2 KG' })).toBeInTheDocument();
   expect(screen.getByText('2 combinaciones')).toBeInTheDocument();
+  /* Sin cabecera de producto (nivel 3), pero sí de marca (nivel 4): por marca se agrupa
+     siempre, porque es de quien cuelgan las fragancias. */
   expect(screen.queryAllByRole('heading', { level: 3 })).toHaveLength(0);
+  expect(screen.getAllByRole('heading', { level: 4 }).map((h) => h.textContent))
+    .toEqual(['COMISARIATO', 'TORBELLINO']);
 });
 
 test('Jerarquía: las fragancias van por marca, no por presentación', async () => {
@@ -581,7 +683,10 @@ test('Jerarquía: las fragancias van por marca, no por presentación', async () 
   irA('Jerarquía');
   await screen.findByText('Máquina 7');
 
-  expect(screen.getByText('Fragancias por marca')).toBeInTheDocument();
+  /* Las fragancias ya no viven en un bloque aparte: cuelgan de la marca dentro de la
+     propia jerarquía, que es donde se está mirando qué hace la máquina. */
+  expect(screen.queryByText('Fragancias por marca')).not.toBeInTheDocument();
+  expect(screen.getByRole('heading', { level: 4, name: 'COMISARIATO' })).toBeInTheDocument();
 
   // La activa se muestra como chip con su acción de quitar...
   expect(screen.getByRole('button', {

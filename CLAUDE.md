@@ -12,6 +12,39 @@ industriales con sincronización offline-first.
 
 ## 0. Estado actual
 
+**La fragancia entra en la jerarquía, y el producto deja de repetirse fila a fila**
+(2026-08-31, segunda vuelta sobre la agrupación de ese mismo día). Solo frontend. Tag
+previo: `v1.19-pre-jerarquia-fragancia`.
+
+Agrupar por producto dejó ver dos cosas que antes no se notaban: que la marca se repetía
+en cada línea del grupo, y que el desplegable de producto de cada fila decía otra vez lo
+que ya decía la cabecera. Y faltaba la fragancia, que se administraba en un bloque
+aparte al final de la tarjeta, lejos de la jerarquía que describe.
+
+- **La jerarquía pasa a ser producto → marca → presentación**, con la fragancia colgando
+  de la marca, que es de donde cuelga en la BD. **Por marca se agrupa siempre**, también
+  en las SÓLIDO; la cabecera de producto sigue apareciendo solo cuando hay más de uno.
+- **La fila enseña solo el gramaje.** La marca la dice su bloque. El nombre accesible de
+  la fila sí sigue trayendo la combinación entera, producto incluido: quien la escucha la
+  oye suelta, y dos presentaciones iguales sonarían idénticas.
+- **Aviso cuando una marca está en varios productos.** `maquina_marca_fragancias` va por
+  (máquina, marca) y **no** por producto, así que el FLORAL de COMISARIATO es el mismo en
+  SUAVIZANTE que en DETERGENTE LIQUIDO, y quitarlo bajo uno lo quita en todos. Sin
+  decirlo, el cambio parecería local y se tocaría a ciegas. **Esta es la limitación de
+  fondo**: para que un producto tenga fragancias propias haría falta cambiar la tabla, y
+  eso necesita autorización.
+- **El desplegable de producto sale de la fila y se pide con «Mover».** Reasignar es algo
+  que se hace al clasificar, no cada día; fijo en cada fila repetía el nombre del producto
+  tantas veces como presentaciones tuviera el grupo. Solo una fila puede estar abierta a
+  la vez: dos desplegables en la misma tarjeta invitan a mover la que no era.
+- **El bloque «Fragancias por marca» del final desaparece**, salvo para las marcas que ya
+  no producen nada en esa máquina. Esas no tienen sitio en la jerarquía y sus fragancias
+  siguen configuradas: si no salieran en ningún lado, quedarían activas sin que nadie
+  pudiera verlas ni quitarlas.
+- **Nada de esto toca `api_produccion/` ni la BD.** Se dibuja con lo que
+  `/admin/maquina_productos` y `/admin/maquina_fragancias` ya devuelven. **Las tablets no
+  se ven afectadas.**
+
 **El logo original de la empresa sustituye al SVG dibujado a mano** (2026-08-31). Solo
 frontend, y **ya está en producción**: `main.62e53954.js`, el bundle vigente, que trae
 también la agrupación por producto. Respaldo del build anterior:
@@ -431,6 +464,7 @@ heartbeat, sin errores en el log del servicio.
 | Tag previo al estándar de velocidad | `v1.16-pre-estandar-velocidad` (en GitHub) |
 | Tag previo al visor de fotos de paro | `v1.17-pre-visor-fotos-paro` (en GitHub) |
 | Tag previo a agrupar la jerarquía por producto | `v1.18-pre-jerarquia-producto` (en GitHub) |
+| Tag previo a la fragancia en la jerarquía | `v1.19-pre-jerarquia-fragancia` (en GitHub) |
 | Build previo a agrupar por producto | `~/respaldos_build_sigep/build_2026-08-31_141538` |
 | Build previo al logo original | `~/respaldos_build_sigep/build_2026-08-31_142715` |
 | Build previo al estándar de velocidad | `~/respaldos_build_sigep/build_2026-08-21_152227` |
@@ -1171,14 +1205,23 @@ fragancias de Jerarquía hace `PUT {activo: false}` tras confirmación, porque l
 de borrado del backend son físicos y dejarían huérfano el histórico. Hay tests que lo
 verifican.
 
-**Las combinaciones de cada máquina se agrupan por producto** desde el 2026-08-31,
-cuando la máquina tiene más de uno. Con un solo producto la lista queda plana, como
-siempre: la cabecera solo aparece donde de verdad separa algo. El grupo del comodín va
-el último y se rotula «Sin producto · vale para cualquiera», porque un producto vacío es
-una decisión (vale para todos) y no un hueco. Cada fila lleva su nombre accesible
-completo, producto incluido, y también lo llevan la confirmación de borrado y los avisos:
-con dos combinaciones que solo se diferencian en el producto, un mensaje que nombre solo
-la marca y la presentación no dice cuál se está tocando.
+**La tarjeta de cada máquina es producto → marca → presentación, con la fragancia en su
+marca** (2026-08-31). La cabecera de **producto** solo aparece cuando la máquina tiene más
+de uno —con uno solo no separa nada y sería ruido en cada SÓLIDO—, pero por **marca** se
+agrupa siempre, porque es de quien cuelgan las fragancias. La fila enseña solo el gramaje;
+su nombre accesible sí trae la combinación entera. El grupo del comodín va el último y se
+rotula «Sin producto · vale para cualquiera», porque un producto vacío es una decisión
+(vale para todos) y no un hueco.
+
+Tres detalles que no son evidentes:
+
+- **Una marca en varios productos comparte fragancias, y la pantalla lo dice.** El dato va
+  por (máquina, marca), así que quitar una bajo SUAVIZANTE la quita también en DETERGENTE
+  LIQUIDO. Es la limitación de la tabla, no de la vista.
+- **Reasignar el producto es «Mover»**, no un desplegable fijo por fila: repetía en cada
+  línea lo que ya dice la cabecera del grupo. Solo una fila puede estar abierta a la vez.
+- **Las confirmaciones y los avisos nombran el producto.** Con dos combinaciones que solo
+  se diferencian en él, un mensaje con la marca y la presentación no dice cuál se toca.
 
 **La pestaña Jerarquía administra tres jerarquías con granularidad distinta**, y no es un
 descuido: `maquina_productos` va por (máquina, marca, presentación),
@@ -1317,6 +1360,13 @@ npx eslint --ext .js src/
   curso emparejando `paro_actual.id` con `paros[]`. El fixture da foto al paro EN CURSO
   (108) y deja sin foto el SIN CIERRE (105) por esto. En el admin, que es el **mismo**
   componente y la misma URL resuelta.
+  De la fragancia en la jerarquía (2026-08-31): que el chip de una marca se pinta en
+  **cada** producto donde esa marca aparece (COMISARIATO sale en los tres grupos de la
+  Máquina 3, y su FLORAL con ella), que una marca presente en varios productos avisa de
+  que la fragancia es la misma, que la fila **no** lleva desplegable de producto hasta
+  pulsar «Mover» y que entonces el `PUT` va al `id` correcto, y que una marca sin ninguna
+  combinación conserva sus fragancias en el bloque de abajo sin colarse como marca de la
+  jerarquía. El fixture `FRAGANCIAS_M3` incluye HIT justo para ese último caso.
   De la agrupación por producto (2026-08-31): que dos productos en la misma máquina
   producen cabeceras de grupo —buscadas por encabezado y no por texto, porque
   «SUAVIZANTE» aparece también en cada desplegable, que es justo el sitio donde no se
