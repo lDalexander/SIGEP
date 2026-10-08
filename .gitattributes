@@ -1,0 +1,3 @@
+# Los scripts deben llegar con LF aunque se clone desde Windows: con CRLF bash falla
+# con «$'\r': command not found» y pruebas/instalar.sh no arranca.
+*.sh text eol=lf
