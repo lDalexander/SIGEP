@@ -1,0 +1,6 @@
+**
+!frontend_sigep/**
+frontend_sigep/node_modules
+frontend_sigep/build
+frontend_sigep/.build-*
+!pruebas/nginx.conf

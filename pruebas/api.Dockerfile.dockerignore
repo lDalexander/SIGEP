@@ -1,0 +1,10 @@
+# Solo entra el backend, y nunca sus secretos: sin .env la imagen no puede mandar correo
+# ni avisos Firebase aunque alguien copie la configuración de producción.
+**
+!api_produccion/**
+api_produccion/.env*
+api_produccion/secrets
+api_produccion/venv
+api_produccion/**/__pycache__
+api_produccion/static/paros
+api_produccion/static/entregas

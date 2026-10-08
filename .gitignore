@@ -71,3 +71,6 @@ api_produccion/static/entregas/
 # los commits y los tags; estos solo ensucian el árbol y ya hay 28 versionados de más.
 *.bak-*
 *.bak_*
+
+# Copias de la BD que se cargan en el entorno de pruebas (datos de planta)
+pruebas/datos/

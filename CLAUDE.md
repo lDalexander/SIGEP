@@ -12,6 +12,30 @@ industriales con sincronización offline-first.
 
 ## 0. Estado actual
 
+**Entorno de pruebas en Docker y respaldo diario en dos archivos** (2026-10-08). No toca
+`api_produccion/`, la BD ni el despliegue: son archivos nuevos (`pruebas/`) y el script
+de respaldo.
+
+- **Respaldo** (`backups/backup_db.sh`, cron 02:00): la BD sale en **dos** archivos,
+  `sigep_estructura_<TS>.sql.gz` (tablas sin filas) y `sigep_datos_<TS>.sql.gz` (solo
+  filas), más `sigep_fotos_<TS>.tar.gz` con `static/entregas` **y** `static/paros` (antes
+  solo entregas). Sin `CREATE DATABASE`/`USE`: se cargan en la base que se quiera.
+- **Los volcados `produccion_detg_pre_*` de antes de cada `ALTER` ya no existían**: la
+  rotación de 14 días los borraba porque su nombre casaba con el de los diarios. Las dos
+  filas de «BD previa…» de la tabla de abajo apuntan a archivos que ya no están. Ahora la
+  rotación solo borra `sigep_*`, así que un volcado manual con otro nombre se conserva.
+- **`pruebas/instalar.sh [carpeta]`** levanta MySQL 8.0 + API + web (nginx, copia del
+  sitio del 3000) con `docker compose` y carga el último par estructura/datos de
+  `pruebas/datos/` (gitignorada) y las fotos si están. Volver a ejecutarlo resetea la BD.
+  **Correo apagado por partida doble**: la imagen de la API no lleva `.env` ni `secrets/`
+  y fija `SMTP_PASS=""`, y `neutralizar.sql` borra `config_correo.smtp_pass` y pone
+  `semanal_activo=0` en la copia. FCM queda deshabilitado (sin credenciales).
+- Probado en este servidor con puertos alternativos: `/maquinas`, `/operadores`,
+  `/fragancias`, `kpis` y `estado_operativo` idénticos byte a byte a producción; `paros`
+  solo difiere en el cronómetro de un paro abierto. **Aquí no es accesible desde fuera
+  del contenedor**: `ufw` deja pasar la red de `dtlink` pero no una nueva, y el firewall
+  no se tocó. Está pensado para otra máquina (WSL2 o VM).
+
 **La velocidad estándar baja a la fila de su presentación, y «Mover» gana Aplicar y
 Cancelar** (2026-08-31, tercera vuelta). Solo frontend, y **ya está en producción**
 (`main.8150c86a.js`); respaldo del build anterior:
@@ -500,7 +524,7 @@ heartbeat, sin errores en el log del servicio.
 | Build previo a la meta en la fila | `~/respaldos_build_sigep/build_2026-08-31_163607` |
 | Build previo al estándar de velocidad | `~/respaldos_build_sigep/build_2026-08-21_152227` |
 | Build previo a la contingencia de paros | `~/respaldos_build_sigep/build_2026-08-19_165958` |
-| BD previa al `ALTER` de reportes | `backups/produccion_detg_pre_reportes_atendido_20260807_124057.sql.gz` |
+| BD previa al `ALTER` de reportes (**borrado por la rotación**) | `backups/produccion_detg_pre_reportes_atendido_20260807_124057.sql.gz` |
 | Build previo al panel de correo | `~/respaldos_build_sigep/build_2026-08-07_114148` |
 | Build previo al estado de tablet | `~/respaldos_build_sigep/build_2026-08-07_104035` |
 | Build previo a la caducidad de sesión | `~/respaldos_build_sigep/build_2026-08-07_101252` |
@@ -510,7 +534,7 @@ heartbeat, sin errores en el log del servicio.
 | Build previo a los segmentadores | `~/respaldos_build_sigep/build_2026-08-05_165753` |
 | Build estable v1.0 | `~/RESPALDO_build_estable_v1.0` |
 | Builds rotados | `~/respaldos_build_sigep/` (últimos 10) |
-| BD previa al último `ALTER` | `backups/produccion_detg_pre_tipo_operario_*.sql.gz` |
+| BD previa al último `ALTER` (**borrado por la rotación**) | `backups/produccion_detg_pre_tipo_operario_*.sql.gz` |
 
 ```bash
 git checkout v1.0-frontend-reconstruido     # volver al frontend estable

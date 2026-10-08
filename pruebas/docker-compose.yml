@@ -1,0 +1,39 @@
+# Entorno de pruebas de SIGEP: MySQL + API + web, aislado de la planta.
+# No se levanta a mano: lo hace ./instalar.sh, que además carga los datos.
+name: sigep-pruebas
+
+services:
+  db:
+    image: mysql:8.0            # la misma serie que producción (8.0.x)
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: produccion_detg
+      MYSQL_USER: sigep
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      TZ: America/Guayaquil
+    volumes:
+      - db:/var/lib/mysql
+    ports:
+      - "127.0.0.1:${DB_PORT:-3307}:3306"   # para mirar la BD con DBeaver/Workbench
+
+  api:
+    build: { context: .., dockerfile: pruebas/api.Dockerfile }
+    environment:
+      DATABASE_URL: mysql+mysqlconnector://sigep:${DB_PASSWORD}@db:3306/produccion_detg
+      TZ: America/Guayaquil
+      # Correo apagado: sin contraseña SMTP, email_service no envía nada (y la copia de
+      # la BD llega con la de config_correo borrada, ver neutralizar.sql).
+      SMTP_PASS: ""
+      SMTP_HOST: ""
+    depends_on: [db]
+    ports:
+      - "${API_PORT:-8000}:8000"   # 8000: lib/fotos.js pide las fotos a ese puerto
+
+  web:
+    build: { context: .., dockerfile: pruebas/web.Dockerfile }
+    depends_on: [api]
+    ports:
+      - "${WEB_PORT:-3000}:80"
+
+volumes:
+  db:
