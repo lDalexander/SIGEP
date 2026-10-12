@@ -18,6 +18,12 @@
 --
 --   mysql -uadmin -p produccion_detg < alter_insumos_v17.sql
 --
+-- APLICADA EN PRODUCCIÓN el 2026-10-12 16:22 (America/Guayaquil). Volcado previo en
+-- `backups/produccion_detg_pre_insumos_v17_20261012_162228.sql.gz` — con ese nombre, y
+-- no `sigep_*`, para que la rotación de 14 días no se lo lleve. Tras aplicarla: las 756
+-- sesiones, 4130 pacas, 4 pedidos y 1 entrega siguen intactos, las 4 tablas nuevas y
+-- las 5 claves foráneas creadas, y los endpoints en vivo responden 200.
+--
 -- IDEMPOTENTE: se puede volver a ejecutar sin romper nada. Los ADD COLUMN pasan por
 -- `add_col_si_falta` y los índices por `add_idx_si_falta`, que consultan
 -- INFORMATION_SCHEMA antes de tocar la tabla — hace falta porque MySQL 8 no tiene
