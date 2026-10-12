@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#F0F2F5"
+    android:fitsSystemWindows="true">
+
+    <!-- Header Panel -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="12dp"
+        android:background="#1E293B"
+        android:gravity="center_vertical">
+
+        <!-- Lado Izquierdo: Textos -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:layout_marginEnd="8dp">
+
+            <TextView
+                android:id="@+id/tvTituloDashboard"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="TORRE DE CONTROL"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"
+                android:ellipsize="end"
+                android:maxLines="1"/>
+
+            <TextView
+                android:id="@+id/tvSubtituloDashboard"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Cargando información..."
+                android:textSize="12sp"
+                android:textColor="#94A3B8"
+                android:layout_marginTop="2dp"
+                android:ellipsize="end"
+                android:maxLines="1"/>
+        </LinearLayout>
+
+        <!-- Lado Derecho: Botones (Uno al lado del otro) -->
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <Button
+                android:id="@+id/btnCambiarVista"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:text="VISTA"
+                android:textSize="10sp"
+                android:visibility="gone"
+                android:backgroundTint="#3B82F6"
+                android:textColor="#FFFFFF"
+                android:layout_marginEnd="6dp"
+                android:paddingHorizontal="8dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"/>
+
+            <Button
+                android:id="@+id/btnSalirSupervisor"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:backgroundTint="#EF4444"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:paddingHorizontal="8dp"
+                android:text="SALIR"
+                android:textColor="#FFFFFF"
+                android:textSize="10sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Contenido Principal -->
+
+    <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+        android:id="@+id/swipeRefresh"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent">
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/rvDashboard"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:padding="8dp"
+            android:clipToPadding="false"/>
+
+    </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+
+</LinearLayout>

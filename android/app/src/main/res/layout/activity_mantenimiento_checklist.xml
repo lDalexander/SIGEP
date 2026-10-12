@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#F5F5F5"
+    android:padding="20dp">
+
+    <TextView
+        android:id="@+id/tvMttoTitulo"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Checklist de mantenimiento"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        android:textColor="#1E293B" />
+
+    <TextView
+        android:id="@+id/tvMttoSubtitulo"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:textSize="15sp"
+        android:textColor="#607D8B" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="16dp"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:id="@+id/contenedorItemsMtto"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="Supervisor de turno"
+                android:textStyle="bold"
+                android:textColor="#1E293B" />
+
+            <EditText
+                android:id="@+id/etSupervisorTurno"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Nombre del supervisor"
+                android:inputType="textCapWords"
+                android:maxLines="1" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="Comentarios"
+                android:textStyle="bold"
+                android:textColor="#1E293B" />
+
+            <EditText
+                android:id="@+id/etComentarios"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Observaciones (opcional)"
+                android:inputType="textMultiLine|textCapSentences"
+                android:minLines="3"
+                android:gravity="top" />
+        </LinearLayout>
+    </ScrollView>
+
+    <ProgressBar
+        android:id="@+id/progressMtto"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:visibility="gone" />
+
+    <Button
+        android:id="@+id/btnGuardarMtto"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:layout_marginTop="12dp"
+        android:text="GUARDAR Y CONTINUAR"
+        android:textStyle="bold"
+        android:backgroundTint="#2E7D32"
+        android:textColor="#FFFFFF" />
+
+</LinearLayout>

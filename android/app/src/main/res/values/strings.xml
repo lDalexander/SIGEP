@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">SIGEP</string>
+    <string name="status_pedidos_vacio">Sin solicitudes aún</string>
+</resources>

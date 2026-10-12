@@ -1,0 +1,283 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:fillViewport="true"
+    android:background="#F0F0F0">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp"
+        android:gravity="center_vertical">
+
+        <RelativeLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="30dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="CONTROL DE PRODUCCIÓN"
+                android:textSize="26sp"
+                android:textStyle="bold"
+                android:gravity="center"
+                android:textColor="#333333"/>
+
+            <TextView
+                android:id="@+id/tvBadgePendientes"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_alignParentEnd="true"
+                android:layout_centerVertical="true"
+                android:background="@drawable/badge_bg"
+                android:text="0"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp"
+                android:minWidth="32dp"
+                android:gravity="center"/>
+        </RelativeLayout>
+
+        <LinearLayout
+            android:id="@+id/seccionConfiguracion"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <Spinner android:id="@+id/spinnerTipo" android:layout_width="match_parent" android:layout_height="50dp" android:layout_marginBottom="8dp"/>
+
+            <!-- PRODUCTO: solo la línea LÍQUIDA (cloro, detergente líquido, quitamanchas,
+                 suavizante). En SÓLIDO hay un único producto, así que el selector se
+                 oculta: un paso que no decide nada solo estorba en planta. Va ANTES de la
+                 máquina porque filtra la marca y la presentación que vienen detrás. -->
+            <Spinner android:id="@+id/spinnerProducto" android:layout_width="match_parent" android:layout_height="50dp" android:layout_marginBottom="8dp" android:visibility="gone"/>
+
+            <Spinner android:id="@+id/spinnerMaquina" android:layout_width="match_parent" android:layout_height="50dp" android:layout_marginBottom="8dp"/>
+            <Spinner android:id="@+id/spinnerOperador" android:layout_width="match_parent" android:layout_height="50dp" android:layout_marginBottom="8dp"/>
+            <Spinner android:id="@+id/spinnerMarca" android:layout_width="match_parent" android:layout_height="50dp" android:layout_marginBottom="8dp"/>
+            <Spinner android:id="@+id/spinnerPresentacion" android:layout_width="match_parent" android:layout_height="50dp" android:layout_marginBottom="8dp"/>
+            <Spinner android:id="@+id/spinnerFragancia" android:layout_width="match_parent" android:layout_height="50dp" android:layout_marginBottom="20dp"/>
+
+            <Button android:id="@+id/btnIniciarTurno" android:layout_width="match_parent" android:layout_height="60dp" android:text="INICIAR TURNO" android:backgroundTint="#4CAF50"/>
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/seccionProduccion"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <!-- Banner del PARO ALMUERZO: contador en vivo, visible solo durante el almuerzo. -->
+            <LinearLayout
+                android:id="@+id/bannerAlmuerzo"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:padding="12dp"
+                android:layout_marginBottom="16dp"
+                android:background="#E8F5E9"
+                android:visibility="gone">
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="🍽️ ALMUERZO EN CURSO"
+                    android:textColor="#2E7D32"
+                    android:textStyle="bold"
+                    android:textSize="18sp"/>
+                <Chronometer
+                    android:id="@+id/chronoAlmuerzo"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="#1B5E20"
+                    android:textStyle="bold"
+                    android:textSize="40sp"/>
+            </LinearLayout>
+
+            <EditText android:id="@+id/etCantidadPacas" android:textColor="#000000" android:textColorHint="#757575" android:layout_width="match_parent" android:layout_height="60dp" android:inputType="number" android:hint="Cantidad de Pacas" android:textSize="20sp" android:layout_marginBottom="16dp"/>
+            <Button android:id="@+id/btnEnviarPallet" android:layout_width="match_parent" android:layout_height="60dp" android:text="ENVIAR REGISTRO" android:backgroundTint="#2196F3" android:layout_marginBottom="12dp"/>
+
+            <!-- Velocidad de máquina en fundas/min. La unidad va rotulada también en el
+                 diálogo: es lo único que evita que unos registren por minuto y otros por
+                 hora y el histórico quede inservible. -->
+            <Button
+                android:id="@+id/btnVelocidad"
+                android:layout_width="match_parent"
+                android:layout_height="60dp"
+                android:text="⚡ VELOCIDAD MAQ"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:backgroundTint="#0E7490"
+                android:layout_marginBottom="16dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="16dp">
+
+                <Button
+                    android:id="@+id/btnSolicitarInsumo"
+                    android:layout_width="0dp"
+                    android:layout_height="60dp"
+                    android:layout_weight="1"
+                    android:text="📦 SOLICITAR INS"
+                    android:textColor="#FFFFFF"
+                    android:textSize="10dp"
+                    android:textStyle="bold"
+                    android:backgroundTint="#3F51B5" />
+
+                <View
+                    android:layout_width="8dp"
+                    android:layout_height="match_parent"/>
+
+                <Button
+                    android:id="@+id/btnVerEstadoPedidos"
+                    android:layout_width="0dp"
+                    android:layout_height="60dp"
+                    android:layout_weight="1"
+                    android:text="📊 VER ESTADO"
+                    android:textSize="10dp"
+                    android:textColor="#3F51B5"
+                    android:textStyle="bold"
+                    android:backgroundTint="#E8EAF6" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tvStatusPedidos"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/status_pedidos_vacio"
+                android:textColor="#3F51B5"
+                android:textStyle="bold"
+                android:gravity="center"
+                android:layout_marginBottom="16dp"/>
+            <TextView
+                android:id="@+id/tvPendientesConfirmacionLabel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="📬 Confirmar entregas recibidas:"
+                android:textColor="#E65100"
+                android:textStyle="bold"
+                android:textSize="14sp"
+                android:layout_marginBottom="4dp"
+                android:visibility="gone"/>
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/rvPendientesConfirmacion"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                android:visibility="gone"/>
+
+            <Button
+                android:id="@+id/btnTerminarTurno"
+                android:layout_width="match_parent"
+                android:layout_height="60dp"
+                android:text="CERRAR TURNO DE TRABAJO"
+                android:backgroundTint="#B71C1C"
+                android:layout_marginBottom="8dp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Historial de este turno:"
+                android:textStyle="bold"
+                android:textColor="#555555"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="4dp"/>
+
+            <TextView
+                android:id="@+id/tvTotalPacas"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="🧮 Total: 0 pacas"
+                android:textStyle="bold"
+                android:textSize="18sp"
+                android:textColor="#1B5E20"
+                android:background="#E8F5E9"
+                android:padding="8dp"
+                android:layout_marginBottom="6dp"/>
+
+            <ScrollView
+                android:layout_width="match_parent"
+                android:layout_height="120dp"
+                android:background="#F0F0F0"
+                android:padding="8dp"
+                android:layout_marginBottom="24dp">
+                <TextView
+                    android:id="@+id/tvHistorialPacas"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textSize="16sp"
+                    android:textColor="#1E293B"
+                    android:text=""/>
+            </ScrollView>
+
+            <Button
+                android:id="@+id/btnParo"
+                android:layout_width="match_parent"
+                android:layout_height="60dp"
+                android:text="REGISTRAR PARO"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:backgroundTint="#FA8400"
+                android:layout_marginBottom="12dp" />
+
+            <Button
+                android:id="@+id/btnAlmuerzo"
+                android:layout_width="match_parent"
+                android:layout_height="60dp"
+                android:text="🍽️ PARO ALMUERZO"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:backgroundTint="#2E7D32"
+                android:layout_marginBottom="12dp" />
+
+            <Button
+                android:id="@+id/btnComentarioTurno"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:text="COMENTARIOS DEL TURNO"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:backgroundTint="#2563EB"
+                android:layout_marginBottom="10dp" />
+
+            <Button
+                android:id="@+id/btnReporteApp"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:text="REPORTAR UN PROBLEMA CON LA APP"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:backgroundTint="#64748B"
+                android:layout_marginBottom="32dp" />
+        </LinearLayout>
+
+        <!-- El texto real lo pone MainActivity desde BuildConfig.VERSION_NAME (onCreate).
+             Con tools:text el número solo existe en el preview y no puede quedar viejo. -->
+        <TextView
+            android:id="@+id/textViewDevelopedBy"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:layout_marginTop="20dp"
+            android:gravity="center"
+            tools:text="Desarrollado por John Alexander Garcia | DETCUADOR S.A. | Versión 0.0.0"
+            android:textColor="#000000"
+            android:textSize="10sp"
+            android:textStyle="bold" />
+
+    </LinearLayout>
+</ScrollView>

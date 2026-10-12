@@ -1,0 +1,31 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+/.idea/planningMode.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Kotlin compiler error logs
+/.kotlin
+
+# Release APKs
+/app/release
+
+# Documentacion interna (no versionada)
+/docs
+CLAUDE.md
+
+# Firma de release: NUNCA versionar el keystore ni las claves
+/keystore.properties*
+*.jks
+*.keystore
