@@ -86,3 +86,58 @@ operario de esa máquina ve las dos, pero no ve las de otras máquinas.
 
 La importación corre en seco primero: te dice qué filas tienen problemas
 **antes** de escribir nada en la base.
+
+---
+
+## 3. Cómo se cargan
+
+Desde el servidor, con el venv del backend:
+
+```bash
+cd ~/workspace/apps/sigep/api_produccion
+
+# 1) EN SECO — valida el archivo entero y NO escribe nada
+venv/bin/python importar_catalogo.py \
+    --insumos ../plantillas/insumos.csv \
+    --recetas ../plantillas/recetas.csv
+
+# 2) Ensayo contra la copia de pruebas, para ver el resultado sin riesgo
+venv/bin/python importar_catalogo.py \
+    --insumos ../plantillas/insumos.csv --recetas ../plantillas/recetas.csv \
+    --bd 'mysql+mysqlconnector://admin:3012@localhost/prueba_insumos_v17' --aplicar
+
+# 3) En producción, cuando el informe en seco salga limpio
+venv/bin/python importar_catalogo.py \
+    --insumos ../plantillas/insumos.csv --recetas ../plantillas/recetas.csv --aplicar
+```
+
+**La pasada en seco es el modo por defecto**: `--aplicar` hay que escribirlo. Un CSV
+del ERP con una columna corrida se detecta leyendo el informe, no a mitad de escritura
+con la tabla ya a medio cambiar.
+
+### Qué hace con lo que ya está en la base
+
+| Caso | Qué pasa |
+|---|---|
+| La fila es nueva | Se crea |
+| Ya existe y cambió algo | Se actualiza (el informe dice qué campo y de qué a qué) |
+| Ya existe igual | Se deja como está |
+| **Ya no viene en el CSV** | **Queda con `activo = 0`** |
+
+**Nada se borra nunca.** Los pedidos del histórico nombran esos insumos, y un borrado
+real dejaría el histórico ilegible. Por eso el archivo tiene que traer el catálogo y el
+BOM **completos**, no solo lo que cambió: lo que falte se entiende como dado de baja.
+
+Los dos archivos van en **una sola transacción**. Si las recetas fallan, los insumos
+tampoco se guardan: un catálogo a medias con un BOM que apunta a lo que no llegó a
+existir es peor que no haber importado nada.
+
+### Nombres: no hace falta que coincidan letra por letra
+
+La comparación ignora mayúsculas, acentos y espacios de sobra, pero **guarda siempre el
+valor que ya tiene la base**. Un export que diga `LIMON` encuentra la fragancia `LIMÓN`
+en vez de fallar, y la base no termina con tres grafías de la misma cosa.
+
+El `codigo_erp` manda sobre el nombre: es lo que permite que, si en el ERP le retocan la
+descripción a un material, la siguiente carga lo reconozca como el mismo y no cree uno
+nuevo.
