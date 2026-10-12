@@ -4,8 +4,9 @@ Dos CSV que alimentan la Fase 1 del módulo de insumos. Se abren con Excel
 directamente (están en UTF-8 con BOM y separador `;`, que es lo que espera
 Excel en Windows en español — con `,` metería todo en una sola columna).
 
-Las filas que traen son **ejemplos reales del catálogo actual**. Bórralas y
-pon las tuyas; el encabezado no se toca.
+Los dos archivos van **vacíos, solo con el encabezado**: el catálogo real se
+descarga del ERP y se carga después. El encabezado no se toca — de él depende
+el importador. Los ejemplos de cómo se llena cada uno están más abajo.
 
 ---
 
