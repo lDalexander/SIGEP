@@ -10,6 +10,31 @@ industriales con sincronización offline-first.
 
 ---
 
+## Monorepo (2026-10-12)
+
+El código de la app Android vivía en un repositorio aparte (`lDalexander/SIPEG`) y se
+fusionó aquí con `git subtree`, **conservando todo su historial**. `SIPEG` quedó
+archivado en GitHub, de solo lectura, para que no haya dos sitios donde commitear lo
+mismo y se desincronicen.
+
+```
+SIGEP/
+├── android/           app Kotlin de las tablets (operario, insumista, supervisor)
+├── api_produccion/    backend FastAPI
+├── frontend_sigep/    web React (dashboard + admin)
+├── plantillas/        CSV de importación: catálogo de insumos y BOM
+├── pruebas/           entorno Docker de pruebas
+└── backups/           respaldo diario de BD y fotos
+```
+
+- **Android Studio abre `android/`**, no la raíz del repo.
+- `android/CLAUDE.md` documenta la app y **no está versionado** (`android/.gitignore`),
+  igual que cuando era repo aparte.
+- El checkout del servidor (`~/workspace/apps/sigep`) ahora también trae `android/`.
+  No afecta al despliegue: ni `deploy.sh`, ni `sigep.service`, ni nginx miran esa carpeta.
+
+---
+
 ## 0. Estado actual
 
 **Entorno de pruebas en Docker y respaldo diario en dos archivos** (2026-10-08). No toca
@@ -929,14 +954,14 @@ Tras la reconstrucción se autorizaron **catorce** excepciones a la regla de oro
 
 | | |
 |---|---|
-| Servidor | `150.36.200.252` · Ubuntu 24.04 · TZ `America/Guayaquil` |
-| Proyecto | `/home/john/Proyectos/App_Llenadora` |
+| Servidor | `150.36.200.252` (directa) · `100.81.223.5` (por VPN, host `detcuador`) · Ubuntu 24.04 · TZ `America/Guayaquil`. **Las dos IPs son válidas y apuntan a la misma máquina**; cuál responde depende de si se está dentro de la VPN. |
+| Proyecto | `/home/john/workspace/apps/sigep` (antes `/home/john/Proyectos/App_Llenadora`) |
 | Backend | `api_produccion/` — FastAPI + SQLAlchemy, gunicorn/uvicorn en `127.0.0.1:8000` |
 | Servicio | `sigep.service` (systemd, `Restart=always`, `-w 1`) |
 | Frontend | `frontend_sigep/` — Create React App (React 19, JavaScript, sin TypeScript) |
 | Web | nginx en el puerto **3000**, root `frontend_sigep/build`, `/api/` → `127.0.0.1:8000/api/` |
 | BD | MySQL, esquema `produccion_detg` |
-| Repo | GitHub `lDalexander/SIGEP`, rama `main` |
+| Repo | GitHub `lDalexander/SIGEP`, rama `main`. **Monorepo** desde 2026-10-12: incluye `android/`, antes repo aparte `lDalexander/SIPEG` (archivado). |
 | Referencia visual | `referencia_ui/*.jpeg` — 9 capturas de la versión a reproducir |
 
 Convive un apache2 en el puerto 80. **No reconfigurar nginx, systemd ni apache.**
