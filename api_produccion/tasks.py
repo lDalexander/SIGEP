@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timedelta
 from database import SessionLocal, logger
 from models import SesionTrabajoDB
+from services import sesiones_usuario
 
 async def garbage_collector_turnos():
     """
@@ -33,6 +34,19 @@ async def garbage_collector_turnos():
                     
                     db.commit()
                     logger.info(f"✅ Garbage Collector procesó {len(turnos_colgados)} turnos colgados.")
+
+                # Sesiones de insumista olvidadas (v1.7.0). Viajan en el mismo ciclo
+                # porque son el mismo problema: alguien que no cerró lo que abrió.
+                #
+                # Sin esto, el login único se volvería una trampa: una tablet que se
+                # quedó sin batería dejaría a su insumista sin poder entrar en otra
+                # hasta que alguien fuese a MySQL a mano. El login ya libera las
+                # caducadas al tropezarlas, pero eso solo pasa cuando ese usuario
+                # intenta entrar; esto las cierra aunque nadie vuelva, que es lo que
+                # mantiene honesto el panel de «quién está de turno».
+                caducadas = sesiones_usuario.purgar_expiradas(db)
+                if caducadas:
+                    logger.info(f"♻️ {caducadas} sesión(es) de usuario cerradas por inactividad.")
             except Exception as db_err:
                 db.rollback()
                 logger.error(f"❌ Error en la DB durante el Garbage Collector: {db_err}")

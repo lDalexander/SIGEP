@@ -3,7 +3,7 @@ Router para los endpoints de autenticación y sesiones.
 Maneja el login y el listado de usuarios activos.
 """
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy.orm import Session
 
 from database import get_db, logger
@@ -12,7 +12,7 @@ from schemas import LoginRequest, LogoutRequest
 from sqlalchemy import func
 import schemas
 import models
-from services import seguridad
+from services import seguridad, sesiones_usuario
 
 router = APIRouter(prefix="/api", tags=["Autenticación y Estado"])
 
@@ -24,7 +24,21 @@ def obtener_usuarios(db: Session = Depends(get_db)):
 
 @router.post("/login")
 def iniciar_sesion(datos: LoginRequest, db: Session = Depends(get_db)):
-    """Verifica el PIN de un usuario de bodega o supervisor"""
+    """Verifica el PIN y abre la sesión de turno del usuario en esta tablet.
+
+    Desde la v1.7.0 el login es ÚNICO por usuario: `device_id` deja de ser un campo
+    decorativo. Si el mismo insumista ya tiene sesión viva en otra tablet se responde
+    **409**, que es justo lo que `LoginActivity` lleva esperando desde la 1.5 (muestra
+    un diálogo «Sesión activa en otro dispositivo» con el texto que mandemos aquí). Sin
+    esto, dos tablets con el mismo usuario podían aceptar y entregar el mismo pedido.
+
+    El 409 va en TEXTO PLANO y no como el `{"detail": ...}` de FastAPI porque la app
+    pinta el cuerpo del error tal cual en el diálogo: el JSON crudo se leería mal.
+
+    Devuelve además `token`, la credencial de las siguientes llamadas. Es un campo
+    nuevo en la respuesta y las tablets anteriores lo ignoran sin enterarse (Gson
+    descarta los campos que su modelo no declara), así que no rompe nada en planta.
+    """
     usuario = db.query(UsuarioDB).filter(
         UsuarioDB.nombre == datos.nombre,
         UsuarioDB.pin == datos.pin,
@@ -34,8 +48,22 @@ def iniciar_sesion(datos: LoginRequest, db: Session = Depends(get_db)):
     if not usuario:
         raise HTTPException(status_code=401, detail="Credenciales incorrectas")
 
-    logger.info(f"🔑 ACCESO CONCEDIDO: {usuario.nombre} como {usuario.rol}")
-    return {"id": usuario.id, "nombre": usuario.nombre, "rol": usuario.rol}
+    conflicto = sesiones_usuario.conflicto_de_sesion(db, usuario, datos.device_id)
+    if conflicto:
+        # El rollback deshace los cierres por RELEVO/EXPIRACION que la comprobación
+        # pudo dejar marcados: si no dejamos entrar, tampoco tocamos nada.
+        db.rollback()
+        logger.warning(f"🚫 LOGIN RECHAZADO (sesión en otra tablet): {usuario.nombre}")
+        return PlainTextResponse(conflicto, status_code=409)
+
+    sesion, token = sesiones_usuario.abrir(db, usuario, datos.device_id)
+    db.commit()
+
+    logger.info(
+        f"🔑 ACCESO CONCEDIDO: {usuario.nombre} como {usuario.rol} "
+        f"(tablet {sesion.device_id}, sesión {sesion.id})"
+    )
+    return {"id": usuario.id, "nombre": usuario.nombre, "rol": usuario.rol, "token": token}
 
 @router.post("/logout")
 def cerrar_sesion(datos: LogoutRequest, db: Session = Depends(get_db)):
@@ -46,8 +74,14 @@ def cerrar_sesion(datos: LogoutRequest, db: Session = Depends(get_db)):
         actualizados = db.query(DispositivoFCMDB).filter(
             DispositivoFCMDB.usuario_id == datos.usuario_id
         ).update({DispositivoFCMDB.usuario_id: None}, synchronize_session=False)
+        # Cerrar el turno libera el login único: sin esto el usuario no podría entrar
+        # en otra tablet hasta que la sesión caducara sola a las 9 h.
+        cerradas = sesiones_usuario.cerrar_por_logout(db, datos.usuario_id, datos.device_id)
         db.commit()
-        logger.info(f"🔒 Logout usuario {datos.usuario_id} (device {datos.device_id}); tokens desvinculados: {actualizados}")
+        logger.info(
+            f"🔒 Logout usuario {datos.usuario_id} (device {datos.device_id}); "
+            f"tokens desvinculados: {actualizados}; sesiones cerradas: {cerradas}"
+        )
         return {"mensaje": "Sesión cerrada"}
     except Exception as e:
         db.rollback()
