@@ -171,22 +171,52 @@ class MaquinaPresentacionVelocidadDB(Base):
 
 
 class InsumoDB(Base):
-    """Catálogo de insumos (materiales) que se pueden solicitar a bodega."""
+    """Catálogo de insumos (materiales) que se pueden solicitar a bodega.
+
+    Desde la v1.7.0 es la ÚNICA fuente de verdad: antes convivía con dos listas
+    quemadas en el APK (el modal del operario y el formulario de entrega proactiva
+    del insumista), que ni coincidían entre sí ni con esta tabla.
+    """
     __tablename__ = "insumos"
     id = Column(Integer, primary_key=True, index=True)
+    # Clave de origen del ERP: sin ella, la segunda carga no sabe si una fila es
+    # nueva o es la misma con el nombre retocado. UNIQUE pero admite varios NULL,
+    # porque un insumo creado a mano desde el admin no tiene código.
+    codigo_erp = Column(String(50), unique=True, nullable=True)
     nombre = Column(String(150), unique=True)
     categoria = Column(String(50))        # Ej: "Empaque Plástico", "Cartón"
+    # EMPAQUE | GRANEL. Decide a qué insumista le suena la alarma. Antes eso salía
+    # de buscar "granel"/"preten"/"polvo" DENTRO del texto libre del operario, así
+    # que un pedido de "Lámina para polvo" se iba a Granel.
+    bodega = Column(String(20), nullable=False, default="EMPAQUE")
     unidad_medida = Column(String(20))    # Ej: "Unidades", "Rollos", "Kg"
-    activo = Column(Boolean, default=True)
+    activo = Column(Boolean, nullable=False, default=True)
 
 class RecetaProductoDB(Base):
-    """BOM (Bill of Materials): qué insumos pertenecen a cada combinación de producto."""
+    """BOM (Bill of Materials): qué insumos pertenecen a cada combinación de producto.
+
+    NULL = COMODÍN en maquina/producto/marca/presentacion/fragancia, el mismo criterio
+    que `MaquinaProductoDB.producto`: la fila vale para cualquier valor de esa columna.
+    Con 7 productos x 11 marcas x 36 presentaciones x 9 fragancias, una fila por
+    combinación son decenas de miles que nadie mantendría a mano.
+    """
     __tablename__ = "recetas_productos"
     id = Column(Integer, primary_key=True, index=True)
+    # Hay diferencias que no se deducen del producto: la Máquina 7B usa sacos tejidos
+    # donde las demás usan lámina en rollo. Eso era un `if` contra el literal
+    # "Máquina 7B" quemado en el APK.
+    maquina = Column(String(100), nullable=True)
+    # Entró en la v1.7.0: la 1.6.0 metió el producto en la jerarquía del turno y el
+    # BOM se quedó cruzando solo marca+presentación.
+    producto = Column(String(100), nullable=True)
     marca = Column(String(100))
     presentacion = Column(String(100))
     fragancia = Column(String(100))
     insumo_id = Column(Integer, index=True)
+    # Con cuánto se precarga el pedido del operario. Entero: se piden millares de
+    # fundas o unidades de caja, nunca fracciones.
+    cantidad_sugerida = Column(Integer, nullable=False, default=1)
+    activo = Column(Boolean, nullable=False, default=True)
 
 class SesionTrabajoDB(Base):
     """Registro de cada turno/sesión de trabajo de un operador en una máquina."""
@@ -251,9 +281,18 @@ class PedidoBodegaDB(Base):
     """Tabla exclusiva para el MES: Solicitudes de operarios al Insumista"""
     __tablename__ = "pedidos_bodega"
     id = Column(Integer, primary_key=True, index=True)
+    # Idempotencia de la cola offline (CLAUDE.md §5). Hasta la v1.7.0 pedir un insumo
+    # era la ÚNICA operación del operario que exigía red: el botón se bloqueaba sin
+    # conexión. UNIQUE para que un reintento no cree dos pedidos.
+    request_id = Column(String(64), unique=True, index=True, nullable=True)
     session_id = Column(Integer, index=True)
+    # `detalle_pedido` NO se toca: es contrato congelado con la app y es lo que hace
+    # legible el histórico. Desde la v1.7.0 lo ESCRIBE EL SERVIDOR a partir de
+    # `insumo_id`, en vez de recibirlo tecleado por el operario.
     detalle_pedido = Column(String(255))
+    insumo_id = Column(Integer, nullable=True, index=True)
     cantidad_solicitada = Column(Integer)
+    unidad = Column(String(20), nullable=True)
     cantidad_entregada = Column(Integer, nullable=True)   # lo que el insumista dice que entregó
     cantidad_recibida = Column(Integer, nullable=True)    # lo que el operario dice que recibió
     
@@ -267,17 +306,38 @@ class PedidoBodegaDB(Base):
     fecha_entrega = Column(DateTime, nullable=True)
     fecha_confirmacion = Column(DateTime, nullable=True)
 
+    # Producción planificada contra la que se pidió (v1.7.0), cuando aplica.
+    plan_id = Column(Integer, nullable=True, index=True)
+    # OPERARIO | SUPERVISOR. Si el operario no estaba en la máquina y confirmó el
+    # supervisor, tiene que quedar escrito: hasta ahora el pedido cerrado parecía
+    # confirmado por un operario que nunca lo vio.
+    confirmado_por_tipo = Column(String(20), nullable=True)
+    confirmado_por_id = Column(Integer, nullable=True)
+
 class EntregaProactivaDB(Base):
     """Entregas de insumos registradas por el insumista sin pedido previo (planeación)."""
     __tablename__ = "entregas_proactivas"
     id = Column(Integer, primary_key=True, index=True)
+    request_id = Column(String(64), unique=True, index=True, nullable=True)
     insumista_id = Column(Integer, index=True)
     tipo_producto = Column(String(50))
     insumo = Column(String(255))
+    insumo_id = Column(Integer, nullable=True, index=True)
     cantidad = Column(Integer)
     maquina = Column(String(100))
+    # Hasta la v1.7.0 una entrega proactiva solo guardaba el NOMBRE de la máquina: el
+    # operario de esa máquina ni se enteraba de que le habían dejado material.
+    session_id = Column(Integer, nullable=True, index=True)
+    # Producción planificada sin máquina todavía asignada: se deja el material para
+    # que después cualquier máquina tome lo que necesite.
+    plan_id = Column(Integer, nullable=True, index=True)
     observaciones = Column(String(500), nullable=True)
     foto_path = Column(String(500), nullable=True)
+    # Registrada | Verificada | Rechazada — el supervisor confirma que lo entregado
+    # está donde dice la foto.
+    estado = Column(String(20), nullable=False, default="Registrada")
+    verificado_por = Column(Integer, nullable=True)
+    fecha_verificacion = Column(DateTime, nullable=True)
     fecha_hora = Column(DateTime, default=lambda: datetime.now())
 
 class AdministradorDB(Base):
@@ -470,3 +530,118 @@ class ConfigCorreoDB(Base):
 
     actualizado_en = Column(DateTime, nullable=True)
     actualizado_por = Column(String(150), nullable=True)
+
+
+# =============================================================================
+# Planificación de producción e insumos (v1.7.0)
+# =============================================================================
+
+class PlanProduccionDB(Base):
+    """Lo que producción planifica para un día.
+
+    `maquina` es NULL-able A PROPÓSITO y es el punto del que nace toda la función:
+    hay producción planificada que todavía no tiene máquina asignada, y el insumista
+    deja el material para que después cualquier máquina tome lo que necesite. Obligar
+    a elegir máquina aquí mataría justo ese caso.
+
+    producto/marca/presentacion/fragancia van como TEXTO y no como FK a los catálogos,
+    igual que `SesionTrabajoDB`: un plan es la foto de lo que se iba a hacer ese día y
+    no puede cambiar de contenido porque alguien renombre una marca.
+    """
+    __tablename__ = "planes_produccion"
+    id = Column(Integer, primary_key=True, index=True)
+    fecha = Column(Date, nullable=False, index=True)
+    turno = Column(String(20), nullable=True)
+    maquina = Column(String(100), nullable=True)
+    producto = Column(String(100), nullable=True)
+    marca = Column(String(100), nullable=True)
+    presentacion = Column(String(100), nullable=True)
+    fragancia = Column(String(100), nullable=True)
+    cantidad_planificada = Column(Integer, nullable=True)
+    unidad = Column(String(20), nullable=True)
+    # Planificado | En Curso | Completado | Cancelado
+    estado = Column(String(20), nullable=False, default="Planificado")
+    observaciones = Column(String(500), nullable=True)
+    creado_por = Column(String(100), nullable=True)
+    creado_en = Column(DateTime, default=lambda: datetime.now())
+
+
+class PlanInsumoDB(Base):
+    """Insumos que necesita un plan. Se generan explotando el BOM y quedan editables.
+
+    NO lleva `cantidad_entregada`: se calcula sumando las entregas de ese plan. Un
+    contador guardado habría que mantenerlo sincronizado a mano y se desfasaría en
+    cuanto el admin corrija una cantidad desde la web, que es justo lo que la pestaña
+    «Insumos» permite hacer hoy.
+    """
+    __tablename__ = "plan_insumos"
+    id = Column(Integer, primary_key=True, index=True)
+    plan_id = Column(Integer, ForeignKey("planes_produccion.id", ondelete="CASCADE"), nullable=False)
+    insumo_id = Column(Integer, ForeignKey("insumos.id"), nullable=False, index=True)
+    cantidad_requerida = Column(Integer, nullable=False, default=0)
+    # Normal | Alta | Urgente — la palanca del supervisor cuando el plan está por
+    # arrancar y ese material no ha llegado.
+    prioridad = Column(String(20), nullable=False, default="Normal")
+    observaciones = Column(String(500), nullable=True)
+    creado_en = Column(DateTime, default=lambda: datetime.now())
+
+    __table_args__ = (UniqueConstraint("plan_id", "insumo_id", name="uq_plan_insumo"),)
+
+
+class SesionUsuarioDB(Base):
+    """Turno de un insumista/supervisor en una tablet. Resuelve tres cosas a la vez:
+
+    a) LOGIN ÚNICO. `ModelosRed.kt` decía que `device_id` bloqueaba el segundo login
+       del mismo usuario desde otra tablet y que el server auto-liberaba a las 9 h.
+       Nada de eso existía: `/api/login` ni miraba el campo.
+    b) AUTORIZACIÓN. `GET /api/insumos/pendientes/{rol}` recibía el rol COMO TEXTO
+       desde el cliente. Con el token, el servidor deduce quién es y qué bodega le
+       toca en vez de creerle.
+    c) PRESENCIA. «Qué insumistas están de turno», que el supervisor necesita ver.
+
+    El token va EN LA BASE y no en memoria como el `_TOKENS` del admin, que se vacía en
+    cada `systemctl restart sigep`: a un admin en su escritorio volver a loguearse le
+    cuesta nada; a un insumista con la tablet en el bolsillo a media jornada, no.
+
+    Historial en filas y no columnas en `UsuarioDB`: la sesión ya cerrada es justo el
+    dato que hace falta para saber quién estuvo de turno ayer.
+    """
+    __tablename__ = "sesiones_usuario"
+    id = Column(Integer, primary_key=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    device_id = Column(String(100), nullable=False)
+    token = Column(String(64), unique=True, nullable=False, index=True)
+    rol = Column(String(50), nullable=True)
+    inicio = Column(DateTime, default=lambda: datetime.now())
+    ultimo_visto = Column(DateTime, default=lambda: datetime.now())
+    # NULL = sesión abierta. Es el filtro de «quién está de turno ahora».
+    fin = Column(DateTime, nullable=True)
+    # LOGOUT | RELEVO | EXPIRACION | GC
+    cerrada_por = Column(String(30), nullable=True)
+
+
+class MensajeBodegaDB(Base):
+    """Chat supervisor <-> insumista, con historial.
+
+    Tabla aparte de `MensajeTabletDB` (CAMBIO 4) porque aquella es admin -> tablet de
+    PRODUCCIÓN, de un solo sentido y colgada de `sesion_id`. Esta es bidireccional y
+    entre personas, no entre una persona y una máquina.
+
+    Los dos extremos viven en tablas DISTINTAS y por eso hay dos columnas y no una:
+    los supervisores entran por `administradores` (`/api/admin/login`) y los insumistas
+    por `usuarios` (`/api/login`, por PIN).
+
+    `insumista_id` NULL = difusión a todos los de turno. La conversación es el par
+    (supervisor_id, insumista_id), así que cada insumista ve solo la suya.
+
+    Sin borrado: el historial es el punto — para eso se pidió trazabilidad.
+    """
+    __tablename__ = "mensajes_bodega"
+    id = Column(Integer, primary_key=True, index=True)
+    supervisor_id = Column(Integer, ForeignKey("administradores.id"), nullable=True, index=True)
+    insumista_id = Column(Integer, ForeignKey("usuarios.id"), nullable=True, index=True)
+    # SUPERVISOR | INSUMISTA
+    emisor = Column(String(20), nullable=False)
+    texto = Column(String(500), nullable=False)
+    creado_en = Column(DateTime, default=lambda: datetime.now())
+    leido_en = Column(DateTime, nullable=True)
