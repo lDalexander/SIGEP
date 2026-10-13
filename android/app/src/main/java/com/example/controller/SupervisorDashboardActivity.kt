@@ -11,6 +11,10 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updatePadding
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -82,6 +86,7 @@ class SupervisorDashboardActivity : AppCompatActivity() {
         btnSalir     = findViewById(R.id.btnSalirSupervisor)
 
         rvDashboard.layoutManager = LinearLayoutManager(this)
+        pegarBarraAlBorde()
 
         configurarSegunRol()
         cargarDatos()
@@ -114,6 +119,36 @@ class SupervisorDashboardActivity : AppCompatActivity() {
     private fun configurarSegunRol() {
         if (rolUsuario == "SUPERVISOR_BODEGA" || rolUsuario == "ADMINBODEGA") activarVistaInsumistas()
         else activarVistaPlanta()
+    }
+
+    /**
+     * La barra de vistas llega hasta los botones del sistema, sin franja clara entre medio.
+     *
+     * `SigepApplication` rellena por abajo el contenido de TODAS las activities con el alto
+     * de la barra de navegación del sistema, y ese hueco salía con el fondo claro de la
+     * ventana debajo de la barra oscura. Aquí ese relleno inferior lo pone la propia barra,
+     * así su color se extiende por detrás de los botones. Se consume el inset para que ni
+     * el layout ni el BottomNavigationView (que lo aplica por su cuenta) lo sumen otra vez.
+     */
+    private fun pegarBarraAlBorde() {
+        val content = findViewById<View>(android.R.id.content)
+        ViewCompat.setOnApplyWindowInsetsListener(content) { v, insets ->
+            val barras = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            v.setPadding(barras.left, barras.top, barras.right, 0)
+            navVistas.updatePadding(bottom = barras.bottom)
+            WindowInsetsCompat.CONSUMED
+        }
+        ViewCompat.requestApplyInsets(content)
+
+        // Botones del sistema en claro sobre la barra oscura, y sin el velo gris que
+        // Android pone por defecto sobre la navegación de 3 botones.
+        WindowCompat.getInsetsController(window, window.decorView)
+            .isAppearanceLightNavigationBars = false
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+        }
     }
 
     private fun idDeVista(vista: String): Int = when (vista) {

@@ -4,8 +4,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="#F0F2F5"
-    android:fitsSystemWindows="true">
+    android:background="#F0F2F5">
 
     <!-- Header Panel: solo el título y SALIR. El cambio de vista bajó a la barra inferior
          porque los dos botones juntos dejaban el título cortado a la mitad. -->
