@@ -37,6 +37,43 @@ SIGEP/
 
 ## 0. Estado actual
 
+**Módulo de insumos rehecho — v1.7.0** (2026-10-12). Tres fases cerradas y en
+producción; la app está en `versionCode` 14 pero **todavía no instalada en las tablets**.
+
+- **El catálogo de insumos es la única fuente de verdad.** Antes vivía triplicado: la
+  tabla `insumos`, una lista quemada en el modal del operario y otra distinta en el
+  formulario del insumista. Añadir un insumo exigía publicar un APK.
+- **`insumos.bodega` (EMPAQUE/GRANEL) decide a qué insumista le suena la alarma.** Antes
+  se adivinaba buscando «granel»/«preten»/«polvo» dentro del texto que tecleaba el
+  operario, así que «Lámina para polvo» se iba a Granel.
+- **El BOM (`recetas_productos`) cruza las cinco dimensiones** (máquina, producto, marca,
+  presentación, fragancia) con `NULL` = comodín. Antes miraba solo marca y presentación
+  e ignoraba la fragancia que ya tenía en su propia columna. Si nada casa devuelve el
+  catálogo completo y lo deja en el log (`BOM vacío para la sesión …`), que de paso es la
+  lista de combinaciones sin recetar.
+- **Login único real.** `device_id` llevaba desde la 1.5 viajando desde la app sin que el
+  backend lo mirase. Ahora un segundo login en otra tablet devuelve **409** (que
+  `LoginActivity` ya sabía manejar). Misma tablet = relevo; sesión de +9 h = se libera.
+- **Token de sesión en `sesiones_usuario`**, no en memoria como el `_TOKENS` del admin.
+  Con `X-User-Token` el servidor deduce quién pregunta en vez de creerle al rol que
+  viaja en la URL. **Sin token se mantiene el comportamiento anterior** mientras queden
+  tablets 1.6.0 (el log lo anota: `servida SIN token`).
+- **Los avisos del pedido salen por un helper único** (`services/notificaciones_pedido.py`)
+  hacia el insumista (canal de bodega) y hacia la tablet del operario (WS de CAMBIO 4).
+  `/entregar` y `/confirmar_recepcion` no avisaban a nadie. El sondeo se queda de respaldo.
+- **La foto de la entrega proactiva es obligatoria en el servidor**, no solo en la app.
+- **Pedir un insumo entra en la cola offline** (`request_id`). Era la única escritura del
+  operario que exigía red.
+
+Migración: `api_produccion/alter_insumos_v17.sql` (idempotente, ya aplicada). Importador
+del catálogo y del BOM: `api_produccion/importar_catalogo.py` + `plantillas/`. Regresión
+de los avisos: `pruebas/prueba_ws_pedidos.py`.
+
+**Pendiente:** cargar el catálogo real del ERP, y las fases 4 (planificación de
+producción), 5 (supervisor en la app) y 6 (la vista `/insumos` de la web, hoy un card
+vacío en `App.js`).
+
+
 **Entorno de pruebas en Docker y respaldo diario en dos archivos** (2026-10-08). No toca
 `api_produccion/`, la BD ni el despliegue: son archivos nuevos (`pruebas/`) y el script
 de respaldo.

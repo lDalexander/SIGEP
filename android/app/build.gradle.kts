@@ -27,8 +27,8 @@ android {
         applicationId = "com.example.controller"
         minSdk = 24
         targetSdk = 36
-        versionCode = 13
-        versionName = "1.6.0"
+        versionCode = 14
+        versionName = "1.7.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
