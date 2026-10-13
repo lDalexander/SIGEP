@@ -210,7 +210,8 @@ Cinco, cuatro de ellos introducidos durante este trabajo y cazados por las prueb
 | Backend | ✅ desplegado (última recarga 20:4x) |
 | Web — pestaña Planificación | ✅ en vivo |
 | Web — vista `/insumos` | ✅ en vivo (`main.6532d566.js`) |
-| App 1.7.0 | ✅ compilada y firmada · ⏳ **sin instalar en las tablets** |
+| App 1.7.0 | ✅ compilada y firmada · sustituida por la 1.7.1 |
+| App 1.7.1 | ✅ **instalada y verificada en planta** (2026-10-13) |
 
 Respaldos: volcado previo de la BD en `backups/`, y el `build/` anterior de la web en
 `~/workspace/archive/builds/respaldos_build_sigep/`.
@@ -225,9 +226,8 @@ reconectaron solas.
 
 ### Lo que bloquea que la planta lo use
 
-1. **Instalar el APK 1.7.0 en las tablets** (sideload, una por una). Hasta entonces
-   corre la 1.6.0; el backend es retrocompatible, así que la planta funciona, pero nadie
-   ve lo de las fases 3 a 5.
+1. ~~**Instalar el APK en las tablets**~~ — **hecho**: la **1.7.1** se instaló y se
+   verificó en planta el 2026-10-13.
 2. **Cargar el catálogo del ERP** en `plantillas/insumos.csv` y `plantillas/recetas.csv`.
    Mientras estén vacíos, el BOM no casa y el operario ve el catálogo completo.
    - La columna **`bodega`** es la única que no sale del ERP: hay que ponerla a mano y

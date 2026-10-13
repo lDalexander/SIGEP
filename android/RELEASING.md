@@ -85,8 +85,8 @@ que es preferible a producir en silencio un APK con la firma equivocada.
 Edita `app/build.gradle.kts` → bloque `defaultConfig`:
 
 ```kotlin
-versionCode = 14           // SIEMPRE +1 respecto a la versión anterior (última: 14)
-versionName = "1.7.0"      // versión legible (semver) — última publicada: 1.6.0
+versionCode = 15           // SIEMPRE +1 respecto a la versión anterior (última: 15)
+versionName = "1.7.1"      // versión legible (semver) — última publicada: 1.7.1 (instalada 2026-10-13)
 ```
 
 Reglas:

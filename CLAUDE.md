@@ -38,7 +38,8 @@ SIGEP/
 ## 0. Estado actual
 
 **Módulo de insumos rehecho — v1.7.0** (2026-10-12). Tres fases cerradas y en
-producción; la app está en `versionCode` 15 (1.7.1: el supervisor entra con contraseña, no PIN) pero **todavía no instalada en las tablets**.
+producción; la app está en `versionCode` 15 (1.7.1: el supervisor entra con contraseña, no PIN),
+**instalada y verificada en planta el 2026-10-13**. Es la versión estable de referencia (tag `v1.7.1`).
 
 - **El catálogo de insumos es la única fuente de verdad.** Antes vivía triplicado: la
   tabla `insumos`, una lista quemada en el modal del operario y otra distinta en el
