@@ -67,6 +67,7 @@ class BandejaInsumosActivity : AppCompatActivity() {
     private lateinit var tvUsuarioLogueado: TextView
     private lateinit var btnCerrarSesion: Button
     private lateinit var btnEntregarInsumo: Button
+    private lateinit var btnHistorialEntregas: Button
 
     private var usuarioId: Int = -1
     private var usuarioRol: String = ""
@@ -77,6 +78,11 @@ class BandejaInsumosActivity : AppCompatActivity() {
     private var fotoFile: File? = null
     private var tvFotoEstado: TextView? = null
     private var listaMaquinas: List<String> = emptyList()
+
+    // Catálogo de la bodega de este insumista. Sustituye a las listas que estaban
+    // quemadas en el formulario de entrega (`["Cajas","Botellas","Fajillas",...]`),
+    // que no coincidían ni con las del operario ni con la tabla `insumos`.
+    private var catalogoInsumos: List<InsumoResponse> = emptyList()
     private lateinit var launcherCamara: ActivityResultLauncher<Uri>
     private lateinit var launcherGaleria: ActivityResultLauncher<String>
 
@@ -135,6 +141,7 @@ class BandejaInsumosActivity : AppCompatActivity() {
         tvUsuarioLogueado = findViewById(R.id.tvUsuarioLogueado)
         btnCerrarSesion   = findViewById(R.id.btnCerrarSesion)
         btnEntregarInsumo = findViewById(R.id.btnEntregarInsumo)
+        btnHistorialEntregas = findViewById(R.id.btnHistorialEntregas)
 
         val prefs = getSharedPreferences("DetcuadorPrefs", MODE_PRIVATE)
         usuarioId         = prefs.getInt("usuario_id", -1)
@@ -162,7 +169,9 @@ class BandejaInsumosActivity : AppCompatActivity() {
 
         btnCerrarSesion.setOnClickListener { cerrarSesion("Sesión cerrada correctamente") }
         btnEntregarInsumo.setOnClickListener { abrirFormularioEntregaProactiva() }
+        btnHistorialEntregas.setOnClickListener { mostrarHistorialEntregas() }
         cargarMaquinas()
+        cargarCatalogoInsumos()
 
         vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as android.os.VibratorManager).defaultVibrator
@@ -596,6 +605,78 @@ class BandejaInsumosActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Descarga el catálogo de la bodega de este insumista y lo cachea.
+     *
+     * Se cachea por la misma razón que el BOM del operario: el formulario de entrega
+     * tiene que poder abrirse sin red. Un insumista que ya dejó el material en la
+     * máquina no puede quedarse sin poder registrarlo porque el wifi falle.
+     */
+    private fun cargarCatalogoInsumos() {
+        val prefs = getSharedPreferences("SIGEP_CATALOGOS", MODE_PRIVATE)
+        val tipoLista = object : com.google.gson.reflect.TypeToken<List<InsumoResponse>>() {}.type
+        try {
+            val json = prefs.getString("cache_catalogo_insumos", null)
+            if (!json.isNullOrBlank()) {
+                catalogoInsumos = com.google.gson.Gson().fromJson(json, tipoLista)
+            }
+        } catch (e: Exception) {
+            ErrorReporter.warn("Catalogo", "Caché de catálogo ilegible: ${e.message}")
+        }
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val resp = RetrofitClient.apiService.obtenerCatalogoInsumos(tipoInsumoUsuario)
+                val lista = resp.body()
+                if (resp.isSuccessful && lista != null && lista.isNotEmpty()) {
+                    withContext(Dispatchers.Main) { catalogoInsumos = lista }
+                    prefs.edit().putString("cache_catalogo_insumos", com.google.gson.Gson().toJson(lista)).apply()
+                }
+            } catch (e: Exception) {
+                ErrorReporter.warn("Catalogo", "No se pudo actualizar el catálogo — se usa la caché: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Lo que este insumista ha entregado (últimas 20).
+     *
+     * El endpoint existía desde antes y la app nunca lo llamaba, así que el insumista
+     * no tenía forma de comprobar si una entrega se había registrado: la registraba y
+     * se quedaba sin saber. Con la cola de trabajo de un turno completo, eso lleva a
+     * registrar dos veces lo mismo por si acaso.
+     */
+    private fun mostrarHistorialEntregas() {
+        val dialogo = AlertDialog.Builder(this)
+            .setTitle("Mis entregas")
+            .setMessage("Consultando…")
+            .setPositiveButton("Cerrar", null)
+            .show()
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            val texto = try {
+                val resp = RetrofitClient.apiService.obtenerEntregasProactivas(usuarioId)
+                val lista = resp.body()
+                when {
+                    !resp.isSuccessful -> "No se pudo consultar (HTTP ${resp.code()})."
+                    lista.isNullOrEmpty() -> "Todavía no has registrado ninguna entrega."
+                    else -> lista.joinToString("\n\n") { e ->
+                        buildString {
+                            append("• ${e.cantidad} x ${e.insumo}\n")
+                            append("   ${e.maquina} · ${e.fecha_hora}")
+                            if (e.foto_path.isNullOrBlank()) append("\n   ⚠️ sin foto")
+                            if (!e.observaciones.isNullOrBlank()) append("\n   «${e.observaciones}»")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                ErrorReporter.warn("Historial", "Fallo al consultar entregas: ${e.message}")
+                "Sin conexión. Intenta de nuevo cuando haya red."
+            }
+            withContext(Dispatchers.Main) { dialogo.setMessage(texto) }
+        }
+    }
+
     private fun crearArchivoTemporal(): File {
         val nombre = "SIGEP_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}"
         val dir = getExternalFilesDir(Environment.DIRECTORY_PICTURES)
@@ -622,26 +703,28 @@ class BandejaInsumosActivity : AppCompatActivity() {
             spinnerTipo.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, listOf("Sólido", "Líquido"))
         }
 
-        // Insumo
+        // Insumo — del catálogo de la bodega, no de una lista quemada.
         cont.addView(TextView(this).apply { text = "Insumo:"; setTypeface(null, android.graphics.Typeface.BOLD); setPadding(0, 20, 0, 0) })
         val spinnerInsumo = Spinner(this).also { cont.addView(it) }
 
-        fun actualizarInsumos(tipo: String) {
-            val opciones = when {
-                esGranel        -> listOf("Materia Prima", "Preten")
-                tipo == "Sólido" -> listOf("Lámina")
-                else            -> listOf("Cajas", "Botellas", "Fajillas", "Etiquetas", "Tapas")
-            }
-            spinnerInsumo.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, opciones)
+        // Lista mínima de emergencia: solo si la tablet nunca pudo descargar el
+        // catálogo. Sin esto el formulario quedaría vacío y el insumista no podría
+        // registrar el material que ya dejó en la máquina.
+        val deEmergencia = catalogoInsumos.isEmpty()
+        if (deEmergencia) {
+            cont.addView(TextView(this).apply {
+                text = "Sin catálogo descargado — lista básica"
+                setTextColor(android.graphics.Color.parseColor("#B26A00"))
+                textSize = 12f
+            })
         }
-        actualizarInsumos(if (esGranel) "Líquido" else "Sólido")
-
-        spinnerTipo?.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                actualizarInsumos(spinnerTipo.selectedItem.toString())
-            }
-            override fun onNothingSelected(p: AdapterView<*>?) {}
+        val etiquetasInsumo = if (deEmergencia) {
+            if (esGranel) listOf("Materia Prima", "Preten")
+            else listOf("Cajas", "Botellas", "Fajillas", "Etiquetas", "Tapas")
+        } else {
+            catalogoInsumos.map { if (it.unidad.isBlank()) it.nombre else "${it.nombre}  (${it.unidad})" }
         }
+        spinnerInsumo.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, etiquetasInsumo)
 
         // Máquina
         cont.addView(TextView(this).apply { text = "Máquina destino:"; setTypeface(null, android.graphics.Typeface.BOLD); setPadding(0, 20, 0, 0) })
@@ -706,16 +789,22 @@ class BandejaInsumosActivity : AppCompatActivity() {
                     return@setPositiveButton
                 }
                 val tipo  = spinnerTipo?.selectedItem?.toString() ?: "Líquido"
-                val ins   = spinnerInsumo.selectedItem?.toString() ?: ""
+                val pos   = spinnerInsumo.selectedItemPosition
+                val delCatalogo = if (deEmergencia) null else catalogoInsumos.getOrNull(pos)
+                // El servidor reescribe el nombre desde el catálogo cuando va `insumo_id`;
+                // se manda igual porque es lo que se lee en el dashboard y en el Excel.
+                val ins   = delCatalogo?.nombre ?: spinnerInsumo.selectedItem?.toString() ?: ""
                 val obs   = etObs.text.toString().trim().ifEmpty { null }
-                enviarEntregaProactiva(tipo, ins, cantidad, maq, obs)
+                enviarEntregaProactiva(tipo, ins, cantidad, maq, obs, delCatalogo?.id)
             }
             .setNegativeButton("Cancelar", null)
             .setOnDismissListener { tvFotoEstado = null }
             .show()
     }
 
-    private fun enviarEntregaProactiva(tipo: String, insumo: String, cantidad: Int, maquina: String, obs: String?) {
+    private fun enviarEntregaProactiva(
+        tipo: String, insumo: String, cantidad: Int, maquina: String, obs: String?, insumoId: Int? = null
+    ) {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val fotoPart: MultipartBody.Part? = fotoUri?.let { uri ->
@@ -724,6 +813,10 @@ class BandejaInsumosActivity : AppCompatActivity() {
                     val body = bytes.toRequestBody("image/jpeg".toMediaType())
                     MultipartBody.Part.createFormData("foto", "entrega_${usuarioId}.jpg", body)
                 }
+                // request_id generado aquí y no en el servidor: la entrega lleva foto,
+                // así que un reintento por red lenta subiría el archivo dos veces y
+                // dejaría dos registros de la misma entrega.
+                val idPeticion = java.util.UUID.randomUUID().toString()
                 val resp = RetrofitClient.apiService.registrarEntregaProactiva(
                     insumistaId   = usuarioId.toString().toRequestBody("text/plain".toMediaType()),
                     tipoProducto  = tipo.toRequestBody("text/plain".toMediaType()),
@@ -731,6 +824,8 @@ class BandejaInsumosActivity : AppCompatActivity() {
                     cantidad      = cantidad.toString().toRequestBody("text/plain".toMediaType()),
                     maquina       = maquina.toRequestBody("text/plain".toMediaType()),
                     observaciones = obs?.toRequestBody("text/plain".toMediaType()),
+                    insumoId      = insumoId?.toString()?.toRequestBody("text/plain".toMediaType()),
+                    requestId     = idPeticion.toRequestBody("text/plain".toMediaType()),
                     foto          = fotoPart
                 )
                 withContext(Dispatchers.Main) {

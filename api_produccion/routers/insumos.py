@@ -453,8 +453,13 @@ def registrar_entrega_proactiva(
     cantidad: int = Form(...),
     maquina: str = Form(...),
     observaciones: str = Form(None),
+    # v1.7.0, opcionales: una tablet anterior no los manda y la entrega se registra
+    # igual, solo que sin quedar atada al catálogo.
+    insumo_id: int = Form(None),
+    request_id: str = Form(None),
     foto: UploadFile = File(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    token: str = Depends(sesiones_usuario.token_de_cabecera),
 ):
     """Registra una entrega de insumo sin pedido previo (planeación).
 
@@ -465,6 +470,30 @@ def registrar_entrega_proactiva(
     """
     if tipo_producto not in ("Sólido", "Líquido"):
         raise HTTPException(status_code=400, detail="tipo_producto debe ser 'Sólido' o 'Líquido'")
+
+    # Idempotencia: la entrega lleva foto, así que un reintento por red lenta subiría
+    # el archivo dos veces y dejaría dos registros de la misma entrega.
+    if request_id:
+        ya = db.query(EntregaProactivaDB).filter(
+            EntregaProactivaDB.request_id == request_id
+        ).first()
+        if ya:
+            logger.info(f"↩️ Entrega proactiva duplicada ignorada (request_id={request_id})")
+            return {"id": ya.id, "mensaje": "Entrega ya registrada", "foto_url": ya.foto_path}
+
+    # El insumista real sale del token cuando lo hay: `insumista_id` viene en el
+    # formulario, o sea que lo elige el cliente, y con él se firman las entregas.
+    sesion_usuario = sesiones_usuario.resolver_token(db, token)
+    if sesion_usuario is not None:
+        insumista_id = sesion_usuario.usuario_id
+
+    if insumo_id is not None:
+        catalogo = db.query(InsumoDB).filter(InsumoDB.id == insumo_id).first()
+        if catalogo is None:
+            raise HTTPException(status_code=404, detail="El insumo no existe en el catálogo")
+        # El nombre se reescribe desde el catálogo: `insumo` es texto libre del
+        # formulario y es lo que se lee en el dashboard y en el Excel.
+        insumo = catalogo.nombre
 
     maquina_db = db.query(MaquinaDB).filter(
         MaquinaDB.nombre == maquina, MaquinaDB.activa.is_(True)
@@ -485,9 +514,11 @@ def registrar_entrega_proactiva(
 
     try:
         nueva_entrega = EntregaProactivaDB(
+            request_id=request_id,
             insumista_id=insumista_id,
             tipo_producto=tipo_producto,
             insumo=insumo,
+            insumo_id=insumo_id,
             cantidad=cantidad,
             maquina=maquina,
             observaciones=observaciones,

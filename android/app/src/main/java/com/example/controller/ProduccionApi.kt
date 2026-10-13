@@ -149,8 +149,22 @@ interface ProduccionApi {
         @Part("cantidad")      cantidad: RequestBody,
         @Part("maquina")       maquina: RequestBody,
         @Part("observaciones") observaciones: RequestBody?,
+        // v1.7.0: ata la entrega al catálogo y la hace idempotente. Opcionales en el
+        // servidor, así que una tablet anterior sigue registrando igual.
+        @Part("insumo_id")     insumoId: RequestBody?,
+        @Part("request_id")    requestId: RequestBody?,
         @Part foto: MultipartBody.Part?
     ): Response<EntregaProactivaResponse>
+
+    /**
+     * Catálogo de insumos de la bodega del insumista (v1.7.0).
+     *
+     * El operario filtra por el BOM de su turno; el insumista no tiene turno contra el
+     * que filtrar, así que necesita el catálogo entero de su bodega. Con token, el
+     * servidor deduce la bodega y el parámetro sobra.
+     */
+    @GET("/api/insumos/catalogo")
+    suspend fun obtenerCatalogoInsumos(@Query("bodega") bodega: String? = null): Response<List<InsumoResponse>>
 
     @GET("/api/insumos/entregas_proactivas/{insumista_id}")
     suspend fun obtenerEntregasProactivas(@Path("insumista_id") insumistaId: Int): Response<List<EntregaProactivaHistorial>>
