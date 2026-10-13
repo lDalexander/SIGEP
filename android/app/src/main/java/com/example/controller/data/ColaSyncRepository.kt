@@ -104,6 +104,28 @@ class ColaSyncRepository(private val context: Context) {
         dispararSync()
     }
 
+    /**
+     * Pedido de insumo a bodega (v1.7.0).
+     *
+     * Hasta ahora esta era la ÚNICA operación del operario que iba a fuego por Retrofit
+     * y exigía red: el botón se bloqueaba sin conexión con un «Debe tener red para
+     * solicitar insumos». Un operario sin cobertura se quedaba sin poder pedir fundas.
+     *
+     * Con `sesion_id = -99` la cascada del SyncWorker lo reescribe igual que a las
+     * pacas: no hace falta nada especial aquí porque la consulta que busca dependientes
+     * mira el payload, no el tipo.
+     */
+    suspend fun enqueueSolicitarInsumo(req: SolicitarInsumoRequest) {
+        val requestId = req.request_id.ifBlank { UUID.randomUUID().toString() }
+        dao.insertar(OperacionPendiente(
+            tipo        = "SOLICITAR_INSUMO",
+            payloadJson = gson.toJson(req.copy(request_id = requestId)),
+            requestId   = requestId,
+            creadoEn    = System.currentTimeMillis()
+        ))
+        dispararSync()
+    }
+
     suspend fun enqueueReporteApp(req: ReporteAppRequest) {
         val requestId = req.request_id.ifBlank { UUID.randomUUID().toString() }
         dao.insertar(OperacionPendiente(

@@ -184,13 +184,25 @@ data class InsumoResponse(
     val id: Int,
     val nombre: String,
     val categoria: String,
-    val unidad: String
+    val unidad: String,
+    // Añadidos en la v1.7.0. Con valor por defecto para que un servidor anterior,
+    // que no los manda, no rompa la deserialización.
+    val bodega: String = "EMPAQUE",
+    val cantidad_sugerida: Int = 1
 )
 
 data class SolicitarInsumoRequest(
     val sesion_id: Int,
+    // El servidor lo reescribe desde el catálogo cuando viaja `insumo_id`, pero se
+    // sigue mandando: es contrato congelado y lo que hace legible el histórico.
     val detalle_pedido: String,
-    val cantidad: Int
+    val cantidad: Int,
+    // v1.7.0: referencia al catálogo. Con esto el servidor enruta por `insumos.bodega`
+    // en vez de buscar "granel"/"preten"/"polvo" dentro del texto. Nulo cuando la
+    // tablet no pudo descargar el BOM y hubo que caer a la lista mínima.
+    val insumo_id: Int? = null,
+    // v1.7.0: idempotencia de la cola offline.
+    val request_id: String = ""
 )
 
 // --- MÓDULO DE LOGIN (INSUMISTAS) ---

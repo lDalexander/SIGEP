@@ -138,6 +138,15 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
                 if (!resp.isSuccessful) throw HttpException(resp)
                 null
             }
+            "SOLICITAR_INSUMO" -> {
+                // Pedido de insumo a bodega (v1.7.0). Idempotente por request_id: el
+                // backend responde 200 con duplicado:true si ya lo había registrado.
+                var req = gson.fromJson(op.payloadJson, SolicitarInsumoRequest::class.java)
+                if (req.sesion_id == -99 && pendingSesionId != null) req = req.copy(sesion_id = pendingSesionId)
+                val resp = api.solicitarInsumo(req)
+                if (!resp.isSuccessful) throw HttpException(resp)
+                null
+            }
             "COMENTARIO_TURNO" -> {
                 // Comentario libre del turno (CAMBIO 5). Idempotente por request_id;
                 // el backend responde 200 también ante duplicado.

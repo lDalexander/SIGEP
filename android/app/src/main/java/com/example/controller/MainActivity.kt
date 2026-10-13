@@ -56,6 +56,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnComentarioTurno: Button
     private lateinit var btnReporteApp: Button
     private lateinit var colaRepo: ColaSyncRepository
+
+    // Insumos que el turno actual puede pedir (BOM del servidor). Reemplaza a la lista
+    // que estaba quemada en `abrirModalInsumosInteligente`, donde añadir un insumo
+    // exigía publicar un APK. Se cachea en disco porque el modal tiene que funcionar
+    // sin red: la tablet puede pasar horas sin cobertura dentro de la planta.
+    private var insumosPermitidos: List<InsumoResponse> = emptyList()
     private lateinit var connectivityObserver: ConnectivityObserver
     private lateinit var tabletsWsManager: TabletsWebSocketManager
     private lateinit var tvBadge: android.widget.TextView
@@ -494,7 +500,48 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Descarga el BOM del turno y lo deja cacheado para el modal de pedidos.
+     *
+     * Se guarda en disco porque el modal tiene que abrirse sin red. La caché es por
+     * sesión: dos turnos distintos producen cosas distintas y mezclarlas haría que el
+     * operario viera insumos que no son de lo que está corriendo.
+     */
+    private fun cargarInsumosPermitidos(sesionId: Int) {
+        val prefs = getSharedPreferences("SIGEP_CATALOGOS", MODE_PRIVATE)
+        val tipoLista = object : com.google.gson.reflect.TypeToken<List<InsumoResponse>>() {}.type
+
+        // Primero la caché, para que el modal nunca dependa de que la descarga llegue.
+        if (prefs.getInt("cache_bom_sesion", -1) == sesionId) {
+            try {
+                val json = prefs.getString("cache_bom", null)
+                if (!json.isNullOrBlank()) insumosPermitidos = Gson().fromJson(json, tipoLista)
+            } catch (e: Exception) {
+                ErrorReporter.warn("BOM", "Caché de insumos ilegible: ${e.message}")
+            }
+        }
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val resp = RetrofitClient.apiService.obtenerInsumosPermitidos(sesionId)
+                val lista = resp.body()
+                if (resp.isSuccessful && lista != null && lista.isNotEmpty()) {
+                    withContext(Dispatchers.Main) { insumosPermitidos = lista }
+                    prefs.edit()
+                        .putInt("cache_bom_sesion", sesionId)
+                        .putString("cache_bom", Gson().toJson(lista))
+                        .apply()
+                }
+            } catch (e: Exception) {
+                // Sin red se sigue con lo que haya en caché. No se avisa al operario:
+                // no ha pedido nada todavía y no puede hacer nada al respecto.
+                ErrorReporter.warn("BOM", "No se pudo actualizar el BOM — se usa la caché: ${e.message}")
+            }
+        }
+    }
+
     private fun iniciarRadarStatusPedidos(sesionId: Int) {
+        cargarInsumosPermitidos(sesionId)
         lifecycleScope.launch(Dispatchers.IO) {
             var ciclo = 0
             while (isActive) {
@@ -1008,8 +1055,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnSolicitarInsumo.setOnClickListener {
-            if (sesionActualId == null || sesionActualId == -99) {
-                Toast.makeText(this, "Debe tener red para solicitar insumos.", Toast.LENGTH_SHORT).show()
+            // Ya no se exige red: el pedido entra en la cola offline como las pacas.
+            // Solo se bloquea si NO hay turno; con sesión local (-99) se deja pasar y
+            // la cascada del SyncWorker le pone el id real cuando el turno se cree.
+            if (sesionActualId == null) {
+                Toast.makeText(this, "Inicie un turno antes de solicitar insumos.", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             abrirModalInsumosInteligente()
@@ -2440,36 +2490,56 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Lista mínima de emergencia, la que estaba quemada hasta la v1.7.0.
+     *
+     * Solo se usa si la tablet NUNCA ha conseguido descargar el BOM de este turno (y no
+     * tiene caché). Es peor que el catálogo —el pedido viaja sin `insumo_id`, así que el
+     * servidor tiene que adivinar la bodega por el texto— pero dejar el modal vacío
+     * sería peor todavía: el operario no podría pedir nada y la línea se para.
+     */
+    private fun insumosDeEmergencia(maquina: String): List<String> =
+        if (maquina == "Máquina 7B") listOf("Sacos Tejidos", "Materia Prima (Granel)")
+        else listOf("Lámina (Rollo)", "Materia Prima (Granel)")
+
     private fun abrirModalInsumosInteligente() {
         val contenedor = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(50, 40, 50, 20)
         }
 
-        val tituloSpinner = TextView(this).apply {
+        val maquinaActual = spinnerMaquina.selectedItem?.toString().orEmpty()
+        val bom = insumosPermitidos
+        val deEmergencia = bom.isEmpty()
+
+        contenedor.addView(TextView(this).apply {
             text = "Insumo Requerido:"
             setTypeface(null, android.graphics.Typeface.BOLD)
+        })
+
+        if (deEmergencia) {
+            contenedor.addView(TextView(this).apply {
+                text = "Sin catálogo descargado — lista básica"
+                setTextColor(android.graphics.Color.parseColor("#B26A00"))
+                textSize = 12f
+            })
         }
-        contenedor.addView(tituloSpinner)
+
+        // La unidad va en la etiqueta porque «3» significa cosas muy distintas en
+        // millares de fundas que en rollos de lámina.
+        val etiquetas = if (deEmergencia) insumosDeEmergencia(maquinaActual)
+                        else bom.map { if (it.unidad.isBlank()) it.nombre else "${it.nombre}  (${it.unidad})" }
 
         val spinnerInsumos = Spinner(this)
-        val maquinaActual = spinnerMaquina.selectedItem.toString()
-        // La Máquina 7B usa sacos tejidos; las demás usan lámina en rollo.
-        val opcionesInsumo = if (maquinaActual == "Máquina 7B") {
-            mutableListOf("Sacos Tejidos", "Materia Prima (Granel)")
-        } else {
-            mutableListOf("Lámina (Rollo)", "Materia Prima (Granel)")
-        }
-        spinnerInsumos.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, opcionesInsumo)
+        spinnerInsumos.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, etiquetas)
         spinnerInsumos.setPadding(0, 0, 0, 30)
         contenedor.addView(spinnerInsumos)
 
-        val tituloCantidad = TextView(this).apply {
+        contenedor.addView(TextView(this).apply {
             text = "Cantidad a solicitar:"
             setTypeface(null, android.graphics.Typeface.BOLD)
             setPadding(0, 20, 0, 0)
-        }
-        contenedor.addView(tituloCantidad)
+        })
 
         val inputCantidad = EditText(this).apply {
             hint = "Ej: 2"
@@ -2477,49 +2547,82 @@ class MainActivity : AppCompatActivity() {
         }
         contenedor.addView(inputCantidad)
 
+        // Precarga la cantidad que dice la receta y la vuelve a precargar al cambiar de
+        // insumo: lo normal es pedir lo de siempre, y así el operario solo teclea cuando
+        // necesita otra cosa.
+        if (!deEmergencia) {
+            spinnerInsumos.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                    inputCantidad.setText((bom.getOrNull(pos)?.cantidad_sugerida ?: 1).toString())
+                }
+                override fun onNothingSelected(p: AdapterView<*>?) {}
+            }
+        }
+
         AlertDialog.Builder(this)
             .setTitle("Solicitar a Bodega")
             .setView(contenedor)
             .setPositiveButton("Enviar Pedido") { _, _ ->
                 val cantidad = inputCantidad.text.toString().toIntOrNull()
-                if (cantidad != null && cantidad > 0) {
-                    val seleccion = spinnerInsumos.selectedItem.toString()
-                    val marca = spinnerMarca.selectedItem.toString()
-                    val fragancia = spinnerFragancia.selectedItem.toString()
-                    val presentacion = spinnerPresentacion.selectedItem.toString()
+                if (cantidad == null || cantidad <= 0) {
+                    Toast.makeText(this, "Debe ingresar una cantidad válida", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
 
-                    // El texto armado describe exactamente qué producto necesita el operario,
-                    // sin requerir cambios en el modelo de base de datos.
-                    val textoArmado = if (seleccion.contains("Lámina") || seleccion.contains("Sacos")) {
+                val pos = spinnerInsumos.selectedItemPosition
+                val insumo = if (deEmergencia) null else bom.getOrNull(pos)
+                val marca = spinnerMarca.selectedItem?.toString().orEmpty()
+                val fragancia = spinnerFragancia.selectedItem?.toString().orEmpty()
+                val presentacion = spinnerPresentacion.selectedItem?.toString().orEmpty()
+
+                // El servidor reescribe `detalle_pedido` desde el catálogo cuando viaja
+                // `insumo_id`; se manda igual porque el campo es obligatorio y porque es
+                // lo único legible si algún día el insumo se da de baja.
+                val textoArmado = if (insumo != null) {
+                    listOf(insumo.nombre, marca, fragancia, presentacion)
+                        .filter { it.isNotBlank() }.joinToString(" - ")
+                } else {
+                    val seleccion = etiquetas.getOrElse(pos) { "Insumo" }
+                    if (seleccion.contains("Lámina") || seleccion.contains("Sacos")) {
                         "$seleccion - $marca - $fragancia - $presentacion"
                     } else {
                         "Preten $marca $fragancia (Granel)"
                     }
-
-                    enviarPeticionInsumo(SolicitarInsumoRequest(sesionActualId!!, textoArmado, cantidad))
-                } else {
-                    Toast.makeText(this, "Debe ingresar una cantidad válida", Toast.LENGTH_SHORT).show()
                 }
+
+                enviarPeticionInsumo(
+                    SolicitarInsumoRequest(
+                        sesion_id      = sesionActualId ?: -99,
+                        detalle_pedido = textoArmado.take(255),
+                        cantidad       = cantidad,
+                        insumo_id      = insumo?.id,
+                        request_id     = java.util.UUID.randomUUID().toString()
+                    )
+                )
             }
             .setNegativeButton("Cancelar", null)
             .show()
     }
 
+    /**
+     * Encola el pedido. Ya no se manda a fuego por Retrofit.
+     *
+     * Era la única escritura del operario fuera de la cola, en contra del patrón
+     * offline-first del resto de la app: sin red el botón ni se dejaba pulsar. Ahora se
+     * comporta como las pacas — se guarda, se confirma al operario y el SyncWorker lo
+     * envía cuando haya señal, con `request_id` para que un reintento no cree dos.
+     */
     private fun enviarPeticionInsumo(solicitud: SolicitarInsumoRequest) {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val respuesta = RetrofitClient.apiService.solicitarInsumo(solicitud)
+                colaRepo.enqueueSolicitarInsumo(solicitud)
                 withContext(Dispatchers.Main) {
-                    if (respuesta.isSuccessful) {
-                        Toast.makeText(this@MainActivity, "Pedido enviado al Insumista", Toast.LENGTH_LONG).show()
-                    } else {
-                        Toast.makeText(this@MainActivity, "Error al enviar el pedido", Toast.LENGTH_SHORT).show()
-                    }
+                    Toast.makeText(this@MainActivity, "Pedido registrado para el Insumista", Toast.LENGTH_LONG).show()
                 }
             } catch (e: Exception) {
-                ErrorReporter.report("MainActivity", "Fallo al enviar pedido de insumo", e)
+                ErrorReporter.report("MainActivity", "Fallo al encolar pedido de insumo", e)
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "Error de red. Intente de nuevo.", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, "No se pudo registrar el pedido", Toast.LENGTH_SHORT).show()
                 }
             }
         }
