@@ -47,6 +47,8 @@ class SupervisorDashboardActivity : AppCompatActivity() {
     private lateinit var tvSubtitulo: TextView
     private lateinit var navVistas: BottomNavigationView
     private lateinit var btnSalir: android.widget.Button
+    private lateinit var btnChats: android.widget.ImageButton
+    private lateinit var tvBadgeChats: TextView
 
     private var adapterPlanta: MaquinaStatusAdapter? = null
     private var adapterBodega: PedidoSupervisorAdapter? = null
@@ -84,6 +86,8 @@ class SupervisorDashboardActivity : AppCompatActivity() {
         tvSubtitulo  = findViewById(R.id.tvSubtituloDashboard)
         navVistas    = findViewById(R.id.navVistas)
         btnSalir     = findViewById(R.id.btnSalirSupervisor)
+        btnChats     = findViewById(R.id.btnChatsSupervisor)
+        tvBadgeChats = findViewById(R.id.tvBadgeChats)
 
         rvDashboard.layoutManager = LinearLayoutManager(this)
         pegarBarraAlBorde()
@@ -113,6 +117,10 @@ class SupervisorDashboardActivity : AppCompatActivity() {
         navVistas.setOnItemReselectedListener { cargarDatos() }
 
         btnSalir.setOnClickListener { cerrarSesion() }
+        btnChats.setOnClickListener {
+            if (!puedeActuar) { avisarSinPermiso(); return@setOnClickListener }
+            ChatBodega.abrirLista(this, esSupervisor = true) { refrescarBadgeChats() }
+        }
         swipeRefresh.setOnRefreshListener { cargarDatos() }
     }
 
@@ -193,9 +201,24 @@ class SupervisorDashboardActivity : AppCompatActivity() {
         tvSubtitulo.text = "Supervisor: $nombreUsuario | Toca a alguien para escribirle"
         limpiarAdaptadores()
         adapterInsumistas = InsumistaAdapter(emptyList()) { insumista ->
-            abrirChat(insumista.usuario_id, insumista.nombre)
+            if (puedeActuar) abrirChatCon(insumista) else avisarSinPermiso()
         }
         rvDashboard.adapter = adapterInsumistas
+    }
+
+    private fun abrirChatCon(insumista: InsumistaTurno) {
+        val tipo = if (insumista.bodega.equals("GRANEL", true)) "Insumista de Granel"
+                   else "Insumista de Empaque"
+        ChatBodega.abrirConversacion(
+            this,
+            HiloChat(
+                titulo = insumista.nombre,
+                subtitulo = "$tipo · de turno",
+                avatar = ChatBodega.iniciales(insumista.nombre),
+                insumistaId = insumista.usuario_id
+            ),
+            esSupervisor = true
+        ) { refrescarBadgeChats() }
     }
 
     private fun activarVistaEntregas() {
@@ -515,84 +538,20 @@ class SupervisorDashboardActivity : AppCompatActivity() {
      * o tres mensajes por turno, y dejar un hilo golpeando la API cada pocos segundos
      * por si acaso no compensa.
      */
-    private fun abrirChat(insumistaId: Int?, titulo: String) {
-        val contenedor = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(40, 30, 40, 10)
-        }
-        val tvHistorial = TextView(this).apply { text = "Cargando…"; textSize = 14f }
-        contenedor.addView(ScrollView(this).apply {
-            addView(tvHistorial)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 600
-            )
-        })
-        val etTexto = EditText(this).apply {
-            hint = "Escribe un mensaje…"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-        }
-        contenedor.addView(etTexto)
-
-        val dialogo = AlertDialog.Builder(this)
-            .setTitle(if (insumistaId == null) "Aviso a toda la bodega" else "Chat con $titulo")
-            .setView(contenedor)
-            // null a propósito: el botón se maneja a mano para que enviar no cierre la
-            // ventana, que es lo que uno espera de un chat.
-            .setPositiveButton("Enviar", null)
-            .setNegativeButton("Cerrar", null)
-            .create()
-        dialogo.show()
-
-        fun refrescar() {
-            lifecycleScope.launch(Dispatchers.IO) {
-                val texto = try {
-                    val resp = RetrofitClient.apiService.leerChatBodega(insumistaId)
-                    val mensajes = resp.body()?.mensajes
-                    when {
-                        !resp.isSuccessful -> "No se pudo cargar (HTTP ${resp.code()})."
-                        mensajes.isNullOrEmpty() -> "Sin mensajes todavía."
-                        else -> mensajes.joinToString("\n\n") { m ->
-                            val quien = if (m.emisor == "SUPERVISOR") "Supervisión" else (m.de ?: "Insumista")
-                            val marca = if (m.difusion) " (a todos)" else ""
-                            "${m.hora ?: ""}  $quien$marca:\n${m.texto}"
-                        }
-                    }
-                } catch (e: Exception) {
-                    "Sin conexión."
-                }
-                withContext(Dispatchers.Main) { tvHistorial.text = texto }
-            }
-        }
-        refrescar()
-
-        dialogo.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            val texto = etTexto.text.toString().trim()
-            if (texto.isEmpty()) return@setOnClickListener
-            if (!puedeActuar) { avisarSinPermiso(); return@setOnClickListener }
-            etTexto.setText("")
-            lifecycleScope.launch(Dispatchers.IO) {
+    /**
+     * Globo rojo del ícono de chats: lo que los insumistas te escribieron y no has leído.
+     * El supervisor no recibe push de las respuestas, así que este globo es el aviso.
+     */
+    private fun refrescarBadgeChats() {
+        if (!puedeActuar) { tvBadgeChats.visibility = View.GONE; return }
+        lifecycleScope.launch {
+            val sinLeer = withContext(Dispatchers.IO) {
                 try {
-                    val resp = RetrofitClient.apiService.enviarMensajeBodega(
-                        EnviarMensajeRequest(texto, insumistaId)
-                    )
-                    withContext(Dispatchers.Main) {
-                        if (!resp.isSuccessful) {
-                            Toast.makeText(this@SupervisorDashboardActivity,
-                                "No se pudo enviar (HTTP ${resp.code()})", Toast.LENGTH_SHORT).show()
-                            // Lo escrito se devuelve al cuadro: perderlo obligaría a
-                            // teclearlo otra vez con la tablet en una mano.
-                            etTexto.setText(texto)
-                        }
-                        refrescar()
-                    }
-                } catch (e: Exception) {
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(this@SupervisorDashboardActivity,
-                            "Sin conexión", Toast.LENGTH_SHORT).show()
-                        etTexto.setText(texto)
-                    }
-                }
-            }
+                    RetrofitClient.apiService.resumenChatBodega().body()?.sin_leer
+                } catch (e: Exception) { null }
+            } ?: return@launch
+            tvBadgeChats.visibility = if (sinLeer > 0) View.VISIBLE else View.GONE
+            tvBadgeChats.text = if (sinLeer > 99) "99+" else sinLeer.toString()
         }
     }
 
@@ -694,9 +653,14 @@ class SupervisorDashboardActivity : AppCompatActivity() {
         jobRadar?.cancel()
         // 5 s: equilibrio entre frescura del dato y consumo de red en la tablet.
         jobRadar = lifecycleScope.launch {
+            var vuelta = 0
+            refrescarBadgeChats()
             while (true) {
                 delay(5000)
                 cargarDatos(esSilencioso = true)
+                // El globo de chats cada 15 s: el resumen es una consulta más pesada que
+                // la de la vista y no hace falta tanta frescura para un contador.
+                if (++vuelta % 3 == 0) refrescarBadgeChats()
             }
         }
     }

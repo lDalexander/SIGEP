@@ -208,14 +208,25 @@ interface ProduccionApi {
     // El emisor lo deduce el servidor del token que viaje en la cabecera, así que el
     // mismo par de métodos sirve al supervisor y al insumista.
 
+    // Un hilo: el supervisor lo elige con `insumista_id`, el insumista con `supervisor_id`
+    // (0 = «Supervisión»), y los avisos generales con `difusion`. Sin ninguno, la vista
+    // antigua con todo junto.
     @GET("/api/mensajes/bodega")
-    suspend fun leerChatBodega(@Query("insumista_id") insumistaId: Int? = null): Response<ConversacionBodega>
+    suspend fun leerChatBodega(
+        @Query("insumista_id") insumistaId: Int? = null,
+        @Query("supervisor_id") supervisorId: Int? = null,
+        @Query("difusion") difusion: Boolean? = null
+    ): Response<ConversacionBodega>
 
     @POST("/api/mensajes/bodega")
     suspend fun enviarMensajeBodega(@Body request: EnviarMensajeRequest): Response<RespuestaGenerica>
 
     @POST("/api/mensajes/bodega/leidos")
-    suspend fun marcarChatLeido(): Response<RespuestaGenerica>
+    suspend fun marcarChatLeido(
+        @Query("insumista_id") insumistaId: Int? = null,
+        @Query("supervisor_id") supervisorId: Int? = null,
+        @Query("difusion") difusion: Boolean? = null
+    ): Response<RespuestaGenerica>
 
     @GET("/api/mensajes/bodega/resumen")
     suspend fun resumenChatBodega(): Response<ResumenChat>

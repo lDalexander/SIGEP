@@ -376,12 +376,25 @@ data class MensajeBodega(
     val difusion: Boolean = false,
     val texto: String,
     val hora: String?,
-    val leido: Boolean = false
+    val leido: Boolean = false,
+    // Desde el chat por conversaciones (2026-10-13). Nulos contra un servidor anterior.
+    val supervisor_id: Int? = null,
+    val insumista_id: Int? = null,
+    val creado_en: String? = null
 )
 
 data class ConversacionBodega(val yo: String?, val mensajes: List<MensajeBodega> = emptyList())
 
-data class EnviarMensajeRequest(val texto: String, val insumista_id: Int? = null)
+/**
+ * `insumista_id` lo usa el supervisor (null = aviso a toda la bodega); `supervisor_id`
+ * el insumista (null o 0 = «Supervisión» en general). Gson omite los nulos, así que la
+ * petición sale igual que antes cuando no se usan.
+ */
+data class EnviarMensajeRequest(
+    val texto: String,
+    val insumista_id: Int? = null,
+    val supervisor_id: Int? = null
+)
 
 data class ConversacionResumen(
     val insumista_id: Int,
@@ -389,13 +402,42 @@ data class ConversacionResumen(
     val rol: String?,
     val de_turno: Boolean = false,
     val sin_leer: Int = 0,
-    val ultimo: String?
+    val ultimo: String?,
+    val ultimo_texto: String? = null,
+    val ultimo_emisor: String? = null
 )
 
+/** Último mensaje de un hilo, para la vista previa de la lista de chats. */
+data class UltimoMensaje(
+    val ultimo: String? = null,
+    val ultimo_texto: String? = null,
+    val ultimo_emisor: String? = null
+)
+
+/**
+ * Un hilo del insumista. `tipo`: SUPERVISOR (uno concreto), GENERAL («Supervisión»,
+ * `supervisor_id` = 0) o DIFUSION (avisos a toda la bodega, `supervisor_id` null).
+ */
+data class ChatInsumista(
+    val tipo: String,
+    val supervisor_id: Int?,
+    val nombre: String,
+    val sin_leer: Int = 0,
+    val ultimo: String? = null,
+    val ultimo_texto: String? = null,
+    val ultimo_emisor: String? = null
+)
+
+/**
+ * El supervisor recibe `conversaciones` (una por insumista) y `difusion`; el insumista,
+ * `chats`. Cada lado ignora lo del otro.
+ */
 data class ResumenChat(
     val yo: String?,
     val sin_leer: Int = 0,
-    val conversaciones: List<ConversacionResumen> = emptyList()
+    val conversaciones: List<ConversacionResumen> = emptyList(),
+    val difusion: UltimoMensaje? = null,
+    val chats: List<ChatInsumista> = emptyList()
 )
 
 // ── Planificación (v1.7.0) ───────────────────────────────────────────────────

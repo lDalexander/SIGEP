@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ventana emergente de UNA conversación, al estilo WhatsApp. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/bg_dialogo_chat">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#1E293B"
+        android:paddingStart="4dp"
+        android:paddingEnd="12dp"
+        android:paddingVertical="8dp">
+
+        <ImageButton
+            android:id="@+id/btnAtrasChat"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Volver"
+            android:src="@drawable/ic_atras"
+            app:tint="#FFFFFF" />
+
+        <TextView
+            android:id="@+id/tvAvatarConversacion"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="@drawable/bg_avatar_circulo"
+            android:gravity="center"
+            android:text="MP"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="12dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvNombreConversacion"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="María Pérez"
+                android:textColor="#FFFFFF"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvEstadoConversacion"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="Insumista de Empaque"
+                android:textColor="#94A3B8"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="#EFEAE2">
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/rvMensajesChat"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipToPadding="false"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="8dp" />
+
+        <TextView
+            android:id="@+id/tvVacioChat"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:background="@drawable/bg_chip_fecha"
+            android:gravity="center"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="8dp"
+            android:text="Cargando…"
+            android:textColor="#475569"
+            android:textSize="14sp" />
+    </FrameLayout>
+
+    <!-- Barra de escritura. Se oculta en el hilo de avisos para el insumista: ahí solo
+         escriben los supervisores. -->
+    <LinearLayout
+        android:id="@+id/barraEscribirChat"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#EFEAE2"
+        android:paddingHorizontal="8dp"
+        android:paddingBottom="8dp"
+        android:paddingTop="4dp">
+
+        <EditText
+            android:id="@+id/etMensajeChat"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:minHeight="48dp"
+            android:background="@drawable/bg_campo_chat"
+            android:hint="Escribe un mensaje"
+            android:importantForAutofill="no"
+            android:inputType="textCapSentences|textMultiLine"
+            android:maxLength="500"
+            android:maxLines="4"
+            android:paddingHorizontal="18dp"
+            android:paddingVertical="10dp"
+            android:textColor="#0F172A"
+            android:textColorHint="#94A3B8"
+            android:textSize="16sp" />
+
+        <ImageButton
+            android:id="@+id/btnEnviarChat"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_boton_enviar"
+            android:contentDescription="Enviar"
+            android:src="@drawable/ic_enviar"
+            app:tint="#FFFFFF" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/tvSoloLecturaChat"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#EFEAE2"
+        android:gravity="center"
+        android:padding="14dp"
+        android:text="Solo los supervisores pueden escribir en los avisos"
+        android:textColor="#64748B"
+        android:textSize="13sp"
+        android:visibility="gone" />
+</LinearLayout>

@@ -52,6 +52,8 @@ object SigepNotificationManager {
 
         val intent = Intent(context, BandejaInsumosActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            // Tocar el aviso lleva al chat, no solo a la bandeja.
+            putExtra(BandejaInsumosActivity.EXTRA_ABRIR_CHAT, true)
         }
         val pendiente = PendingIntent.getActivity(
             context, 2, intent,

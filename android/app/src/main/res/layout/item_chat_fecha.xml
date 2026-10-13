@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Separador de día dentro de la conversación: «Hoy», «Ayer», «10/10/2026». -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingVertical="8dp">
+
+    <TextView
+        android:id="@+id/tvFechaChat"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal"
+        android:background="@drawable/bg_chip_fecha"
+        android:paddingHorizontal="12dp"
+        android:paddingVertical="4dp"
+        android:text="Hoy"
+        android:textColor="#475569"
+        android:textSize="12sp" />
+</FrameLayout>

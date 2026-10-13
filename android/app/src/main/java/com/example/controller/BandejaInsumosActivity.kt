@@ -95,6 +95,8 @@ class BandejaInsumosActivity : AppCompatActivity() {
     // Código de solicitud para el diálogo de permisos de notificación en Android 13+.
     companion object {
         private const val CODIGO_SOLICITUD_PERMISO = 101
+        /** Lo pone la notificación de un mensaje de supervisión: abre los chats al llegar. */
+        const val EXTRA_ABRIR_CHAT = "abrir_chat"
     }
 
     // Receptor de broadcasts enviados por SigepFirebaseMessagingService cuando la app está abierta.
@@ -177,7 +179,7 @@ class BandejaInsumosActivity : AppCompatActivity() {
         btnCerrarSesion.setOnClickListener { cerrarSesion("Sesión cerrada correctamente") }
         btnEntregarInsumo.setOnClickListener { abrirFormularioEntregaProactiva() }
         btnHistorialEntregas.setOnClickListener { mostrarHistorialEntregas() }
-        btnMensajesBodega.setOnClickListener { abrirChatSupervision() }
+        btnMensajesBodega.setOnClickListener { abrirChats() }
         cargarMaquinas()
         cargarCatalogoInsumos()
         cargarPlanesDeHoy()
@@ -207,6 +209,14 @@ class BandejaInsumosActivity : AppCompatActivity() {
 
         actualizarListasManualmente()
         conectarWebSocket()
+        if (intent?.getBooleanExtra(EXTRA_ABRIR_CHAT, false) == true) abrirChats()
+    }
+
+    // La notificación de un mensaje trae aquí con la activity ya abierta (SINGLE_TOP).
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_ABRIR_CHAT, false)) abrirChats()
     }
 
     override fun onResume() {
@@ -221,8 +231,10 @@ class BandejaInsumosActivity : AppCompatActivity() {
             while (isActive) {
                 delay(15_000)
                 consultarServidor()
+                refrescarAvisoChat()
             }
         }
+        refrescarAvisoChat()
     }
 
     override fun onPause() {
@@ -706,87 +718,27 @@ class BandejaInsumosActivity : AppCompatActivity() {
     }
 
     /**
-     * Conversación con supervisión.
+     * Chats con supervisión, uno por supervisor que te escribe, como en WhatsApp.
      *
-     * No se manda `insumista_id`: el servidor deduce de quién es la sesión por el token.
-     * El insumista escribe «a supervisión», no a un supervisor concreto — cuál esté de
-     * turno no es asunto suyo.
+     * Si un solo chat tiene mensajes nuevos se abre directamente: quien pulsa el botón
+     * después de un aviso quiere leer ESE mensaje, no elegirlo de una lista.
      */
-    private fun abrirChatSupervision() {
-        val contenedor = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(40, 30, 40, 10)
+    private fun abrirChats() {
+        ChatBodega.abrirLista(this, esSupervisor = false, abrirNoLeidoUnico = true) {
+            refrescarAvisoChat()
         }
-        val tvHistorial = TextView(this).apply { text = "Cargando…"; textSize = 14f }
-        contenedor.addView(ScrollView(this).apply {
-            addView(tvHistorial)
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 600)
-        })
-        val etTexto = EditText(this).apply {
-            hint = "Escribe a supervisión…"
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or
-                        android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-        }
-        contenedor.addView(etTexto)
+    }
 
-        val dialogo = AlertDialog.Builder(this)
-            .setTitle("Mensajes de supervisión")
-            .setView(contenedor)
-            // null: enviar no debe cerrar la ventana, que es lo que uno espera de un chat.
-            .setPositiveButton("Enviar", null)
-            .setNegativeButton("Cerrar", null)
-            .create()
-        dialogo.show()
-
-        fun refrescar() {
-            lifecycleScope.launch(Dispatchers.IO) {
-                val texto = try {
-                    val resp = RetrofitClient.apiService.leerChatBodega(null)
-                    val mensajes = resp.body()?.mensajes
-                    when {
-                        resp.code() == 401 -> "Vuelve a iniciar sesión para usar el chat."
-                        !resp.isSuccessful -> "No se pudo cargar (HTTP ${resp.code()})."
-                        mensajes.isNullOrEmpty() -> "Sin mensajes todavía."
-                        else -> mensajes.joinToString("\n\n") { m ->
-                            val quien = if (m.emisor == "SUPERVISOR") "Supervisión" else "Tú"
-                            val marca = if (m.difusion) " (a todos)" else ""
-                            "${m.hora ?: ""}  $quien$marca:\n${m.texto}"
-                        }
-                    }
-                } catch (e: Exception) {
-                    "Sin conexión."
-                }
-                withContext(Dispatchers.Main) { tvHistorial.text = texto }
-            }
-            // Marcar leído es best-effort: que falle no puede impedir leer el chat.
-            lifecycleScope.launch(Dispatchers.IO) {
-                try { RetrofitClient.apiService.marcarChatLeido() } catch (_: Exception) { }
-            }
-        }
-        refrescar()
-
-        dialogo.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            val texto = etTexto.text.toString().trim()
-            if (texto.isEmpty()) return@setOnClickListener
-            etTexto.setText("")
-            lifecycleScope.launch(Dispatchers.IO) {
+    /** El botón cuenta los mensajes sin leer: «💬 MENSAJES DE SUPERVISIÓN (2)». */
+    private fun refrescarAvisoChat() {
+        lifecycleScope.launch {
+            val sinLeer = withContext(Dispatchers.IO) {
                 try {
-                    val resp = RetrofitClient.apiService.enviarMensajeBodega(EnviarMensajeRequest(texto))
-                    withContext(Dispatchers.Main) {
-                        if (!resp.isSuccessful) {
-                            Toast.makeText(this@BandejaInsumosActivity,
-                                "No se pudo enviar (HTTP ${resp.code()})", Toast.LENGTH_SHORT).show()
-                            etTexto.setText(texto)
-                        }
-                        refrescar()
-                    }
-                } catch (e: Exception) {
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(this@BandejaInsumosActivity, "Sin conexión", Toast.LENGTH_SHORT).show()
-                        etTexto.setText(texto)
-                    }
-                }
-            }
+                    RetrofitClient.apiService.resumenChatBodega().body()?.sin_leer
+                } catch (e: Exception) { null }
+            } ?: return@launch
+            btnMensajesBodega.text =
+                if (sinLeer > 0) "💬 MENSAJES DE SUPERVISIÓN ($sinLeer)" else "💬 MENSAJES DE SUPERVISIÓN"
         }
     }
 
