@@ -97,23 +97,8 @@ object ChatBodega {
         raiz.findViewById<ImageButton>(R.id.btnCerrarListaChats).setOnClickListener { dialogo.dismiss() }
 
         var sondeo: Job? = null
-
-        lateinit var cargar: () -> Unit
-        val adapter = ListaChatsAdapter { fila ->
-            abrirConversacion(activity, fila.hilo, esSupervisor) { cargar() }
-        }
-        rv.layoutManager = LinearLayoutManager(activity)
-        rv.adapter = adapter
-
-        cargar = {
-            activity.lifecycleScope.launch {
-                val (filas, error) = withContext(Dispatchers.IO) { leerLista(esSupervisor) }
-                if (!dialogo.isShowing) return@launch
-                adapter.actualizar(filas)
-                tvVacio.visibility = if (filas.isEmpty()) View.VISIBLE else View.GONE
-                tvVacio.text = error ?: "Todavía no hay conversaciones"
-            }
-        }
+        val lista = montarLista(activity, rv, tvVacio, esSupervisor)
+        val cargar = { if (dialogo.isShowing) lista.cargar() }
 
         dialogo.setOnShowListener {
             cargar()
@@ -130,6 +115,47 @@ object ChatBodega {
         }
         dialogo.show()
         dimensionar(dialogo, activity)
+    }
+
+    /**
+     * Lista de chats ya montada sobre un RecyclerView. La usa la ventana de arriba y la
+     * pestaña «Mensajería» del insumista, que muestra la misma lista sin ventana.
+     *
+     * `alCambiarNoLeidos` recibe el total sin leer en cada carga (para un globo).
+     */
+    class ListaChats internal constructor(
+        private val activity: AppCompatActivity,
+        private val adapter: RecyclerView.Adapter<*>,
+        private val tvVacio: TextView,
+        private val esSupervisor: Boolean,
+        private val alCambiarNoLeidos: (Int) -> Unit
+    ) {
+        fun cargar() {
+            activity.lifecycleScope.launch {
+                val (filas, error) = withContext(Dispatchers.IO) { leerLista(esSupervisor) }
+                (adapter as ListaChatsAdapter).actualizar(filas)
+                tvVacio.visibility = if (filas.isEmpty()) View.VISIBLE else View.GONE
+                tvVacio.text = error ?: "Todavía no hay conversaciones"
+                if (error == null) alCambiarNoLeidos(filas.sumOf { it.noLeidos })
+            }
+        }
+    }
+
+    fun montarLista(
+        activity: AppCompatActivity,
+        rv: RecyclerView,
+        tvVacio: TextView,
+        esSupervisor: Boolean,
+        alCambiarNoLeidos: (Int) -> Unit = {}
+    ): ListaChats {
+        lateinit var lista: ListaChats
+        val adapter = ListaChatsAdapter { fila ->
+            abrirConversacion(activity, fila.hilo, esSupervisor) { lista.cargar() }
+        }
+        rv.layoutManager = LinearLayoutManager(activity)
+        rv.adapter = adapter
+        lista = ListaChats(activity, adapter, tvVacio, esSupervisor, alCambiarNoLeidos)
+        return lista
     }
 
     /** -> (filas, mensaje de error para mostrar si no hay filas). */

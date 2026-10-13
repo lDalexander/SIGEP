@@ -47,7 +47,7 @@ y los avisos generales (`insumista_id` NULL). `routers/mensajes_bodega.py` gana 
 `sin_leer` por hilo y `chats` para el insumista. Probado con el código viejo (8098) y el
 nuevo (8099) contra `prueba_insumos_v17`: la tablet 1.7.1 del insumista recibe lo mismo.
 Tag previo: `v1.20-pre-chat-conversaciones`. En la app: `ChatBodega.kt` (lista + burbujas),
-barra inferior de vistas en la torre de control y tarjeta propia para el insumista.
+barra inferior de vistas en la torre de control y tarjeta propia para el insumista. La bandeja del insumista pasa a 4 pestañas (Pedidos, Plan, Mis entregas, Mensajería). La máquina de la entrega proactiva es opcional (`maquina` NULL = sin máquina) y `GET /api/insumos/mis_entregas/{id}?desde=` junta proactivas y pedidos entregados del turno. Catálogo provisional hasta el ERP: `api_produccion/catalogo_provisional_20261013.sql`. Tag previo: `v1.21-pre-entregas-sin-maquina`.
 
 **Módulo de insumos rehecho — v1.7.0** (2026-10-12). Tres fases cerradas y en
 producción; la app está en `versionCode` 15 (1.7.1: el supervisor entra con contraseña, no PIN),
@@ -594,6 +594,7 @@ heartbeat, sin errores en el log del servicio.
 | Tag previo a agrupar la jerarquía por producto | `v1.18-pre-jerarquia-producto` (en GitHub) |
 | Tag previo a la fragancia en la jerarquía | `v1.19-pre-jerarquia-fragancia` (en GitHub) |
 | Tag previo al chat por conversaciones | `v1.20-pre-chat-conversaciones` (en GitHub) |
+| Tag previo a la entrega sin máquina | `v1.21-pre-entregas-sin-maquina` (en GitHub) |
 | Build previo a agrupar por producto | `~/respaldos_build_sigep/build_2026-08-31_141538` |
 | Build previo al logo original | `~/respaldos_build_sigep/build_2026-08-31_142715` |
 | Build previo a la fragancia en la jerarquía | `~/respaldos_build_sigep/build_2026-08-31_145150` |

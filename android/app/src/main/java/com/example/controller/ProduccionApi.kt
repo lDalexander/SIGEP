@@ -147,7 +147,9 @@ interface ProduccionApi {
         @Part("tipo_producto") tipoProducto: RequestBody,
         @Part("insumo")        insumo: RequestBody,
         @Part("cantidad")      cantidad: RequestBody,
-        @Part("maquina")       maquina: RequestBody,
+        // Opcional desde 2026-10-13: null = sin máquina (el material no tiene todavía
+        // máquina que lo vaya a usar, o no lo usará ninguna).
+        @Part("maquina")       maquina: RequestBody?,
         @Part("observaciones") observaciones: RequestBody?,
         // v1.7.0: ata la entrega al catálogo y la hace idempotente. Opcionales en el
         // servidor, así que una tablet anterior sigue registrando igual.
@@ -171,6 +173,13 @@ interface ProduccionApi {
 
     @GET("/api/insumos/entregas_proactivas/{insumista_id}")
     suspend fun obtenerEntregasProactivas(@Path("insumista_id") insumistaId: Int): Response<List<EntregaProactivaHistorial>>
+
+    /** Entregas sin pedido y pedidos entregados desde `desde` ("yyyy-MM-dd HH:mm:ss"). */
+    @GET("/api/insumos/mis_entregas/{insumista_id}")
+    suspend fun obtenerMisEntregas(
+        @Path("insumista_id") insumistaId: Int,
+        @Query("desde") desde: String
+    ): Response<MisEntregasResponse>
 
     // ==========================================
     // NUEVO: FASE 5 - TORRE DE CONTROL (SUPERVISORES)

@@ -25,6 +25,9 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+import com.example.controller.util.BarraInferior
+import com.google.android.material.bottomnavigation.BottomNavigationView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -67,8 +70,21 @@ class BandejaInsumosActivity : AppCompatActivity() {
     private lateinit var tvUsuarioLogueado: TextView
     private lateinit var btnCerrarSesion: Button
     private lateinit var btnEntregarInsumo: Button
-    private lateinit var btnHistorialEntregas: Button
-    private lateinit var btnMensajesBodega: Button
+
+    // Pestañas (2026-10-13): pedidos, plan, mis entregas y mensajería. Antes todo
+    // estaba en una sola pantalla con tres botones al final que abrían ventanas.
+    private lateinit var navInsumista: BottomNavigationView
+    private lateinit var tvTituloBandeja: TextView
+    private lateinit var panelPedidos: View
+    private lateinit var panelPlan: SwipeRefreshLayout
+    private lateinit var panelEntregas: SwipeRefreshLayout
+    private lateinit var panelMensajeria: View
+    private lateinit var tvVacioPlan: TextView
+    private lateinit var tvVacioEntregas: TextView
+    private lateinit var tvResumenEntregas: TextView
+    private lateinit var adapterPlan: PlanAdapter
+    private val adapterEntregasTurno = EntregasTurnoAdapter()
+    private var listaChats: ChatBodega.ListaChats? = null
 
     // Planes del día. El insumista entrega CONTRA un plan cuando el material es para
     // producción planificada y no para una máquina que lo pidió: ese es el caso que no
@@ -97,6 +113,7 @@ class BandejaInsumosActivity : AppCompatActivity() {
         private const val CODIGO_SOLICITUD_PERMISO = 101
         /** Lo pone la notificación de un mensaje de supervisión: abre los chats al llegar. */
         const val EXTRA_ABRIR_CHAT = "abrir_chat"
+        private const val SIN_MAQUINA = "— Vacío (sin máquina) —"
     }
 
     // Receptor de broadcasts enviados por SigepFirebaseMessagingService cuando la app está abierta.
@@ -149,8 +166,16 @@ class BandejaInsumosActivity : AppCompatActivity() {
         tvUsuarioLogueado = findViewById(R.id.tvUsuarioLogueado)
         btnCerrarSesion   = findViewById(R.id.btnCerrarSesion)
         btnEntregarInsumo = findViewById(R.id.btnEntregarInsumo)
-        btnHistorialEntregas = findViewById(R.id.btnHistorialEntregas)
-        btnMensajesBodega = findViewById(R.id.btnMensajesBodega)
+        navInsumista      = findViewById(R.id.navInsumista)
+        tvTituloBandeja   = findViewById(R.id.tvTituloBandeja)
+        panelPedidos      = findViewById(R.id.panelPedidos)
+        panelPlan         = findViewById(R.id.panelPlan)
+        panelEntregas     = findViewById(R.id.panelEntregas)
+        panelMensajeria   = findViewById(R.id.panelMensajeria)
+        tvVacioPlan       = findViewById(R.id.tvVacioPlan)
+        tvVacioEntregas   = findViewById(R.id.tvVacioEntregas)
+        tvResumenEntregas = findViewById(R.id.tvResumenEntregas)
+        BarraInferior.pegarAlBorde(this, navInsumista)
 
         val prefs = getSharedPreferences("DetcuadorPrefs", MODE_PRIVATE)
         usuarioId         = prefs.getInt("usuario_id", -1)
@@ -178,8 +203,7 @@ class BandejaInsumosActivity : AppCompatActivity() {
 
         btnCerrarSesion.setOnClickListener { cerrarSesion("Sesión cerrada correctamente") }
         btnEntregarInsumo.setOnClickListener { abrirFormularioEntregaProactiva() }
-        btnHistorialEntregas.setOnClickListener { mostrarHistorialEntregas() }
-        btnMensajesBodega.setOnClickListener { abrirChats() }
+        configurarPestanas()
         cargarMaquinas()
         cargarCatalogoInsumos()
         cargarPlanesDeHoy()
@@ -212,6 +236,68 @@ class BandejaInsumosActivity : AppCompatActivity() {
         if (intent?.getBooleanExtra(EXTRA_ABRIR_CHAT, false) == true) abrirChats()
     }
 
+    // ────────────────────────────────────────────────────────────────────────
+    // Pestañas
+    // ────────────────────────────────────────────────────────────────────────
+
+    private fun configurarPestanas() {
+        rvDe(R.id.rvPlanInsumista).apply {
+            layoutManager = LinearLayoutManager(this@BandejaInsumosActivity)
+            adapterPlan = PlanAdapter(emptyList()) { plan -> mostrarPlan(plan) }
+            adapter = adapterPlan
+        }
+        rvDe(R.id.rvEntregasTurno).apply {
+            layoutManager = LinearLayoutManager(this@BandejaInsumosActivity)
+            adapter = adapterEntregasTurno
+        }
+        listaChats = ChatBodega.montarLista(
+            this, rvDe(R.id.rvChatsInsumista), findViewById(R.id.tvVacioChats),
+            esSupervisor = false
+        ) { sinLeer -> pintarGloboChat(sinLeer) }
+
+        panelPlan.setOnRefreshListener { cargarPlanesDeHoy() }
+        panelEntregas.setOnRefreshListener { cargarEntregasDelTurno() }
+
+        navInsumista.setOnItemSelectedListener { item ->
+            mostrarPestana(item.itemId)
+            true
+        }
+        // Volver a tocar la pestaña activa la recarga.
+        navInsumista.setOnItemReselectedListener { item -> refrescarPestana(item.itemId) }
+    }
+
+    private fun rvDe(id: Int): RecyclerView = findViewById(id)
+
+    private fun mostrarPestana(id: Int) {
+        panelPedidos.visibility = if (id == R.id.tab_pedidos) View.VISIBLE else View.GONE
+        panelPlan.visibility = if (id == R.id.tab_plan) View.VISIBLE else View.GONE
+        panelEntregas.visibility = if (id == R.id.tab_entregas) View.VISIBLE else View.GONE
+        panelMensajeria.visibility = if (id == R.id.tab_mensajeria) View.VISIBLE else View.GONE
+        tvTituloBandeja.text = when (id) {
+            R.id.tab_plan -> "PLAN DE HOY"
+            R.id.tab_entregas -> "MIS ENTREGAS"
+            R.id.tab_mensajeria -> "MENSAJERÍA"
+            else -> "PEDIDOS"
+        }
+        refrescarPestana(id)
+    }
+
+    private fun refrescarPestana(id: Int) {
+        when (id) {
+            R.id.tab_plan -> cargarPlanesDeHoy()
+            R.id.tab_entregas -> cargarEntregasDelTurno()
+            R.id.tab_mensajeria -> listaChats?.cargar()
+            else -> actualizarListasManualmente()
+        }
+    }
+
+    private fun pintarGloboChat(sinLeer: Int) {
+        navInsumista.getOrCreateBadge(R.id.tab_mensajeria).apply {
+            isVisible = sinLeer > 0
+            number = sinLeer
+        }
+    }
+
     // La notificación de un mensaje trae aquí con la activity ya abierta (SINGLE_TOP).
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -232,6 +318,9 @@ class BandejaInsumosActivity : AppCompatActivity() {
                 delay(15_000)
                 consultarServidor()
                 refrescarAvisoChat()
+                withContext(Dispatchers.Main) {
+                    if (navInsumista.selectedItemId == R.id.tab_mensajeria) listaChats?.cargar()
+                }
             }
         }
         refrescarAvisoChat()
@@ -429,6 +518,11 @@ class BandejaInsumosActivity : AppCompatActivity() {
                 if (respPendientes.isSuccessful && respPendientes.body() != null) {
                     val listaPend = respPendientes.body()!!
                     cantidadPedidosAnterior = listaPend.size
+                    // Globo en «Pedidos»: se ve aunque esté mirando otra pestaña.
+                    navInsumista.getOrCreateBadge(R.id.tab_pedidos).apply {
+                        isVisible = listaPend.isNotEmpty()
+                        number = listaPend.size
+                    }
 
                     if (listaPend.isEmpty()) {
                         rvPedidos.visibility  = View.GONE
@@ -668,57 +762,106 @@ class BandejaInsumosActivity : AppCompatActivity() {
      * registrar dos veces lo mismo por si acaso.
      */
     /**
-     * Lo que este insumista entregó en SU turno, desde que inició sesión.
+     * Pestaña «Mis entregas»: lo que este insumista entregó en SU turno, desde que inició
+     * sesión (`tiempo_login`, la misma marca con la que la sesión caduca a las 12 h).
+     * Junta las entregas sin pedido y los pedidos que atendió.
      *
-     * El servidor devuelve sus últimas 20 entregas sin mirar la fecha, así que aquí salían
-     * las de días anteriores mezcladas con las de hoy. El inicio del turno es
-     * `tiempo_login`: la misma marca con la que la sesión caduca a las 12 horas.
+     * Contra un servidor sin `/mis_entregas` cae a `/entregas_proactivas` filtrado aquí:
+     * salen solo las entregas sin pedido, pero salen.
      */
-    private fun mostrarHistorialEntregas() {
+    private fun cargarEntregasDelTurno() {
         val inicioTurno = getSharedPreferences("DetcuadorPrefs", MODE_PRIVATE)
             .getLong("tiempo_login", 0L)
-        val horaInicio = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(inicioTurno))
-        val dialogo = AlertDialog.Builder(this)
-            .setTitle("Mis entregas del turno")
-            .setMessage("Consultando…")
-            .setPositiveButton("Cerrar", null)
-            .show()
+        val desde = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(inicioTurno))
+        val horaInicio = desde.drop(11).take(5)
+        panelEntregas.isRefreshing = true
 
-        lifecycleScope.launch(Dispatchers.IO) {
-            val texto = try {
-                val resp = RetrofitClient.apiService.obtenerEntregasProactivas(usuarioId)
-                val todas = resp.body()
-                val formato = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-                val delTurno = todas.orEmpty().filter { e ->
-                    val cuando = try { formato.parse(e.fecha_hora)?.time } catch (_: Exception) { null }
-                    cuando != null && cuando >= inicioTurno
-                }
-                when {
-                    !resp.isSuccessful -> "No se pudo consultar (HTTP ${resp.code()})."
-                    delTurno.isEmpty() -> "Turno iniciado a las $horaInicio.\n\nTodavía no has registrado ninguna entrega en este turno."
-                    else -> buildString {
-                        append("Turno iniciado a las $horaInicio · ${delTurno.size} entrega(s)")
-                        // El servidor corta en 20: si las 20 son del turno puede haber más.
-                        if (todas.orEmpty().size >= 20 && delTurno.size == todas.orEmpty().size) {
-                            append("\n(se muestran las 20 más recientes)")
+        lifecycleScope.launch {
+            val (filas, error) = withContext(Dispatchers.IO) {
+                try {
+                    val r = RetrofitClient.apiService.obtenerMisEntregas(usuarioId, desde)
+                    when {
+                        r.isSuccessful -> {
+                            val b = r.body()
+                            (b?.proactivas.orEmpty().map { EntregaTurnoFila.deProactiva(it) } +
+                             b?.pedidos.orEmpty().map { EntregaTurnoFila.dePedido(it) }) to null
                         }
-                        append("\n\n")
-                        append(delTurno.joinToString("\n\n") { e ->
-                            buildString {
-                                append("• ${e.cantidad} x ${e.insumo}\n")
-                                append("   ${e.maquina} · ${e.fecha_hora.drop(11).take(5)}")
-                                if (e.foto_path.isNullOrBlank()) append("\n   ⚠️ sin foto")
-                                if (!e.observaciones.isNullOrBlank()) append("\n   «${e.observaciones}»")
-                            }
-                        })
+                        r.code() == 404 -> entregasSinServidorNuevo(desde) to null
+                        else -> emptyList<EntregaTurnoFila>() to "No se pudo consultar (HTTP ${r.code()})"
                     }
+                } catch (e: Exception) {
+                    ErrorReporter.warn("MisEntregas", "Fallo al consultar: ${e.message}")
+                    emptyList<EntregaTurnoFila>() to "Sin conexión. Desliza hacia abajo para reintentar."
                 }
-            } catch (e: Exception) {
-                ErrorReporter.warn("Historial", "Fallo al consultar entregas: ${e.message}")
-                "Sin conexión. Intenta de nuevo cuando haya red."
             }
-            withContext(Dispatchers.Main) { dialogo.setMessage(texto) }
+            panelEntregas.isRefreshing = false
+            val ordenadas = filas.sortedByDescending { it.fechaHora ?: "" }
+            adapterEntregasTurno.actualizar(ordenadas)
+            val pedidos = ordenadas.count { it.esPedido }
+            tvResumenEntregas.text = "Turno iniciado a las $horaInicio · " +
+                "${ordenadas.size - pedidos} sin pedido · $pedidos pedido(s)"
+            tvVacioEntregas.visibility = if (ordenadas.isEmpty()) View.VISIBLE else View.GONE
+            tvVacioEntregas.text = error ?: "Todavía no has entregado nada en este turno"
         }
+    }
+
+    private suspend fun entregasSinServidorNuevo(desde: String): List<EntregaTurnoFila> {
+        val r = RetrofitClient.apiService.obtenerEntregasProactivas(usuarioId)
+        return r.body().orEmpty()
+            .filter { it.fecha_hora >= desde }
+            .map {
+                EntregaTurnoFila.deProactiva(
+                    EntregaDelTurno(it.id, it.insumo, it.cantidad, it.maquina, null,
+                        it.observaciones, it.foto_path, null, it.fecha_hora)
+                )
+            }
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Plan
+    // ────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Detalle de un plan para el insumista: lo de SU bodega que falta, y un botón para
+     * registrar la entrega ya atada a ese plan. Solo lectura: priorizar es del supervisor.
+     */
+    private fun mostrarPlan(plan: PlanProduccion) {
+        val que = listOfNotNull(plan.producto, plan.marca, plan.presentacion, plan.fragancia)
+            .filter { it.isNotBlank() }.joinToString(" · ").ifBlank { "Plan #${plan.id}" }
+        val miBodega = if (usuarioRol.contains("Granel", ignoreCase = true)) "GRANEL" else "EMPAQUE"
+        @Suppress("USELESS_ELVIS")
+        val todos = plan.insumos ?: emptyList()
+        val mios = todos.filter { (it.bodega ?: "EMPAQUE").equals(miBodega, ignoreCase = true) }
+            .sortedWith(compareBy({ it.completo }, { it.prioridad == "Normal" }, { it.insumo }))
+
+        val texto = buildString {
+            append(plan.maquina ?: "Sin máquina asignada")
+            plan.cantidad_planificada?.let { append(" · $it ${plan.unidad.orEmpty()}".trimEnd()) }
+            append("\n\n")
+            if (mios.isEmpty()) {
+                append("Este plan no lleva nada de tu bodega.")
+            } else {
+                append(mios.joinToString("\n") { i ->
+                    val marca = when {
+                        i.completo -> "✅"
+                        i.prioridad == "Urgente" -> "🔴"
+                        i.prioridad == "Alta" -> "🟠"
+                        else -> "⬜"
+                    }
+                    if (i.completo) "$marca ${i.insumo} — completo"
+                    else "$marca ${i.insumo} — faltan ${i.falta} ${i.unidad.orEmpty()}".trimEnd()
+                })
+            }
+            val otros = todos.size - mios.size
+            if (otros > 0) append("\n\n+ $otros insumo(s) de la otra bodega")
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("$que  ·  ${plan.cobertura?.toInt() ?: 0}%")
+            .setMessage(texto)
+            .setPositiveButton("📦 ENTREGAR PARA ESTE PLAN") { _, _ -> abrirFormularioEntregaProactiva(plan) }
+            .setNegativeButton("Cerrar", null)
+            .show()
     }
 
     /** Planes del día, para poder entregar contra uno en vez de contra una máquina. */
@@ -732,26 +875,33 @@ class BandejaInsumosActivity : AppCompatActivity() {
                     // Los cancelados no se ofrecen: dejar material para algo que no se
                     // va a producir es justo lo que esto viene a evitar.
                     val vivos = lista.filter { !"Cancelado".equals(it.estado, ignoreCase = true) }
-                    withContext(Dispatchers.Main) { planesDeHoy = vivos }
+                    withContext(Dispatchers.Main) {
+                        planesDeHoy = vivos
+                        adapterPlan.actualizarLista(vivos)
+                        tvVacioPlan.visibility = if (vivos.isEmpty()) View.VISIBLE else View.GONE
+                        tvVacioPlan.text = "No hay producción planificada para hoy"
+                    }
                 }
             } catch (e: Exception) {
                 ErrorReporter.warn("Planes", "No se pudieron cargar los planes: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    if (adapterPlan.itemCount == 0) {
+                        tvVacioPlan.visibility = View.VISIBLE
+                        tvVacioPlan.text = "Sin conexión. Desliza hacia abajo para reintentar."
+                    }
+                }
+            } finally {
+                withContext(Dispatchers.Main) { panelPlan.isRefreshing = false }
             }
         }
     }
 
-    /**
-     * Chats con supervisión, uno por supervisor que te escribe, como en WhatsApp. Siempre
-     * abre la lista: el insumista elige qué conversación leer (la del que le escribió
-     * sale arriba, con su globo de no leídos).
-     */
+    /** La notificación de un mensaje lleva a la pestaña de mensajería. */
     private fun abrirChats() {
-        ChatBodega.abrirLista(this, esSupervisor = false) {
-            refrescarAvisoChat()
-        }
+        navInsumista.selectedItemId = R.id.tab_mensajeria
     }
 
-    /** El botón cuenta los mensajes sin leer: «💬 MENSAJES DE SUPERVISIÓN (2)». */
+    /** Globo de la pestaña «Mensajería» con los mensajes sin leer. */
     private fun refrescarAvisoChat() {
         lifecycleScope.launch {
             val sinLeer = withContext(Dispatchers.IO) {
@@ -759,8 +909,7 @@ class BandejaInsumosActivity : AppCompatActivity() {
                     RetrofitClient.apiService.resumenChatBodega().body()?.sin_leer
                 } catch (e: Exception) { null }
             } ?: return@launch
-            btnMensajesBodega.text =
-                if (sinLeer > 0) "💬 MENSAJES DE SUPERVISIÓN ($sinLeer)" else "💬 MENSAJES DE SUPERVISIÓN"
+            pintarGloboChat(sinLeer)
         }
     }
 
@@ -770,7 +919,7 @@ class BandejaInsumosActivity : AppCompatActivity() {
         return File.createTempFile(nombre, ".jpg", dir)
     }
 
-    private fun abrirFormularioEntregaProactiva() {
+    private fun abrirFormularioEntregaProactiva(planElegido: PlanProduccion? = null) {
         fotoUri = null
         fotoFile = null
         val esGranel = usuarioRol.contains("Granel", ignoreCase = true)
@@ -806,18 +955,23 @@ class BandejaInsumosActivity : AppCompatActivity() {
             })
         }
         val etiquetasInsumo = if (deEmergencia) {
-            if (esGranel) listOf("Materia Prima", "Preten")
-            else listOf("Cajas", "Botellas", "Fajillas", "Etiquetas", "Tapas")
+            // Mismos genéricos que el catálogo provisional de la base (2026-10-13).
+            if (esGranel) listOf("Materia Prima Sólido")
+            else listOf("Caja", "Fajilla", "Etiqueta", "Envase", "Tapa", "Pad", "Funda", "Saco")
         } else {
             catalogoInsumos.map { if (it.unidad.isBlank()) it.nombre else "${it.nombre}  (${it.unidad})" }
         }
         spinnerInsumo.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, etiquetasInsumo)
 
-        // Máquina
-        cont.addView(TextView(this).apply { text = "Máquina destino:"; setTypeface(null, android.graphics.Typeface.BOLD); setPadding(0, 20, 0, 0) })
+        // Máquina — OPCIONAL. Muchas veces el material se deja sin saber qué máquina lo
+        // usará, o no lo usará ninguna. «Vacío» va primero y es lo que sale marcado:
+        // elegir una máquina tiene que ser una decisión, no lo que quedó por defecto.
+        cont.addView(TextView(this).apply { text = "Máquina destino (opcional):"; setTypeface(null, android.graphics.Typeface.BOLD); setPadding(0, 20, 0, 0) })
         val spinnerMaquina = Spinner(this).also { cont.addView(it) }
-        spinnerMaquina.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item,
-            listaMaquinas.ifEmpty { listOf("(Sin máquinas cargadas)") })
+        val opcionesMaquina = listOf(SIN_MAQUINA) + listaMaquinas
+        spinnerMaquina.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, opcionesMaquina)
+        // Si viene de un plan con máquina, se propone esa.
+        planElegido?.maquina?.let { m -> opcionesMaquina.indexOf(m).takeIf { it > 0 }?.let { spinnerMaquina.setSelection(it) } }
 
         // Plan de producción (opcional). Es lo que hace que la entrega cuente para la
         // cobertura del plan, y lo que permite dejar material para producción que
@@ -838,6 +992,11 @@ class BandejaInsumosActivity : AppCompatActivity() {
                 "$que — $donde$falta"
             }
             spinnerPlan.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, etiquetas)
+            // Desde la pestaña Plan: el plan ya viene elegido (posición 0 = «ninguno»).
+            planElegido?.let { p ->
+                val pos = planesDeHoy.indexOfFirst { it.id == p.id }
+                if (pos >= 0) spinnerPlan.setSelection(pos + 1)
+            }
         }
 
         // Cantidad
@@ -887,11 +1046,9 @@ class BandejaInsumosActivity : AppCompatActivity() {
                     Toast.makeText(this, "Ingrese una cantidad válida", Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
                 }
-                val maq = spinnerMaquina.selectedItem?.toString() ?: ""
-                if (maq.isEmpty() || maq.startsWith("(")) {
-                    Toast.makeText(this, "Seleccione una máquina", Toast.LENGTH_SHORT).show()
-                    return@setPositiveButton
-                }
+                // Posición 0 = «Vacío»: la entrega va sin máquina.
+                val maq = if (spinnerMaquina.selectedItemPosition > 0)
+                    spinnerMaquina.selectedItem?.toString() else null
                 if (fotoUri == null) {
                     Toast.makeText(this, "La foto de evidencia es obligatoria", Toast.LENGTH_LONG).show()
                     return@setPositiveButton
@@ -914,7 +1071,7 @@ class BandejaInsumosActivity : AppCompatActivity() {
     }
 
     private fun enviarEntregaProactiva(
-        tipo: String, insumo: String, cantidad: Int, maquina: String, obs: String?,
+        tipo: String, insumo: String, cantidad: Int, maquina: String?, obs: String?,
         insumoId: Int? = null, planId: Int? = null
     ) {
         lifecycleScope.launch(Dispatchers.IO) {
@@ -934,7 +1091,7 @@ class BandejaInsumosActivity : AppCompatActivity() {
                     tipoProducto  = tipo.toRequestBody("text/plain".toMediaType()),
                     insumo        = insumo.toRequestBody("text/plain".toMediaType()),
                     cantidad      = cantidad.toString().toRequestBody("text/plain".toMediaType()),
-                    maquina       = maquina.toRequestBody("text/plain".toMediaType()),
+                    maquina       = maquina?.toRequestBody("text/plain".toMediaType()),
                     observaciones = obs?.toRequestBody("text/plain".toMediaType()),
                     insumoId      = insumoId?.toString()?.toRequestBody("text/plain".toMediaType()),
                     requestId     = idPeticion.toRequestBody("text/plain".toMediaType()),
@@ -949,6 +1106,7 @@ class BandejaInsumosActivity : AppCompatActivity() {
                         // La cobertura del plan acaba de cambiar: se recarga para que el
                         // siguiente formulario muestre cuánto falta de verdad.
                         if (planId != null) cargarPlanesDeHoy()
+                        if (navInsumista.selectedItemId == R.id.tab_entregas) cargarEntregasDelTurno()
                     } else {
                         Toast.makeText(this@BandejaInsumosActivity, "Error al registrar entrega", Toast.LENGTH_SHORT).show()
                     }

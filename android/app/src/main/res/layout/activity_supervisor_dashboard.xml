@@ -122,8 +122,8 @@
         android:background="#1E293B"
         app:menu="@menu/menu_vistas_supervisor"
         app:labelVisibilityMode="labeled"
-        app:itemIconTint="@color/nav_supervisor"
-        app:itemTextColor="@color/nav_supervisor"
+        app:itemIconTint="@color/nav_inferior"
+        app:itemTextColor="@color/nav_inferior"
         app:itemActiveIndicatorStyle="@style/Widget.Material3.BottomNavigationView.ActiveIndicator"
         app:itemRippleColor="#33FFFFFF"/>
 

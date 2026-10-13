@@ -527,10 +527,46 @@ data class EntregaProactivaHistorial(
     val tipo_producto: String,
     val insumo: String,
     val cantidad: Int,
-    val maquina: String,
+    // Nulable desde 2026-10-13: una entrega puede registrarse sin máquina.
+    val maquina: String?,
     val observaciones: String?,
     val foto_path: String?,
     val fecha_hora: String
+)
+
+/**
+ * Lo entregado en el turno (pestaña «Mis entregas»). Listas nulables por lo mismo que
+ * `ResumenChat`: Gson deja null lo que el servidor no manda.
+ */
+data class MisEntregasResponse(
+    val desde: String?,
+    val proactivas: List<EntregaDelTurno>?,
+    val pedidos: List<PedidoDelTurno>?
+)
+
+data class EntregaDelTurno(
+    val id: Int,
+    val insumo: String?,
+    val cantidad: Int,
+    val maquina: String?,
+    val plan_id: Int?,
+    val observaciones: String?,
+    val foto_path: String?,
+    val estado: String?,          // Registrada | Verificada | Rechazada
+    val fecha_hora: String?
+)
+
+data class PedidoDelTurno(
+    val id: Int,
+    val detalle: String?,
+    val maquina: String?,
+    val operador: String?,
+    val cantidad_solicitada: Int?,
+    val cantidad_entregada: Int?,
+    val cantidad_recibida: Int?,
+    val estado: String?,          // Entregado_Insumista | Entregado | Cerrado_Fin_Turno
+    val fecha_entrega: String?,
+    val fecha_confirmacion: String?
 )
 
 // El mismo modelo sirve para registro (HTTP 201) y actualización (HTTP 200).

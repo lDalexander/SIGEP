@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Pestañas de la bandeja del insumista. Antes todo vivía en una sola pantalla con
+     botones al final; el plan, sus entregas y el chat quedaban a dos toques. -->
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/tab_pedidos"
+        android:icon="@drawable/ic_tab_pedidos"
+        android:title="Pedidos"/>
+    <item
+        android:id="@+id/tab_plan"
+        android:icon="@drawable/ic_vista_plan"
+        android:title="Plan"/>
+    <item
+        android:id="@+id/tab_entregas"
+        android:icon="@drawable/ic_vista_entregas"
+        android:title="Mis entregas"/>
+    <item
+        android:id="@+id/tab_mensajeria"
+        android:icon="@drawable/ic_chat"
+        android:title="Mensajería"/>
+</menu>

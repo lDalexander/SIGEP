@@ -1,10 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Bandeja del insumista: encabezado, cuatro pestañas y la barra inferior.
+     Sin fitsSystemWindows: los insets los reparte BarraInferior (si no, el hueco de la
+     navegación del sistema se sumaría dos veces y quedaría una franja bajo la barra). -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="#E0E0E0"
-    android:fitsSystemWindows="true">
+    android:background="#E0E0E0">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -19,6 +22,7 @@
             android:layout_weight="1"
             android:orientation="vertical">
             <TextView
+                android:id="@+id/tvTituloBandeja"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="PEDIDOS"
@@ -48,123 +52,232 @@
             android:textStyle="bold"/>
     </LinearLayout>
 
-    <androidx.core.widget.NestedScrollView
+    <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:fillViewport="true">
+        android:layout_height="0dp"
+        android:layout_weight="1">
 
-        <LinearLayout
+        <!-- ═══ PEDIDOS ═══ lo que ya había: aceptados, nuevos y registrar entrega -->
+        <androidx.core.widget.NestedScrollView
+            android:id="@+id/panelPedidos"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical">
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="PEDIDOS ACEPTADOS"
-                android:textColor="#1976D2"
-                android:textStyle="bold"
-                android:padding="12dp"
-                android:textSize="16sp"
-                android:background="#BBDEFB"/>
-
-            <TextView
-                android:id="@+id/tvSinAsignados"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="No tienes entregas pendientes"
-                android:gravity="center"
-                android:padding="20dp"
-                android:textStyle="italic"
-                android:textColor="#757575"/>
-
-            <androidx.recyclerview.widget.RecyclerView
-                android:id="@+id/rvAsignados"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:nestedScrollingEnabled="false" /> <View
-            android:layout_width="match_parent"
-            android:layout_height="4dp"
-            android:background="#9E9E9E"/>
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="PEDIDOS NUEVOS"
-                android:textColor="#D32F2F"
-                android:textStyle="bold"
-                android:padding="12dp"
-                android:textSize="16sp"
-                android:background="#FFCDD2"/>
-
-            <TextView
-                android:id="@+id/tvSinPedidos"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Buscando pedidos..."
-                android:gravity="center"
-                android:padding="20dp"
-                android:textStyle="italic"
-                android:textColor="#757575"/>
-
-            <androidx.recyclerview.widget.RecyclerView
-                android:id="@+id/rvPedidos"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:nestedScrollingEnabled="false" />
-
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="4dp"
-                android:background="#9E9E9E"/>
+            android:layout_height="match_parent"
+            android:fillViewport="true">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:background="#E8F5E9"
-                android:padding="16dp"
                 android:orientation="vertical">
 
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="ENTREGAS"
-                    android:textColor="#2E7D32"
+                    android:text="PEDIDOS ACEPTADOS"
+                    android:textColor="#1976D2"
                     android:textStyle="bold"
+                    android:padding="12dp"
                     android:textSize="16sp"
-                    android:layout_marginBottom="10dp"/>
+                    android:background="#BBDEFB"/>
 
-                <Button
-                    android:id="@+id/btnEntregarInsumo"
+                <TextView
+                    android:id="@+id/tvSinAsignados"
                     android:layout_width="match_parent"
-                    android:layout_height="56dp"
-                    android:text="📦 REGISTRAR ENTREGA DE INSUMO"
-                    android:textColor="#FFFFFF"
-                    android:textStyle="bold"
-                    android:backgroundTint="#388E3C"/>
+                    android:layout_height="wrap_content"
+                    android:text="No tienes entregas pendientes"
+                    android:gravity="center"
+                    android:padding="20dp"
+                    android:textStyle="italic"
+                    android:textColor="#757575"/>
 
-                <Button
-                    android:id="@+id/btnMensajesBodega"
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/rvAsignados"
                     android:layout_width="match_parent"
-                    android:layout_height="48dp"
-                    android:layout_marginTop="8dp"
-                    android:text="💬 MENSAJES DE SUPERVISIÓN"
-                    android:textColor="#FFFFFF"
-                    android:textStyle="bold"
-                    android:backgroundTint="#5E35B1"/>
+                    android:layout_height="wrap_content"
+                    android:nestedScrollingEnabled="false" />
 
-                <Button
-                    android:id="@+id/btnHistorialEntregas"
+                <View
                     android:layout_width="match_parent"
-                    android:layout_height="48dp"
-                    android:layout_marginTop="8dp"
-                    android:text="🕓 MIS ENTREGAS DEL TURNO"
-                    android:textColor="#FFFFFF"
+                    android:layout_height="4dp"
+                    android:background="#9E9E9E"/>
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="PEDIDOS NUEVOS"
+                    android:textColor="#D32F2F"
                     android:textStyle="bold"
-                    android:backgroundTint="#455A64"/>
+                    android:padding="12dp"
+                    android:textSize="16sp"
+                    android:background="#FFCDD2"/>
+
+                <TextView
+                    android:id="@+id/tvSinPedidos"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Buscando pedidos..."
+                    android:gravity="center"
+                    android:padding="20dp"
+                    android:textStyle="italic"
+                    android:textColor="#757575"/>
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/rvPedidos"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:nestedScrollingEnabled="false" />
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="4dp"
+                    android:background="#9E9E9E"/>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="#E8F5E9"
+                    android:padding="16dp"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="ENTREGA SIN PEDIDO"
+                        android:textColor="#2E7D32"
+                        android:textStyle="bold"
+                        android:textSize="16sp"
+                        android:layout_marginBottom="10dp"/>
+
+                    <Button
+                        android:id="@+id/btnEntregarInsumo"
+                        android:layout_width="match_parent"
+                        android:layout_height="56dp"
+                        android:text="📦 REGISTRAR ENTREGA DE INSUMO"
+                        android:textColor="#FFFFFF"
+                        android:textStyle="bold"
+                        android:backgroundTint="#388E3C"/>
+                </LinearLayout>
+
             </LinearLayout>
+        </androidx.core.widget.NestedScrollView>
 
-        </LinearLayout>
-    </androidx.core.widget.NestedScrollView>
+        <!-- ═══ PLAN ═══ producción planificada de hoy y si está cubierta -->
+        <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+            android:id="@+id/panelPlan"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone">
+
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="match_parent">
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/rvPlanInsumista"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:clipToPadding="false"
+                    android:padding="8dp" />
+
+                <TextView
+                    android:id="@+id/tvVacioPlan"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:gravity="center"
+                    android:padding="24dp"
+                    android:text="Cargando el plan de hoy…"
+                    android:textColor="#757575"
+                    android:textSize="15sp" />
+            </FrameLayout>
+        </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+
+        <!-- ═══ MIS ENTREGAS ═══ lo entregado en este turno -->
+        <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+            android:id="@+id/panelEntregas"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/tvResumenEntregas"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="#E8F5E9"
+                    android:padding="12dp"
+                    android:text="Turno iniciado a las —"
+                    android:textColor="#2E7D32"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <FrameLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1">
+
+                    <androidx.recyclerview.widget.RecyclerView
+                        android:id="@+id/rvEntregasTurno"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:clipToPadding="false"
+                        android:padding="8dp" />
+
+                    <TextView
+                        android:id="@+id/tvVacioEntregas"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="center"
+                        android:gravity="center"
+                        android:padding="24dp"
+                        android:text="Cargando…"
+                        android:textColor="#757575"
+                        android:textSize="15sp" />
+                </FrameLayout>
+            </LinearLayout>
+        </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+
+        <!-- ═══ MENSAJERÍA ═══ la lista de chats, la misma de ChatBodega -->
+        <FrameLayout
+            android:id="@+id/panelMensajeria"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#FFFFFF"
+            android:visibility="gone">
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/rvChatsInsumista"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:clipToPadding="false"
+                android:paddingVertical="4dp" />
+
+            <TextView
+                android:id="@+id/tvVacioChats"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:gravity="center"
+                android:padding="24dp"
+                android:text="Cargando…"
+                android:textColor="#64748B"
+                android:textSize="15sp" />
+        </FrameLayout>
+    </FrameLayout>
+
+    <com.google.android.material.bottomnavigation.BottomNavigationView
+        android:id="@+id/navInsumista"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#212121"
+        app:menu="@menu/menu_tabs_insumista"
+        app:labelVisibilityMode="labeled"
+        app:itemIconTint="@color/nav_inferior"
+        app:itemTextColor="@color/nav_inferior"
+        app:itemActiveIndicatorStyle="@style/Widget.Material3.BottomNavigationView.ActiveIndicator"
+        app:itemRippleColor="#33FFFFFF"/>
 
 </LinearLayout>

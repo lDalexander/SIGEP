@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Pestañas de la torre de control: la vista activa en blanco, el resto en gris pizarra. -->
+<!-- Pestañas de las barras inferiores (supervisor e insumista): la vista activa en blanco, el resto en gris pizarra. -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:color="#FFFFFF" android:state_checked="true"/>
     <item android:color="#94A3B8"/>
