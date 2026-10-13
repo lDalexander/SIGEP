@@ -98,7 +98,8 @@ class SupervisorDashboardActivity : AppCompatActivity() {
     }
 
     private fun cerrarSesion() {
-        getSharedPreferences("DetcuadorPrefs", MODE_PRIVATE).edit().clear().apply()
+        RetrofitClient.tokenSesion = null
+        PrefsRepository(applicationContext).limpiarSesionUsuario()
         Toast.makeText(this, "Sesión cerrada", Toast.LENGTH_SHORT).show()
         startActivity(Intent(this, MenuRolesActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK

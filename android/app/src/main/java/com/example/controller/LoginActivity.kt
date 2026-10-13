@@ -185,6 +185,7 @@ class LoginActivity : AppCompatActivity() {
                             // Guardar en AppState para control de alarmas
                             AppState.usuarioRol = user.rol
                             ErrorReporter.setRol(user.rol)
+                            RetrofitClient.tokenSesion = user.token
 
                             // tipo_insumo_usuario lo necesita SigepFirebaseMessagingService
                                 // para filtrar FCM en background. Si no lo guardamos acá,
@@ -200,6 +201,10 @@ class LoginActivity : AppCompatActivity() {
                                 putString("usuario_nombre", user.nombre)
                                 putString("usuario_rol", user.rol)
                                 putString("tipo_insumo_usuario", tipoInsumo)
+                                // Credencial de la sesion de turno (v1.7.0). Un servidor
+                                // anterior no la manda y queda null: la app funciona igual,
+                                // solo que sin autenticar.
+                                putString("user_token", user.token)
                                 putLong("tiempo_login", System.currentTimeMillis())
                                 apply()
                             }

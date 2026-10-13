@@ -32,14 +32,17 @@ class SigepWebSocketManager(
             Log.d("SIGEP_WS", "📩 Mensaje: $text")
             try {
                 val json = JSONObject(text)
-                val evento = json.optString("evento") // 🔥 Extraemos la palabra clave
+                val evento = json.optString("evento")
 
-                // Le enseñamos a escuchar AMBOS eventos
-                if (evento == "nuevo_pedido" || evento == "pedido_aceptado") {
+                // Se reenvia CUALQUIER evento con nombre, y quien decide que hacer con
+                // el es la pantalla. Antes habia aqui una lista blanca con solo
+                // "nuevo_pedido" y "pedido_aceptado", asi que los eventos de entrega y
+                // de confirmacion que BandejaInsumosActivity ya sabia manejar no le
+                // llegaban nunca: los descartaba este filtro, dos capas antes. De ahi
+                // venia el refresco cada 15 s "por si el WS se cayo".
+                if (evento.isNotBlank()) {
                     val id = if (json.has("solicitud_id")) json.getInt("solicitud_id") else null
                     val desc = json.optString("descripcion", "Actualización")
-
-                    // 🔥 Le enviamos el nombre del evento a la BandejaInsumosActivity
                     handler.post { onUpdate(evento, id, desc) }
                 }
             } catch (e: Exception) {

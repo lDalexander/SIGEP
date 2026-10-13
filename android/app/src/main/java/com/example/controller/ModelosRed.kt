@@ -206,7 +206,10 @@ data class ListaUsuariosResponse(val id: Int, val nombre: String, val rol: Strin
 data class UsuarioResponse(
     val id: Int,
     val nombre: String,
-    val rol: String
+    val rol: String,
+    // Credencial de la sesion de turno (v1.7.0). Nullable porque un servidor anterior
+    // no lo manda, y la app tiene que seguir entrando igual contra el.
+    val token: String? = null
 )
 
 // ==========================================

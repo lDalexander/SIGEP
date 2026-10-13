@@ -24,6 +24,10 @@ class SigepApplication : Application(), LifecycleEventObserver {
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
         // Identifica la tablet en Crashlytics ⇒ cuando crashea, sabemos cuál de las 20 es.
         ErrorReporter.setDeviceId(PrefsRepository(this).deviceId)
+        // El proceso se reinicia solo (Android lo mata en segundo plano, llega un FCM y
+        // revive). Sin esto, la primera peticion tras revivir saldria sin token y el
+        // servidor la trataria como una tablet antigua.
+        RetrofitClient.tokenSesion = PrefsRepository(this).userToken
         // Canal de alarma listo desde el arranque. Antes se creaba solo dentro
         // de onMessageReceived, así que si Android entregaba la notificación
         // directamente (notification payload), salía con el canal default

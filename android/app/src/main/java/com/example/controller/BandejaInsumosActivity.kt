@@ -532,7 +532,8 @@ class BandejaInsumosActivity : AppCompatActivity() {
             }
         }
 
-        prefs.edit().clear().apply()
+        RetrofitClient.tokenSesion = null
+        PrefsRepository(applicationContext).limpiarSesionUsuario()
         Toast.makeText(this, mensaje, Toast.LENGTH_LONG).show()
         startActivity(Intent(this, MenuRolesActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
