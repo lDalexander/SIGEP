@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Las cinco vistas de la torre de control. El orden es el de la antigua rotación del
+     botón VISTA: planta → plan → insumistas → entregas → bodega. -->
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/vista_planta"
+        android:icon="@drawable/ic_vista_planta"
+        android:title="Planta"/>
+    <item
+        android:id="@+id/vista_plan"
+        android:icon="@drawable/ic_vista_plan"
+        android:title="Plan"/>
+    <item
+        android:id="@+id/vista_insumistas"
+        android:icon="@drawable/ic_vista_insumistas"
+        android:title="Insumistas"/>
+    <item
+        android:id="@+id/vista_entregas"
+        android:icon="@drawable/ic_vista_entregas"
+        android:title="Entregas"/>
+    <item
+        android:id="@+id/vista_bodega"
+        android:icon="@drawable/ic_vista_bodega"
+        android:title="Bodega"/>
+</menu>

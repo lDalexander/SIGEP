@@ -1,21 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:background="#F0F2F5"
     android:fitsSystemWindows="true">
 
-    <!-- Header Panel -->
+    <!-- Header Panel: solo el título y SALIR. El cambio de vista bajó a la barra inferior
+         porque los dos botones juntos dejaban el título cortado a la mitad. -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:padding="12dp"
+        android:paddingStart="12dp"
+        android:paddingEnd="4dp"
+        android:paddingVertical="10dp"
         android:background="#1E293B"
         android:gravity="center_vertical">
 
-        <!-- Lado Izquierdo: Textos -->
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
@@ -32,7 +35,7 @@
                 android:textStyle="bold"
                 android:textColor="#FFFFFF"
                 android:ellipsize="end"
-                android:maxLines="1"/>
+                android:maxLines="2"/>
 
             <TextView
                 android:id="@+id/tvSubtituloDashboard"
@@ -43,50 +46,31 @@
                 android:textColor="#94A3B8"
                 android:layout_marginTop="2dp"
                 android:ellipsize="end"
-                android:maxLines="1"/>
+                android:maxLines="2"/>
         </LinearLayout>
 
-        <!-- Lado Derecho: Botones (Uno al lado del otro) -->
-        <LinearLayout
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnSalirSupervisor"
+            style="@style/Widget.Material3.Button.TextButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical">
-
-            <Button
-                android:id="@+id/btnCambiarVista"
-                android:layout_width="wrap_content"
-                android:layout_height="36dp"
-                android:text="VISTA"
-                android:textSize="10sp"
-                android:visibility="gone"
-                android:backgroundTint="#3B82F6"
-                android:textColor="#FFFFFF"
-                android:layout_marginEnd="6dp"
-                android:paddingHorizontal="8dp"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"/>
-
-            <Button
-                android:id="@+id/btnSalirSupervisor"
-                android:layout_width="wrap_content"
-                android:layout_height="36dp"
-                android:backgroundTint="#EF4444"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                android:paddingHorizontal="8dp"
-                android:text="SALIR"
-                android:textColor="#FFFFFF"
-                android:textSize="10sp" />
-        </LinearLayout>
+            android:minWidth="0dp"
+            android:text="Salir"
+            android:textSize="13sp"
+            android:textColor="#FCA5A5"
+            app:icon="@drawable/ic_salir"
+            app:iconTint="#FCA5A5"
+            app:iconGravity="textTop"
+            app:iconPadding="0dp"
+            android:paddingHorizontal="10dp"/>
     </LinearLayout>
 
     <!-- Contenido Principal -->
-
     <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
         android:id="@+id/swipeRefresh"
         android:layout_width="match_parent"
-        android:layout_height="match_parent">
+        android:layout_height="0dp"
+        android:layout_weight="1">
 
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/rvDashboard"
@@ -96,5 +80,19 @@
             android:clipToPadding="false"/>
 
     </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+
+    <!-- Menú de vistas. labelVisibilityMode=labeled: con 5 pestañas Material esconde los
+         nombres de las no seleccionadas, y un ícono solo no dice qué vista es. -->
+    <com.google.android.material.bottomnavigation.BottomNavigationView
+        android:id="@+id/navVistas"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#1E293B"
+        app:menu="@menu/menu_vistas_supervisor"
+        app:labelVisibilityMode="labeled"
+        app:itemIconTint="@color/nav_supervisor"
+        app:itemTextColor="@color/nav_supervisor"
+        app:itemActiveIndicatorStyle="@style/Widget.Material3.BottomNavigationView.ActiveIndicator"
+        app:itemRippleColor="#33FFFFFF"/>
 
 </LinearLayout>

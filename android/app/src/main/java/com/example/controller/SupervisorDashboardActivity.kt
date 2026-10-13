@@ -15,6 +15,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+import com.google.android.material.bottomnavigation.BottomNavigationView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -40,7 +41,7 @@ class SupervisorDashboardActivity : AppCompatActivity() {
     private lateinit var swipeRefresh: SwipeRefreshLayout
     private lateinit var tvTitulo: TextView
     private lateinit var tvSubtitulo: TextView
-    private lateinit var btnCambiarVista: android.widget.Button
+    private lateinit var navVistas: BottomNavigationView
     private lateinit var btnSalir: android.widget.Button
 
     private var adapterPlanta: MaquinaStatusAdapter? = null
@@ -77,20 +78,34 @@ class SupervisorDashboardActivity : AppCompatActivity() {
         swipeRefresh = findViewById(R.id.swipeRefresh)
         tvTitulo     = findViewById(R.id.tvTituloDashboard)
         tvSubtitulo  = findViewById(R.id.tvSubtituloDashboard)
-        btnCambiarVista = findViewById(R.id.btnCambiarVista)
-        btnSalir        = findViewById(R.id.btnSalirSupervisor)
+        navVistas    = findViewById(R.id.navVistas)
+        btnSalir     = findViewById(R.id.btnSalirSupervisor)
 
         rvDashboard.layoutManager = LinearLayoutManager(this)
 
         configurarSegunRol()
         cargarDatos()
 
-        // El botón ya no alterna entre dos vistas sino que rota entre cinco, así que
-        // está disponible para todos los niveles: cada uno arranca en la suya y puede
-        // mirar el resto. Quien no pueda ACTUAR seguirá sin ver los botones de acción,
-        // que es donde está el permiso de verdad.
-        btnCambiarVista.visibility = View.VISIBLE
-        btnCambiarVista.setOnClickListener { alternarVista() }
+        // Las cinco vistas están en la barra inferior para todos los niveles: cada uno
+        // arranca en la suya y puede mirar el resto. Quien no pueda ACTUAR seguirá sin
+        // ver los botones de acción, que es donde está el permiso de verdad.
+        // La pestaña inicial se marca ANTES de poner el listener: si no, marcarla
+        // dispararía una segunda carga encima de la de arriba.
+        navVistas.selectedItemId = idDeVista(vistaActual)
+        navVistas.setOnItemSelectedListener { item ->
+            when (item.itemId) {
+                R.id.vista_planta      -> activarVistaPlanta()
+                R.id.vista_plan        -> activarVistaPlan()
+                R.id.vista_insumistas  -> activarVistaInsumistas()
+                R.id.vista_entregas    -> activarVistaEntregas()
+                R.id.vista_bodega      -> activarVistaBodega()
+                else -> return@setOnItemSelectedListener false
+            }
+            cargarDatos()
+            true
+        }
+        // Tocar la pestaña en la que ya se está la recarga, como el gesto de arrastrar.
+        navVistas.setOnItemReselectedListener { cargarDatos() }
 
         btnSalir.setOnClickListener { cerrarSesion() }
         swipeRefresh.setOnRefreshListener { cargarDatos() }
@@ -101,16 +116,12 @@ class SupervisorDashboardActivity : AppCompatActivity() {
         else activarVistaPlanta()
     }
 
-    /** Rotación fija: planta → plan → insumistas → entregas → bodega → planta. */
-    private fun alternarVista() {
-        when (vistaActual) {
-            "PLANTA"      -> activarVistaPlan()
-            "PLAN"        -> activarVistaInsumistas()
-            "INSUMISTAS"  -> activarVistaEntregas()
-            "ENTREGAS"    -> activarVistaBodega()
-            else          -> activarVistaPlanta()
-        }
-        cargarDatos()
+    private fun idDeVista(vista: String): Int = when (vista) {
+        "PLAN"       -> R.id.vista_plan
+        "INSUMISTAS" -> R.id.vista_insumistas
+        "ENTREGAS"   -> R.id.vista_entregas
+        "BODEGA"     -> R.id.vista_bodega
+        else         -> R.id.vista_planta
     }
 
     private fun limpiarAdaptadores() {
@@ -565,18 +576,24 @@ class SupervisorDashboardActivity : AppCompatActivity() {
 
     private fun cargarDatos(esSilencioso: Boolean = false) {
         if (!esSilencioso) swipeRefresh.isRefreshing = true
+        // Con la barra se cambia de vista de un toque, así que la respuesta de la vista
+        // anterior puede llegar ya en la nueva. Los adaptadores viejos están a null y no
+        // pintan nada, pero el subtítulo sí: se descarta lo que no sea de la vista vigente.
+        val vista = vistaActual
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                when (vistaActual) {
+                when (vista) {
                     "PLANTA" -> {
                         val r = RetrofitClient.apiService.obtenerEstadoPlanta()
                         withContext(Dispatchers.Main) {
+                            if (vistaActual != vista) return@withContext
                             r.body()?.takeIf { r.isSuccessful }?.let { adapterPlanta?.actualizarLista(it) }
                         }
                     }
                     "INSUMISTAS" -> {
                         val r = RetrofitClient.apiService.obtenerInsumistasDeTurno()
                         withContext(Dispatchers.Main) {
+                            if (vistaActual != vista) return@withContext
                             val lista = r.body().orEmpty()
                             adapterInsumistas?.actualizarLista(lista)
                             // Que no haya NADIE de turno en bodega es justo el dato que
@@ -592,6 +609,7 @@ class SupervisorDashboardActivity : AppCompatActivity() {
                             .format(java.util.Date())
                         val r = RetrofitClient.apiService.obtenerPlanes(hoy, hoy)
                         withContext(Dispatchers.Main) {
+                            if (vistaActual != vista) return@withContext
                             val lista = r.body()?.planes.orEmpty()
                             adapterPlan?.actualizarLista(lista)
                             val sinCubrir = lista.count { (it.cobertura ?: 0.0) < 100.0 }
@@ -605,6 +623,7 @@ class SupervisorDashboardActivity : AppCompatActivity() {
                     "ENTREGAS" -> {
                         val r = RetrofitClient.apiService.obtenerEntregasPorVerificar()
                         withContext(Dispatchers.Main) {
+                            if (vistaActual != vista) return@withContext
                             val lista = r.body().orEmpty()
                             adapterEntregas?.actualizarLista(lista)
                             tvSubtitulo.text = if (lista.isEmpty())
@@ -616,6 +635,7 @@ class SupervisorDashboardActivity : AppCompatActivity() {
                     else -> {
                         val r = RetrofitClient.apiService.obtenerHistorialPedidosSupervisor()
                         withContext(Dispatchers.Main) {
+                            if (vistaActual != vista) return@withContext
                             r.body()?.takeIf { r.isSuccessful }?.let { adapterBodega?.actualizarLista(it) }
                         }
                     }
