@@ -14,6 +14,7 @@ from models import OperadorDB, MaquinaDB, SesionTrabajoDB, PalletDB, ParoMaquina
 from schemas import IniciarTurno, RegistrarPalletRequest, FinalizarTurno, IniciarParo, FinalizarParo, ComentarioTurnoRequest, ReporteAppRequest, RegistrarVelocidad
 from ws_manager import manager
 from services.email_service import notificar_reporte_app
+from services import bom
 
 # Estados de un pedido de insumo que aún están "vivos" (no terminados). Al cerrar
 # el turno del operario, estos quedarían huérfanos (el operario ya no puede
@@ -250,41 +251,19 @@ def obtener_insumos_permitidos(sesion_id: int, db: Session = Depends(get_db)):
     if not sesion:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
     try:
-        def coincide(columna, valor):
-            """NULL en la receta = comodín; si no, tiene que ser igual al del turno."""
-            if not valor:
-                return columna.is_(None)
-            return or_(columna.is_(None), columna == valor)
-
-        recetas = (
-            db.query(RecetaProductoDB)
-            .filter(
-                RecetaProductoDB.activo.is_(True),
-                coincide(RecetaProductoDB.maquina, sesion.maquina),
-                coincide(RecetaProductoDB.producto, sesion.producto),
-                coincide(RecetaProductoDB.marca, sesion.marca),
-                coincide(RecetaProductoDB.presentacion, sesion.presentacion),
-                coincide(RecetaProductoDB.fragancia, sesion.fragancia),
-            )
-            .all()
+        # La resolución del BOM vive en `services/bom.py` porque la pregunta se la hacen
+        # dos sitios: esto y la planificación de producción. Si respondieran distinto,
+        # el insumista dejaría material que el operario no puede pedir.
+        emparejados = bom.insumos_de(
+            db,
+            maquina=sesion.maquina,
+            producto=sesion.producto,
+            marca=sesion.marca,
+            presentacion=sesion.presentacion,
+            fragancia=sesion.fragancia,
         )
-
-        # Con varias recetas apuntando al mismo insumo (una por máquina y otra comodín,
-        # por ejemplo) manda la cantidad sugerida MAYOR: quedarse corto obliga a pedir
-        # dos veces, y el operario puede bajar el número en el propio diálogo.
-        sugerida = {}
-        for r in recetas:
-            if r.insumo_id is None:
-                continue
-            sugerida[r.insumo_id] = max(sugerida.get(r.insumo_id, 0), r.cantidad_sugerida or 1)
-
-        if sugerida:
-            insumos = db.query(InsumoDB).filter(
-                InsumoDB.id.in_(list(sugerida.keys())),
-                InsumoDB.activo.is_(True),
-            ).all()
-        else:
-            insumos = []
+        sugerida = {insumo.id: cantidad for insumo, cantidad in emparejados}
+        insumos = [insumo for insumo, _ in emparejados]
 
         if not insumos:
             logger.warning(

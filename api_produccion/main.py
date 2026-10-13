@@ -16,7 +16,7 @@ import models
 from tasks import garbage_collector_turnos, programador_reporte_semanal
 
 # Importar routers
-from routers import dashboard, operaciones, insumos, auth, reportes, supervisor, websocket_insumos, dispositivos, tablets, mantenimiento, admin
+from routers import dashboard, operaciones, insumos, auth, reportes, supervisor, websocket_insumos, dispositivos, tablets, mantenimiento, admin, planificacion
 
 # Crear las tablas en la base de datos al iniciar
 Base.metadata.create_all(bind=engine)
@@ -73,6 +73,7 @@ app.include_router(dispositivos.router)
 app.include_router(tablets.router)
 app.include_router(mantenimiento.router)
 app.include_router(admin.router)
+app.include_router(planificacion.router)
 
 # Ruta absoluta al directorio static
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
