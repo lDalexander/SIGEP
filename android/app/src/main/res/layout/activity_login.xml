@@ -33,6 +33,7 @@
         android:layout_marginBottom="24dp"/>
 
     <TextView
+        android:id="@+id/tvEtiquetaClave"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="PIN de Seguridad:"
@@ -42,6 +43,7 @@
         android:layout_marginBottom="8dp"/>
 
     <TextView
+        android:id="@+id/tvAyudaClave"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="Ingrese su PIN de seguridad de 4 dígitos"

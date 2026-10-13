@@ -3,6 +3,7 @@ package com.example.controller
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.os.Bundle
+import android.text.InputType
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
@@ -47,6 +48,17 @@ class LoginActivity : AppCompatActivity() {
             tvTituloLogin.text = "GESTIÓN DE INSUMOS"
         } else if (rolSeleccionado == "SUPERVISOR") {
             tvTituloLogin.text = "ACCESO DE SUPERVISOR"
+            // El supervisor entra con la contraseña de `administradores` (la misma de la
+            // web), no con un PIN: texto libre y sin límite de largo.
+            findViewById<TextView>(R.id.tvEtiquetaClave).text = "Contraseña:"
+            findViewById<TextView>(R.id.tvAyudaClave).text = "Ingrese su contraseña de administrador"
+            etPin.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            etPin.filters = arrayOf()
+            etPin.textSize = 20f
+            etPin.letterSpacing = 0f
+            etPin.layoutParams = etPin.layoutParams.apply {
+                width = (250 * resources.displayMetrics.density).toInt()
+            }
         }
 
         // 1. Cargar la lista de usuarios apenas abre la pantalla
@@ -62,7 +74,13 @@ class LoginActivity : AppCompatActivity() {
             val nombreSeleccionado = spinnerUsuarios.selectedItem.toString()
             val pinIngresado = etPin.text.toString()
 
-            if (pinIngresado.length == 4) {
+            if (rolSeleccionado == "SUPERVISOR") {
+                if (pinIngresado.isNotEmpty()) {
+                    validarAcceso(nombreSeleccionado, pinIngresado)
+                } else {
+                    Toast.makeText(this, "Ingrese su contraseña", Toast.LENGTH_SHORT).show()
+                }
+            } else if (pinIngresado.length == 4) {
                 validarAcceso(nombreSeleccionado, pinIngresado)
             } else {
                 Toast.makeText(this, "El PIN debe tener 4 dígitos", Toast.LENGTH_SHORT).show()
@@ -152,7 +170,7 @@ class LoginActivity : AppCompatActivity() {
                             finish()
                         } else {
                             // Intentamos obtener el error detallado del backend
-                            val errorMsg = response.errorBody()?.string() ?: "PIN de Administrador incorrecto"
+                            val errorMsg = response.errorBody()?.string() ?: "Contraseña de Administrador incorrecta"
                             Toast.makeText(this@LoginActivity, "Error: $errorMsg", Toast.LENGTH_LONG).show()
                             etPin.text.clear()
                         }
