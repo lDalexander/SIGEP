@@ -68,6 +68,12 @@ class BandejaInsumosActivity : AppCompatActivity() {
     private lateinit var btnCerrarSesion: Button
     private lateinit var btnEntregarInsumo: Button
     private lateinit var btnHistorialEntregas: Button
+    private lateinit var btnMensajesBodega: Button
+
+    // Planes del día. El insumista entrega CONTRA un plan cuando el material es para
+    // producción planificada y no para una máquina que lo pidió: ese es el caso que no
+    // existía hasta la v1.7.0, cuando todo el flujo era reactivo.
+    private var planesDeHoy: List<PlanProduccion> = emptyList()
 
     private var usuarioId: Int = -1
     private var usuarioRol: String = ""
@@ -142,6 +148,7 @@ class BandejaInsumosActivity : AppCompatActivity() {
         btnCerrarSesion   = findViewById(R.id.btnCerrarSesion)
         btnEntregarInsumo = findViewById(R.id.btnEntregarInsumo)
         btnHistorialEntregas = findViewById(R.id.btnHistorialEntregas)
+        btnMensajesBodega = findViewById(R.id.btnMensajesBodega)
 
         val prefs = getSharedPreferences("DetcuadorPrefs", MODE_PRIVATE)
         usuarioId         = prefs.getInt("usuario_id", -1)
@@ -170,8 +177,10 @@ class BandejaInsumosActivity : AppCompatActivity() {
         btnCerrarSesion.setOnClickListener { cerrarSesion("Sesión cerrada correctamente") }
         btnEntregarInsumo.setOnClickListener { abrirFormularioEntregaProactiva() }
         btnHistorialEntregas.setOnClickListener { mostrarHistorialEntregas() }
+        btnMensajesBodega.setOnClickListener { abrirChatSupervision() }
         cargarMaquinas()
         cargarCatalogoInsumos()
+        cargarPlanesDeHoy()
 
         vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as android.os.VibratorManager).defaultVibrator
@@ -677,6 +686,110 @@ class BandejaInsumosActivity : AppCompatActivity() {
         }
     }
 
+    /** Planes del día, para poder entregar contra uno en vez de contra una máquina. */
+    private fun cargarPlanesDeHoy() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val hoy = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+                val resp = RetrofitClient.apiService.obtenerPlanes(hoy, hoy)
+                val lista = resp.body()?.planes
+                if (resp.isSuccessful && lista != null) {
+                    // Los cancelados no se ofrecen: dejar material para algo que no se
+                    // va a producir es justo lo que esto viene a evitar.
+                    val vivos = lista.filter { !"Cancelado".equals(it.estado, ignoreCase = true) }
+                    withContext(Dispatchers.Main) { planesDeHoy = vivos }
+                }
+            } catch (e: Exception) {
+                ErrorReporter.warn("Planes", "No se pudieron cargar los planes: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Conversación con supervisión.
+     *
+     * No se manda `insumista_id`: el servidor deduce de quién es la sesión por el token.
+     * El insumista escribe «a supervisión», no a un supervisor concreto — cuál esté de
+     * turno no es asunto suyo.
+     */
+    private fun abrirChatSupervision() {
+        val contenedor = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(40, 30, 40, 10)
+        }
+        val tvHistorial = TextView(this).apply { text = "Cargando…"; textSize = 14f }
+        contenedor.addView(ScrollView(this).apply {
+            addView(tvHistorial)
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 600)
+        })
+        val etTexto = EditText(this).apply {
+            hint = "Escribe a supervisión…"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                        android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+        }
+        contenedor.addView(etTexto)
+
+        val dialogo = AlertDialog.Builder(this)
+            .setTitle("Mensajes de supervisión")
+            .setView(contenedor)
+            // null: enviar no debe cerrar la ventana, que es lo que uno espera de un chat.
+            .setPositiveButton("Enviar", null)
+            .setNegativeButton("Cerrar", null)
+            .create()
+        dialogo.show()
+
+        fun refrescar() {
+            lifecycleScope.launch(Dispatchers.IO) {
+                val texto = try {
+                    val resp = RetrofitClient.apiService.leerChatBodega(null)
+                    val mensajes = resp.body()?.mensajes
+                    when {
+                        resp.code() == 401 -> "Vuelve a iniciar sesión para usar el chat."
+                        !resp.isSuccessful -> "No se pudo cargar (HTTP ${resp.code()})."
+                        mensajes.isNullOrEmpty() -> "Sin mensajes todavía."
+                        else -> mensajes.joinToString("\n\n") { m ->
+                            val quien = if (m.emisor == "SUPERVISOR") "Supervisión" else "Tú"
+                            val marca = if (m.difusion) " (a todos)" else ""
+                            "${m.hora ?: ""}  $quien$marca:\n${m.texto}"
+                        }
+                    }
+                } catch (e: Exception) {
+                    "Sin conexión."
+                }
+                withContext(Dispatchers.Main) { tvHistorial.text = texto }
+            }
+            // Marcar leído es best-effort: que falle no puede impedir leer el chat.
+            lifecycleScope.launch(Dispatchers.IO) {
+                try { RetrofitClient.apiService.marcarChatLeido() } catch (_: Exception) { }
+            }
+        }
+        refrescar()
+
+        dialogo.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val texto = etTexto.text.toString().trim()
+            if (texto.isEmpty()) return@setOnClickListener
+            etTexto.setText("")
+            lifecycleScope.launch(Dispatchers.IO) {
+                try {
+                    val resp = RetrofitClient.apiService.enviarMensajeBodega(EnviarMensajeRequest(texto))
+                    withContext(Dispatchers.Main) {
+                        if (!resp.isSuccessful) {
+                            Toast.makeText(this@BandejaInsumosActivity,
+                                "No se pudo enviar (HTTP ${resp.code()})", Toast.LENGTH_SHORT).show()
+                            etTexto.setText(texto)
+                        }
+                        refrescar()
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@BandejaInsumosActivity, "Sin conexión", Toast.LENGTH_SHORT).show()
+                        etTexto.setText(texto)
+                    }
+                }
+            }
+        }
+    }
+
     private fun crearArchivoTemporal(): File {
         val nombre = "SIGEP_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}"
         val dir = getExternalFilesDir(Environment.DIRECTORY_PICTURES)
@@ -731,6 +844,27 @@ class BandejaInsumosActivity : AppCompatActivity() {
         val spinnerMaquina = Spinner(this).also { cont.addView(it) }
         spinnerMaquina.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item,
             listaMaquinas.ifEmpty { listOf("(Sin máquinas cargadas)") })
+
+        // Plan de producción (opcional). Es lo que hace que la entrega cuente para la
+        // cobertura del plan, y lo que permite dejar material para producción que
+        // todavía no tiene máquina asignada.
+        var spinnerPlan: Spinner? = null
+        if (planesDeHoy.isNotEmpty()) {
+            cont.addView(TextView(this).apply {
+                text = "¿Para un plan de hoy? (opcional)"
+                setTypeface(null, android.graphics.Typeface.BOLD); setPadding(0, 20, 0, 0)
+            })
+            spinnerPlan = Spinner(this).also { cont.addView(it) }
+            val etiquetas = mutableListOf("(ninguno — entrega suelta)")
+            etiquetas += planesDeHoy.map { p ->
+                val que = listOfNotNull(p.producto, p.marca, p.presentacion)
+                    .filter { it.isNotBlank() }.joinToString(" ")
+                val donde = p.maquina ?: "sin máquina"
+                val falta = if (p.insumos_incompletos > 0) "  · faltan ${p.insumos_incompletos}" else "  · completo"
+                "$que — $donde$falta"
+            }
+            spinnerPlan.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, etiquetas)
+        }
 
         // Cantidad
         cont.addView(TextView(this).apply { text = "Cantidad:"; setTypeface(null, android.graphics.Typeface.BOLD); setPadding(0, 20, 0, 0) })
@@ -795,7 +929,10 @@ class BandejaInsumosActivity : AppCompatActivity() {
                 // se manda igual porque es lo que se lee en el dashboard y en el Excel.
                 val ins   = delCatalogo?.nombre ?: spinnerInsumo.selectedItem?.toString() ?: ""
                 val obs   = etObs.text.toString().trim().ifEmpty { null }
-                enviarEntregaProactiva(tipo, ins, cantidad, maq, obs, delCatalogo?.id)
+                // La posición 0 es «ninguno», así que el índice del plan es pos - 1.
+                val posPlan = spinnerPlan?.selectedItemPosition ?: 0
+                val plan = if (posPlan > 0) planesDeHoy.getOrNull(posPlan - 1) else null
+                enviarEntregaProactiva(tipo, ins, cantidad, maq, obs, delCatalogo?.id, plan?.id)
             }
             .setNegativeButton("Cancelar", null)
             .setOnDismissListener { tvFotoEstado = null }
@@ -803,7 +940,8 @@ class BandejaInsumosActivity : AppCompatActivity() {
     }
 
     private fun enviarEntregaProactiva(
-        tipo: String, insumo: String, cantidad: Int, maquina: String, obs: String?, insumoId: Int? = null
+        tipo: String, insumo: String, cantidad: Int, maquina: String, obs: String?,
+        insumoId: Int? = null, planId: Int? = null
     ) {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
@@ -826,6 +964,7 @@ class BandejaInsumosActivity : AppCompatActivity() {
                     observaciones = obs?.toRequestBody("text/plain".toMediaType()),
                     insumoId      = insumoId?.toString()?.toRequestBody("text/plain".toMediaType()),
                     requestId     = idPeticion.toRequestBody("text/plain".toMediaType()),
+                    planId        = planId?.toString()?.toRequestBody("text/plain".toMediaType()),
                     foto          = fotoPart
                 )
                 withContext(Dispatchers.Main) {
@@ -833,6 +972,9 @@ class BandejaInsumosActivity : AppCompatActivity() {
                         Toast.makeText(this@BandejaInsumosActivity,
                             resp.body()?.mensaje ?: "Entrega registrada", Toast.LENGTH_LONG).show()
                         fotoUri = null; fotoFile = null
+                        // La cobertura del plan acaba de cambiar: se recarga para que el
+                        // siguiente formulario muestre cuánto falta de verdad.
+                        if (planId != null) cargarPlanesDeHoy()
                     } else {
                         Toast.makeText(this@BandejaInsumosActivity, "Error al registrar entrega", Toast.LENGTH_SHORT).show()
                     }

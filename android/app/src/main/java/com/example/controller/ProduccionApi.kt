@@ -153,6 +153,9 @@ interface ProduccionApi {
         // servidor, así que una tablet anterior sigue registrando igual.
         @Part("insumo_id")     insumoId: RequestBody?,
         @Part("request_id")    requestId: RequestBody?,
+        // v1.7.0: plan de producción al que se destina el material. Es lo que permite
+        // dejar insumos preparados para producción que aún no tiene máquina asignada.
+        @Part("plan_id")       planId: RequestBody?,
         @Part foto: MultipartBody.Part?
     ): Response<EntregaProactivaResponse>
 
