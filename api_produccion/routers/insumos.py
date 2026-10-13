@@ -15,6 +15,7 @@ import models
 from ws_manager import manager
 from services.fcm_service import notificar_insumistas_por_fcm
 from services.email_service import notificar_pedido_insumo
+from services import notificaciones_pedido
 
 ENTREGAS_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -117,11 +118,10 @@ def crear_pedido_dinamico(
         maquina_txt = sesion.maquina if sesion else "?"
         operador_txt = sesion.operador if sesion else "?"
 
-        # 🔥 2. Usamos FastAPI nativo para enviar el mensaje asíncrono sin bloquear la BD
-        background_tasks.add_task(
-            manager.broadcast_to_tipo,
-            categoria_asignada.upper(),
-            {"evento": "nuevo_pedido", "solicitud_id": nuevo_pedido.id, "descripcion": nuevo_pedido.detalle_pedido}
+        # 🔥 2. El aviso sale por el helper, que es el único sitio donde se decide
+        # quién se entera de qué. Sigue siendo asíncrono y no bloquea la respuesta.
+        notificaciones_pedido.notificar(
+            db, notificaciones_pedido.NUEVO, nuevo_pedido, background_tasks
         )
 
         # 🔔 3. Notificación FCM data-only para tablets en background/cerradas.
@@ -211,17 +211,25 @@ def aceptar_pedido(
     
     db.commit()
 
-    # 🔥 2. EL GRITO GLOBAL: Le avisamos a todas las tablets de este canal que el pedido fue tomado
-    background_tasks.add_task(
-        manager.broadcast_to_tipo,
-        pedido.categoria.upper(),
-        {"evento": "pedido_aceptado", "solicitud_id": pedido.id}
+    # 🔥 2. EL GRITO GLOBAL: a los demás insumistas para que apaguen la alarma de un
+    # pedido que ya tiene dueño, y a la tablet del operario para que vea que viene.
+    notificaciones_pedido.notificar(
+        db, notificaciones_pedido.ACEPTADO, pedido, background_tasks
     )
 
     return {"status": "ok", "message": "Pedido aceptado", "mensaje": "Pedido aceptado"}
 
 @router.put("/entregar")
-def entregar_pedido(datos: PedidoAccionRequest, db: Session = Depends(get_db)):
+def entregar_pedido(
+    datos: PedidoAccionRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """El insumista marca el pedido como entregado y queda esperando al operario.
+
+    Hasta la v1.7.0 este endpoint no avisaba a NADIE: el operario se enteraba por su
+    sondeo de 5 s de que tenía algo que confirmar.
+    """
     pedido = db.query(models.PedidoBodegaDB).filter(models.PedidoBodegaDB.id == datos.pedido_id).first()
 
     if not pedido or pedido.estado != "En Camino":
@@ -234,11 +242,25 @@ def entregar_pedido(datos: PedidoAccionRequest, db: Session = Depends(get_db)):
     )
 
     db.commit()
+
+    notificaciones_pedido.notificar(
+        db, notificaciones_pedido.ENTREGADO, pedido, background_tasks,
+        descripcion="Insumo entregado, falta tu confirmación",
+    )
     return {"status": "ok", "message": "Entrega registrada, esperando confirmación del operador", "mensaje": "Entrega registrada, esperando confirmación del operador"}
 
 @router.put("/confirmar_recepcion")
-def confirmar_recepcion(datos: schemas.ConfirmarRecepcionRequest, db: Session = Depends(get_db)):
-    """El operador confirma que recibió el insumo, cerrando definitivamente el pedido."""
+def confirmar_recepcion(
+    datos: schemas.ConfirmarRecepcionRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """El operador confirma que recibió el insumo, cerrando definitivamente el pedido.
+
+    Hasta la v1.7.0 tampoco avisaba a nadie, así que el pedido se quedaba colgado en la
+    bandeja del insumista hasta su refresco de 15 s. El «salvavidas periódico» que hay
+    en `BandejaInsumosActivity` existe exactamente por esto.
+    """
     pedido = db.query(models.PedidoBodegaDB).filter(models.PedidoBodegaDB.id == datos.pedido_id).first()
 
     if not pedido:
@@ -254,8 +276,16 @@ def confirmar_recepcion(datos: schemas.ConfirmarRecepcionRequest, db: Session = 
         datos.cantidad_recibida if datos.cantidad_recibida is not None
         else (pedido.cantidad_entregada if pedido.cantidad_entregada is not None else pedido.cantidad_solicitada)
     )
+    # Quién cerró el pedido. Por este endpoint entra siempre el operario; el supervisor
+    # confirmando en su lugar llega por su propia ruta y se marca como SUPERVISOR.
+    pedido.confirmado_por_tipo = "OPERARIO"
 
     db.commit()
+
+    notificaciones_pedido.notificar(
+        db, notificaciones_pedido.CONFIRMADO, pedido, background_tasks,
+        descripcion="El operario confirmó la recepción",
+    )
     return {"status": "ok", "message": "Recepción confirmada", "mensaje": "Recepción confirmada"}
 
 @router.get("/pendientes_confirmacion/{sesion_id}")
