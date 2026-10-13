@@ -451,7 +451,10 @@ def registrar_entrega_proactiva(
     tipo_producto: str = Form(...),
     insumo: str = Form(...),
     cantidad: int = Form(...),
-    maquina: str = Form(...),
+    # Opcional desde 2026-10-13: muchas veces el material se deja en bodega o en la
+    # línea sin saber todavía qué máquina lo va a usar, o no lo usará ninguna. Vacío o
+    # ausente = sin máquina. Una tablet 1.7.1 siempre lo manda y se valida como antes.
+    maquina: str = Form(None),
     observaciones: str = Form(None),
     # v1.7.0, opcionales: una tablet anterior no los manda y la entrega se registra
     # igual, solo que sin quedar atada al catálogo.
@@ -498,11 +501,13 @@ def registrar_entrega_proactiva(
         # formulario y es lo que se lee en el dashboard y en el Excel.
         insumo = catalogo.nombre
 
-    maquina_db = db.query(MaquinaDB).filter(
-        MaquinaDB.nombre == maquina, MaquinaDB.activa.is_(True)
-    ).first()
-    if not maquina_db:
-        raise HTTPException(status_code=404, detail=f"Máquina '{maquina}' no encontrada o inactiva")
+    maquina = (maquina or "").strip() or None
+    if maquina is not None:
+        maquina_db = db.query(MaquinaDB).filter(
+            MaquinaDB.nombre == maquina, MaquinaDB.activa.is_(True)
+        ).first()
+        if not maquina_db:
+            raise HTTPException(status_code=404, detail=f"Máquina '{maquina}' no encontrada o inactiva")
 
     if not foto or not foto.filename:
         raise HTTPException(status_code=400, detail="La foto de evidencia es obligatoria")
@@ -541,7 +546,7 @@ def registrar_entrega_proactiva(
             db.commit()
             foto_url = nueva_entrega.foto_path
 
-        logger.info(f"📸 ENTREGA PROACTIVA: {cantidad} x {insumo} → {maquina} (insumista {insumista_id})")
+        logger.info(f"📸 ENTREGA PROACTIVA: {cantidad} x {insumo} → {maquina or 'sin máquina'} (insumista {insumista_id})")
         return {"id": nueva_entrega.id, "mensaje": "Entrega registrada correctamente", "foto_url": foto_url}
 
     except HTTPException:
@@ -610,6 +615,91 @@ def _delta_seg(a, b):
         return None
     s = (b - a).total_seconds()
     return int(s) if s >= 0 else None
+
+
+@router.get("/mis_entregas/{insumista_id}")
+def mis_entregas(
+    insumista_id: int,
+    desde: str = Query(..., description="Inicio del turno, 'YYYY-MM-DD HH:MM:SS'."),
+    db: Session = Depends(get_db),
+    token: str = Depends(sesiones_usuario.token_de_cabecera),
+):
+    """Todo lo que el insumista entregó en su turno: entregas proactivas y pedidos.
+
+    `/entregas_proactivas` devuelve las últimas 20 sin mirar la fecha y solo las
+    proactivas, así que la pestaña «Mis entregas» mezclaba días y no contaba los
+    pedidos atendidos. Aquí van las dos cosas desde `desde`, que la app manda con la
+    hora en que el insumista inició sesión.
+
+    Un pedido cuenta por su `fecha_entrega` (cuando el insumista lo dejó), no por la de
+    solicitud: lo que importa es qué entregó en SU turno.
+    """
+    try:
+        inicio = datetime.strptime(desde, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="desde debe ser 'YYYY-MM-DD HH:MM:SS'")
+
+    # Como en el resto del módulo, el token manda sobre lo que el cliente dice ser.
+    sesion_usuario = sesiones_usuario.resolver_token(db, token)
+    if sesion_usuario is not None:
+        insumista_id = sesion_usuario.usuario_id
+
+    try:
+        proactivas = db.query(EntregaProactivaDB).filter(
+            EntregaProactivaDB.insumista_id == insumista_id,
+            EntregaProactivaDB.fecha_hora >= inicio,
+        ).order_by(EntregaProactivaDB.fecha_hora.desc()).all()
+
+        pedidos = (
+            db.query(PedidoBodegaDB, SesionTrabajoDB)
+            .outerjoin(SesionTrabajoDB, SesionTrabajoDB.id == PedidoBodegaDB.session_id)
+            .filter(
+                PedidoBodegaDB.insumista_id == insumista_id,
+                PedidoBodegaDB.fecha_entrega.isnot(None),
+                PedidoBodegaDB.fecha_entrega >= inicio,
+            )
+            .order_by(PedidoBodegaDB.fecha_entrega.desc())
+            .all()
+        )
+
+        def hora(d):
+            return d.strftime("%Y-%m-%d %H:%M:%S") if d else None
+
+        return {
+            "desde": desde,
+            "proactivas": [
+                {
+                    "id": e.id,
+                    "insumo": e.insumo,
+                    "cantidad": e.cantidad,
+                    "maquina": e.maquina,
+                    "plan_id": e.plan_id,
+                    "observaciones": e.observaciones,
+                    "foto_path": e.foto_path,
+                    "estado": e.estado,
+                    "fecha_hora": hora(e.fecha_hora),
+                }
+                for e in proactivas
+            ],
+            "pedidos": [
+                {
+                    "id": p.id,
+                    "detalle": p.detalle_pedido,
+                    "maquina": s.maquina if s else None,
+                    "operador": s.operador if s else None,
+                    "cantidad_solicitada": p.cantidad_solicitada,
+                    "cantidad_entregada": p.cantidad_entregada,
+                    "cantidad_recibida": p.cantidad_recibida,
+                    "estado": p.estado,
+                    "fecha_entrega": hora(p.fecha_entrega),
+                    "fecha_confirmacion": hora(p.fecha_confirmacion),
+                }
+                for p, s in pedidos
+            ],
+        }
+    except Exception as e:
+        logger.error(f"Error en /mis_entregas/{insumista_id}: {e}")
+        raise HTTPException(status_code=500, detail="Error interno")
 
 
 @router.get("/dashboard")
