@@ -46,9 +46,16 @@ ENTREGADO = "pedido_entregado"
 CONFIRMADO = "operario_confirmo_recepcion"
 
 
-def _avisar_insumistas(categoria, payload):
-    """Canal por bodega. Se llama desde `BackgroundTasks` (es una corrutina)."""
-    return manager.broadcast_to_tipo((categoria or "EMPAQUE").upper(), payload)
+async def _avisar_insumistas(categoria, payload):
+    """Canal por bodega.
+
+    `async def` y con `await`, no un `def` que devuelva la corrutina:
+    `BackgroundTasks` ejecuta las funciones sincronas en un threadpool y DESCARTA lo
+    que devuelven, asi que la corrutina se quedaba sin esperar («coroutine
+    broadcast_to_tipo was never awaited») y el insumista no recibia el aviso. Falla en
+    silencio: la peticion responde 200 igual.
+    """
+    await manager.broadcast_to_tipo((categoria or "EMPAQUE").upper(), payload)
 
 
 def _avisar_tablet_operario(db, pedido, payload):
