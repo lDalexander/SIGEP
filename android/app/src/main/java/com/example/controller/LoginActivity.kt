@@ -132,6 +132,10 @@ class LoginActivity : AppCompatActivity() {
                             // Guardar en AppState para control de alarmas
                             AppState.usuarioRol = admin.nivel_acceso
                             ErrorReporter.setRol(admin.nivel_acceso)
+                            // Sin esto el supervisor entra pero no puede cerrar nada:
+                            // confirmar recepciones y verificar entregas exigen token.
+                            RetrofitClient.tokenAdmin = admin.token
+                            PrefsRepository(applicationContext).adminToken = admin.token
 
                             getSharedPreferences("DetcuadorPrefs", MODE_PRIVATE).edit().apply {
                                 putInt("usuario_id", admin.admin_id)

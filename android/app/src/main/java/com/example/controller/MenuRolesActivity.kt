@@ -96,10 +96,12 @@ class MenuRolesActivity : AppCompatActivity() {
 
                             Toast.makeText(this@MenuRolesActivity, "Bienvenido, ${datos.nivel_acceso}", Toast.LENGTH_SHORT).show()
 
+                            RetrofitClient.tokenAdmin = datos.token
                             getSharedPreferences("DetcuadorPrefs", MODE_PRIVATE).edit().apply {
                                 putInt("usuario_id", datos.admin_id)
                                 putString("usuario_nombre", "Admin")
                                 putString("usuario_rol", datos.nivel_acceso)
+                                putString("admin_token", datos.token)
                                 apply()
                             }
 

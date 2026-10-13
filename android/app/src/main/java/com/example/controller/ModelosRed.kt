@@ -278,6 +278,10 @@ data class AdminLoginResponse(
     val status: String,
     val mensaje: String,
     val admin_id: Int,
+    // v1.7.0: hasta ahora este login no emitía token, así que el supervisor entraba en
+    // su tablet y no podía ejecutar ninguna acción. Nullable por si el servidor es
+    // anterior: la app entra igual, solo que sin poder cerrar pedidos ni verificar.
+    val token: String? = null,
     val nivel_acceso: String
 )
 
@@ -286,6 +290,9 @@ data class AdminLoginResponse(
 // NUEVO: FASE 5 - TORRE DE CONTROL (SUPERVISORES)
 // ==========================================
 data class EstadoMaquinaRealTime(
+    // v1.7.0: sin el id no se podía pedir el detalle de la máquina que se toca.
+    // Con valor por defecto para no romper contra un servidor anterior.
+    val sesion_id: Int = -1,
     val maquina: String,
     val operador: String,
     val producto: String,
@@ -293,6 +300,137 @@ data class EstadoMaquinaRealTime(
     val pacas_totales: Int,
     val estado: String // "ACTIVA", "PARO", "OFFLINE"
 )
+
+// ── Torre de control del supervisor (v1.7.0) ─────────────────────────────────
+
+data class InsumistaTurno(
+    val usuario_id: Int,
+    val nombre: String,
+    val rol: String,
+    val bodega: String,
+    val tablet: String?,
+    val desde: String?,
+    // Minutos sin dar señales: distingue «está trabajando» de «dejó la tablet encendida».
+    val inactivo_min: Int = 0,
+    val pedidos_activos: Int = 0,
+    val entregas_hoy: Int = 0
+)
+
+data class PedidoDeTurno(
+    val id: Int,
+    val insumo: String,
+    val cantidad: Int,
+    val entregada: Int?,
+    val recibida: Int?,
+    val estado: String,
+    val insumista: String?,
+    val hora: String?,
+    val por_confirmar: Boolean = false
+)
+
+data class ComentarioDeTurno(val texto: String, val hora: String?)
+
+data class DetalleSesion(
+    val sesion_id: Int,
+    val maquina: String?,
+    val operador: String?,
+    val producto: String?,
+    val marca: String?,
+    val presentacion: String?,
+    val fragancia: String?,
+    val inicio: String?,
+    val fin: String?,
+    val activa: Boolean = true,
+    val pacas: Int = 0,
+    val velocidad: Double? = null,
+    val en_paro: Boolean = false,
+    val motivo_paro: String? = null,
+    val paros: Int = 0,
+    val minutos_parado: Double = 0.0,
+    val observaciones: String?,
+    val pedidos: List<PedidoDeTurno> = emptyList(),
+    val comentarios: List<ComentarioDeTurno> = emptyList()
+)
+
+data class EntregaPorVerificar(
+    val id: Int,
+    val insumo: String?,
+    val cantidad: Int,
+    val maquina: String?,
+    val plan_id: Int?,
+    val insumista: String?,
+    val observaciones: String?,
+    val foto_url: String?,
+    val fecha_hora: String?
+)
+
+data class ConfirmarSupervisorRequest(val cantidad_recibida: Int? = null)
+data class VerificarEntregaRequest(val estado: String, val observaciones: String? = null)
+
+// ── Chat de bodega (v1.7.0) ──────────────────────────────────────────────────
+
+data class MensajeBodega(
+    val id: Int,
+    val emisor: String,       // SUPERVISOR | INSUMISTA
+    val de: String?,
+    val difusion: Boolean = false,
+    val texto: String,
+    val hora: String?,
+    val leido: Boolean = false
+)
+
+data class ConversacionBodega(val yo: String?, val mensajes: List<MensajeBodega> = emptyList())
+
+data class EnviarMensajeRequest(val texto: String, val insumista_id: Int? = null)
+
+data class ConversacionResumen(
+    val insumista_id: Int,
+    val nombre: String,
+    val rol: String?,
+    val de_turno: Boolean = false,
+    val sin_leer: Int = 0,
+    val ultimo: String?
+)
+
+data class ResumenChat(
+    val yo: String?,
+    val sin_leer: Int = 0,
+    val conversaciones: List<ConversacionResumen> = emptyList()
+)
+
+// ── Planificación (v1.7.0) ───────────────────────────────────────────────────
+
+data class PlanInsumoResumen(
+    val insumo_id: Int,
+    val insumo: String,
+    val unidad: String?,
+    val bodega: String?,
+    val requerido: Int = 0,
+    val entregado: Int = 0,
+    val falta: Int = 0,
+    val completo: Boolean = false,
+    val prioridad: String = "Normal"
+)
+
+data class PlanProduccion(
+    val id: Int,
+    val fecha: String?,
+    val turno: String?,
+    val maquina: String?,      // null = sin máquina asignada todavía
+    val producto: String?,
+    val marca: String?,
+    val presentacion: String?,
+    val fragancia: String?,
+    val cantidad_planificada: Int?,
+    val unidad: String?,
+    val estado: String?,
+    val cobertura: Double? = null,
+    val insumos_incompletos: Int = 0,
+    val hay_urgentes: Boolean = false,
+    val insumos: List<PlanInsumoResumen> = emptyList()
+)
+
+data class PlanesResponse(val planes: List<PlanProduccion> = emptyList())
 
 data class HistorialPedidoSupervisor(
     val id: Int,

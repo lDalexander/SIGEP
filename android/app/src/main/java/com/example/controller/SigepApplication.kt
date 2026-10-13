@@ -28,6 +28,7 @@ class SigepApplication : Application(), LifecycleEventObserver {
         // revive). Sin esto, la primera peticion tras revivir saldria sin token y el
         // servidor la trataria como una tablet antigua.
         RetrofitClient.tokenSesion = PrefsRepository(this).userToken
+        RetrofitClient.tokenAdmin = PrefsRepository(this).adminToken
         // Canal de alarma listo desde el arranque. Antes se creaba solo dentro
         // de onMessageReceived, así que si Android entregaba la notificación
         // directamente (notification payload), salía con el canal default

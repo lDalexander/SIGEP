@@ -175,6 +175,56 @@ interface ProduccionApi {
     @GET("/api/supervisor/planta/estado_realtime")
     suspend fun obtenerEstadoPlanta(): Response<List<EstadoMaquinaRealTime>>
 
+    // ── Torre de control v1.7.0 ──────────────────────────────────────────────
+
+    /** Quién está de turno en bodega ahora mismo. */
+    @GET("/api/supervisor/insumistas")
+    suspend fun obtenerInsumistasDeTurno(): Response<List<InsumistaTurno>>
+
+    /** Todo lo de un turno en una sola llamada: es la ventana emergente del panel. */
+    @GET("/api/supervisor/sesion/{id}/detalle")
+    suspend fun obtenerDetalleSesion(@Path("id") sesionId: Int): Response<DetalleSesion>
+
+    /** Cierra un pedido que el operario no estaba para confirmar. Exige X-Admin-Token. */
+    @PUT("/api/supervisor/pedidos/{id}/confirmar")
+    suspend fun confirmarComoSupervisor(
+        @Path("id") pedidoId: Int,
+        @Body request: ConfirmarSupervisorRequest
+    ): Response<RespuestaGenerica>
+
+    @GET("/api/supervisor/entregas_pendientes")
+    suspend fun obtenerEntregasPorVerificar(): Response<List<EntregaPorVerificar>>
+
+    @PUT("/api/supervisor/entregas/{id}/verificar")
+    suspend fun verificarEntrega(
+        @Path("id") entregaId: Int,
+        @Body request: VerificarEntregaRequest
+    ): Response<RespuestaGenerica>
+
+    // ── Chat de bodega v1.7.0 ────────────────────────────────────────────────
+    // El emisor lo deduce el servidor del token que viaje en la cabecera, así que el
+    // mismo par de métodos sirve al supervisor y al insumista.
+
+    @GET("/api/mensajes/bodega")
+    suspend fun leerChatBodega(@Query("insumista_id") insumistaId: Int? = null): Response<ConversacionBodega>
+
+    @POST("/api/mensajes/bodega")
+    suspend fun enviarMensajeBodega(@Body request: EnviarMensajeRequest): Response<RespuestaGenerica>
+
+    @POST("/api/mensajes/bodega/leidos")
+    suspend fun marcarChatLeido(): Response<RespuestaGenerica>
+
+    @GET("/api/mensajes/bodega/resumen")
+    suspend fun resumenChatBodega(): Response<ResumenChat>
+
+    // ── Planificación v1.7.0 ─────────────────────────────────────────────────
+
+    @GET("/api/planificacion/planes")
+    suspend fun obtenerPlanes(
+        @Query("desde") desde: String? = null,
+        @Query("hasta") hasta: String? = null
+    ): Response<PlanesResponse>
+
     @GET("/api/supervisor/bodega/historial_pedidos")
     suspend fun obtenerHistorialPedidosSupervisor(): Response<List<HistorialPedidoSupervisor>>
 

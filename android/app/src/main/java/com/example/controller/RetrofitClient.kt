@@ -22,6 +22,21 @@ object RetrofitClient {
     @Volatile
     var tokenSesion: String? = null
 
+    /**
+     * Token del SUPERVISOR (tabla `administradores`), que es otra credencial distinta.
+     *
+     * Son dos porque los dos extremos viven en tablas distintas y el backend los valida
+     * por separado: `X-User-Token` contra `sesiones_usuario` y `X-Admin-Token` contra el
+     * almacén del admin. Una tablet nunca tiene los dos a la vez —o entra un insumista o
+     * entra un supervisor— pero se mandan los que haya y el servidor coge el que entienda.
+     *
+     * OJO: este vive en la MEMORIA DEL SERVIDOR, así que un reinicio del backend lo
+     * invalida y el supervisor tiene que volver a entrar. El del insumista no, porque
+     * el suyo está en la base.
+     */
+    @Volatile
+    var tokenAdmin: String? = null
+
     // Timeouts moderados: la red interna no debería tomar más de unos segundos.
     // Si no respondemos en este rango es porque algo se cayó y queremos abortar
     // antes de que la coroutine quede colgada indefinidamente.
@@ -34,15 +49,10 @@ object RetrofitClient {
             // que diga el cuerpo o la URL, asi que es lo que impide que un cliente se
             // haga pasar por otro insumista o mire la bandeja de otra bodega.
             .addInterceptor { cadena ->
-                val token = tokenSesion
-                val peticion = if (token.isNullOrBlank()) {
-                    cadena.request()
-                } else {
-                    cadena.request().newBuilder()
-                        .header("X-User-Token", token)
-                        .build()
-                }
-                cadena.proceed(peticion)
+                val constructor = cadena.request().newBuilder()
+                tokenSesion?.takeIf { it.isNotBlank() }?.let { constructor.header("X-User-Token", it) }
+                tokenAdmin?.takeIf { it.isNotBlank() }?.let { constructor.header("X-Admin-Token", it) }
+                cadena.proceed(constructor.build())
             }
             .apply {
                 if (BuildConfig.DEBUG) {

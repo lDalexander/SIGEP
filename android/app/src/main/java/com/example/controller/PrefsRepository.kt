@@ -20,6 +20,11 @@ class PrefsRepository(context: Context) {
         get() = prefs.getString("user_token", null)
         set(v) { prefs.edit().putString("user_token", v).apply() }
 
+    /** Token del supervisor. Ver la nota de `RetrofitClient.tokenAdmin`. */
+    var adminToken: String?
+        get() = prefs.getString("admin_token", null)
+        set(v) { prefs.edit().putString("admin_token", v).apply() }
+
     /**
      * Borra SOLO lo que identifica al usuario que cierra sesion.
      *
@@ -42,6 +47,7 @@ class PrefsRepository(context: Context) {
             .remove("tipo_insumo_usuario")
             .remove("tiempo_login")
             .remove("user_token")
+            .remove("admin_token")
             .apply()
     }
 

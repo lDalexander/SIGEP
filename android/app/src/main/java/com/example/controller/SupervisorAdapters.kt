@@ -7,8 +7,16 @@ import android.view.ViewGroup
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 
-class MaquinaStatusAdapter(private var lista: List<EstadoMaquinaRealTime>) :
-    RecyclerView.Adapter<MaquinaStatusAdapter.ViewHolder>() {
+/**
+ * Máquinas con turno abierto. Pulsar una abre el detalle de su turno.
+ *
+ * El `onClick` llega como parámetro con valor por defecto para no tocar las dos
+ * llamadas que ya existían: una tarjeta sin acción asociada sigue siendo válida.
+ */
+class MaquinaStatusAdapter(
+    private var lista: List<EstadoMaquinaRealTime>,
+    private val onClick: ((EstadoMaquinaRealTime) -> Unit)? = null
+) : RecyclerView.Adapter<MaquinaStatusAdapter.ViewHolder>() {
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val tvNombre: TextView = view.findViewById(R.id.tvNombreMaquina)
@@ -39,11 +47,139 @@ class MaquinaStatusAdapter(private var lista: List<EstadoMaquinaRealTime>) :
             "PARO"   -> holder.tvEstado.setTextColor(Color.parseColor("#EF4444"))
             else     -> holder.tvEstado.setTextColor(Color.GRAY)
         }
+
+        // Solo se deja pulsar si hay id de sesión: contra un servidor anterior llega
+        // -1 y abrir el detalle daría un 404 sin que el supervisor entienda por qué.
+        if (onClick != null && item.sesion_id > 0) {
+            holder.itemView.isClickable = true
+            holder.itemView.setOnClickListener { onClick.invoke(item) }
+        } else {
+            holder.itemView.isClickable = false
+            holder.itemView.setOnClickListener(null)
+        }
     }
 
     override fun getItemCount() = lista.size
 
     fun actualizarLista(nuevaLista: List<EstadoMaquinaRealTime>) {
+        lista = nuevaLista
+        notifyDataSetChanged()
+    }
+}
+
+/**
+ * Insumistas con sesión abierta. Pulsar uno abre su conversación.
+ *
+ * Reaprovecha el layout de las máquinas en vez de crear otro: son la misma tarjeta
+ * (un título, un estado y cuatro cifras) y mantener dos XML casi iguales solo garantiza
+ * que uno se quede atrás cuando se retoque el otro.
+ */
+class InsumistaAdapter(
+    private var lista: List<InsumistaTurno>,
+    private val onClick: ((InsumistaTurno) -> Unit)? = null
+) : RecyclerView.Adapter<InsumistaAdapter.ViewHolder>() {
+
+    class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+        val tvNombre: TextView = view.findViewById(R.id.tvNombreMaquina)
+        val tvEstado: TextView = view.findViewById(R.id.tvEstadoMaquina)
+        val tvOperador: TextView = view.findViewById(R.id.tvNombreOperador)
+        val tvProducto: TextView = view.findViewById(R.id.tvDetalleProducto)
+        val tvHora: TextView = view.findViewById(R.id.tvHoraInicio)
+        val tvPacas: TextView = view.findViewById(R.id.tvTotalPacas)
+    }
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
+        val view = LayoutInflater.from(parent.context).inflate(R.layout.item_maquina_status, parent, false)
+        return ViewHolder(view)
+    }
+
+    override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+        val item = lista[position]
+        holder.tvNombre.text = item.nombre
+        holder.tvOperador.text = item.rol
+        holder.tvProducto.text = item.tablet ?: "—"
+        holder.tvHora.text = item.desde ?: "—"
+        holder.tvPacas.text = item.entregas_hoy.toString()
+
+        // Los 10 minutos no son un umbral técnico: es el tiempo que un insumista tarda
+        // en cruzar la planta y volver. Por encima, lo más probable es que la tablet
+        // esté encendida encima de una caja y no en su mano.
+        val inactivo = item.inactivo_min >= 10
+        holder.tvEstado.text = when {
+            inactivo -> "SIN SEÑAL ${item.inactivo_min}m"
+            item.pedidos_activos > 0 -> "OCUPADO (${item.pedidos_activos})"
+            else -> "LIBRE"
+        }
+        holder.tvEstado.setTextColor(
+            when {
+                inactivo -> Color.parseColor("#EF4444")
+                item.pedidos_activos > 0 -> Color.parseColor("#F59E0B")
+                else -> Color.parseColor("#22C55E")
+            }
+        )
+
+        holder.itemView.setOnClickListener { onClick?.invoke(item) }
+    }
+
+    override fun getItemCount() = lista.size
+
+    fun actualizarLista(nuevaLista: List<InsumistaTurno>) {
+        lista = nuevaLista
+        notifyDataSetChanged()
+    }
+}
+
+/**
+ * Entregas proactivas que el supervisor todavía no ha revisado.
+ *
+ * Reusa `item_maquina_status` como las otras dos: la tarjeta es la misma forma —título,
+ * estado y cuatro cifras— y tener tres XML casi iguales solo asegura que dos se queden
+ * atrás cuando se retoque el tercero.
+ */
+class EntregaVerificarAdapter(
+    private var lista: List<EntregaPorVerificar>,
+    private val onClick: ((EntregaPorVerificar) -> Unit)? = null
+) : RecyclerView.Adapter<EntregaVerificarAdapter.ViewHolder>() {
+
+    class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+        val tvNombre: TextView = view.findViewById(R.id.tvNombreMaquina)
+        val tvEstado: TextView = view.findViewById(R.id.tvEstadoMaquina)
+        val tvOperador: TextView = view.findViewById(R.id.tvNombreOperador)
+        val tvProducto: TextView = view.findViewById(R.id.tvDetalleProducto)
+        val tvHora: TextView = view.findViewById(R.id.tvHoraInicio)
+        val tvPacas: TextView = view.findViewById(R.id.tvTotalPacas)
+    }
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
+        val view = LayoutInflater.from(parent.context).inflate(R.layout.item_maquina_status, parent, false)
+        return ViewHolder(view)
+    }
+
+    override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+        val item = lista[position]
+        holder.tvNombre.text = item.insumo ?: "Insumo"
+        holder.tvOperador.text = item.insumista ?: "—"
+        holder.tvProducto.text = buildString {
+            append(item.maquina ?: "sin máquina")
+            item.plan_id?.let { append("  ·  plan #$it") }
+        }
+        holder.tvHora.text = item.fecha_hora?.takeLast(5) ?: "—"
+        holder.tvPacas.text = item.cantidad.toString()
+
+        // La foto es la única prueba de dónde quedó el material, así que una entrega
+        // sin ella se marca en rojo: es lo primero que el supervisor tiene que mirar.
+        val sinFoto = item.foto_url.isNullOrBlank()
+        holder.tvEstado.text = if (sinFoto) "SIN FOTO" else "POR REVISAR"
+        holder.tvEstado.setTextColor(
+            if (sinFoto) Color.parseColor("#EF4444") else Color.parseColor("#F59E0B")
+        )
+
+        holder.itemView.setOnClickListener { onClick?.invoke(item) }
+    }
+
+    override fun getItemCount() = lista.size
+
+    fun actualizarLista(nuevaLista: List<EntregaPorVerificar>) {
         lista = nuevaLista
         notifyDataSetChanged()
     }
