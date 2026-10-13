@@ -73,10 +73,27 @@ class RegistrarVelocidad(BaseModel):
     request_id: Optional[str] = None
 
 class NuevoPedidoRequest(BaseModel):
-    """Esquema para que los operadores soliciten insumos a bodega."""
+    """Esquema para que los operadores soliciten insumos a bodega.
+
+    `insumo_id` y `request_id` entran en la v1.7.0 y van OPCIONALES a propósito: las
+    tablets se actualizan a mano por sideload, así que durante un tiempo conviven
+    versiones y las anteriores siguen mandando solo `detalle_pedido`. Mismo criterio
+    con el que `producto` entró en `/iniciar_turno` en la 1.6.0.
+
+    - `insumo_id`: referencia al catálogo. Cuando viene, el servidor arma él mismo
+      `detalle_pedido` y enruta por `insumos.bodega` en vez de buscar las palabras
+      "granel"/"preten"/"polvo" dentro del texto.
+    - `request_id`: idempotencia de la cola offline. Es lo que permite que pedir un
+      insumo deje de ser la única operación del operario que exige red.
+
+    `detalle_pedido` se queda OBLIGATORIO: es contrato congelado y el histórico se lee
+    por ahí. Con `insumo_id` el servidor lo reescribe, pero la app lo sigue mandando.
+    """
     sesion_id: int
     detalle_pedido: str
     cantidad: int
+    insumo_id: Optional[int] = None
+    request_id: Optional[str] = None
 
 class PedidoAccionRequest(BaseModel):
     """Esquema para las acciones de los insumistas (aceptar/entregar pedido)."""

@@ -5,6 +5,7 @@ Maneja el inicio de turnos, registro de pallets, y paros de máquina.
 import os
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, File, UploadFile
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 
@@ -230,30 +231,82 @@ def obtener_detalle_pedidos_sesion(sesion_id: int, db: Session = Depends(get_db)
 
 @router.get("/sesion/{sesion_id}/insumos_permitidos")
 def obtener_insumos_permitidos(sesion_id: int, db: Session = Depends(get_db)):
-    """Devuelve SOLO los insumos autorizados (BOM) para el producto del turno.
+    """Insumos que puede pedir el operario de este turno, según el BOM.
 
-    Cruza la marca/presentación de la sesión contra recetas_productos. Si el
-    producto no tiene receta configurada, devuelve lista vacía.
+    Es lo que reemplaza a las listas quemadas en el APK (`if maquina == "Máquina 7B"`),
+    y por fin se usa: el endpoint existía desde antes y la app nunca lo llamaba.
+
+    CRUZA LAS CINCO DIMENSIONES, con NULL = comodín. Antes miraba solo marca y
+    presentación e ignoraba la fragancia que tenía en su propia columna, así que una
+    receta específica de una fragancia salía para todas.
+
+    SI NADA CASA, DEVUELVE EL CATÁLOGO COMPLETO en vez de una lista vacía. Es el mismo
+    criterio que `GET /api/fragancias`, y por la misma razón: una lista vacía deja al
+    operario sin poder pedir NADA por un hueco de configuración, y la línea no para
+    porque falte una fila en una tabla. Un catálogo de más se nota y se corrige; un
+    operario que no puede pedir fundas, no.
     """
     sesion = db.query(SesionTrabajoDB).filter(SesionTrabajoDB.id == sesion_id).first()
     if not sesion:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
     try:
-        recetas = db.query(RecetaProductoDB).filter(
-            RecetaProductoDB.marca == sesion.marca,
-            RecetaProductoDB.presentacion == sesion.presentacion,
-        ).all()
-        ids_permitidos = [r.insumo_id for r in recetas]
-        if not ids_permitidos:
-            return []
+        def coincide(columna, valor):
+            """NULL en la receta = comodín; si no, tiene que ser igual al del turno."""
+            if not valor:
+                return columna.is_(None)
+            return or_(columna.is_(None), columna == valor)
 
-        insumos = db.query(InsumoDB).filter(
-            InsumoDB.id.in_(ids_permitidos),
-            InsumoDB.activo == True,
-        ).all()
+        recetas = (
+            db.query(RecetaProductoDB)
+            .filter(
+                RecetaProductoDB.activo.is_(True),
+                coincide(RecetaProductoDB.maquina, sesion.maquina),
+                coincide(RecetaProductoDB.producto, sesion.producto),
+                coincide(RecetaProductoDB.marca, sesion.marca),
+                coincide(RecetaProductoDB.presentacion, sesion.presentacion),
+                coincide(RecetaProductoDB.fragancia, sesion.fragancia),
+            )
+            .all()
+        )
+
+        # Con varias recetas apuntando al mismo insumo (una por máquina y otra comodín,
+        # por ejemplo) manda la cantidad sugerida MAYOR: quedarse corto obliga a pedir
+        # dos veces, y el operario puede bajar el número en el propio diálogo.
+        sugerida = {}
+        for r in recetas:
+            if r.insumo_id is None:
+                continue
+            sugerida[r.insumo_id] = max(sugerida.get(r.insumo_id, 0), r.cantidad_sugerida or 1)
+
+        if sugerida:
+            insumos = db.query(InsumoDB).filter(
+                InsumoDB.id.in_(list(sugerida.keys())),
+                InsumoDB.activo.is_(True),
+            ).all()
+        else:
+            insumos = []
+
+        if not insumos:
+            logger.warning(
+                f"BOM vacío para la sesión {sesion_id} "
+                f"({sesion.maquina} / {sesion.producto} / {sesion.marca} / "
+                f"{sesion.presentacion} / {sesion.fragancia}): se devuelve el catálogo completo."
+            )
+            insumos = db.query(InsumoDB).filter(InsumoDB.activo.is_(True)).all()
+
+        # `categoria` y `unidad` salen con "" y no con null: el modelo Gson de la app
+        # los declara como String no-nulo y un null le reventaría al deserializar.
         return [
-            {"id": i.id, "nombre": i.nombre, "categoria": i.categoria, "unidad": i.unidad_medida}
-            for i in insumos
+            {
+                "id": i.id,
+                "nombre": i.nombre,
+                "categoria": i.categoria or "",
+                "unidad": i.unidad_medida or "",
+                # Campos nuevos (v1.7.0). Las tablets anteriores los ignoran.
+                "bodega": i.bodega or "EMPAQUE",
+                "cantidad_sugerida": sugerida.get(i.id, 1),
+            }
+            for i in sorted(insumos, key=lambda x: (x.nombre or "").lower())
         ]
     except Exception as e:
         logger.error(f"Error al obtener insumos permitidos (sesión {sesion_id}): {e}")

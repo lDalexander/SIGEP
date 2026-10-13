@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import datetime, timedelta
 from database import get_db, logger
-from models import PedidoBodegaDB, SesionTrabajoDB, MaquinaDB, EntregaProactivaDB, UsuarioDB
+from models import PedidoBodegaDB, SesionTrabajoDB, MaquinaDB, EntregaProactivaDB, UsuarioDB, InsumoDB
 from schemas import NuevoPedidoRequest, PedidoAccionRequest
 import schemas
 import models
@@ -24,30 +24,96 @@ os.makedirs(ENTREGAS_DIR, exist_ok=True)
 
 router = APIRouter(prefix="/api/insumos", tags=["Insumos MES"])
 
+# Palabras con las que se adivinaba la bodega cuando el pedido era texto libre. Se
+# conservan SOLO para las tablets anteriores a la 1.7.0, que no mandan `insumo_id`.
+# Es una heurística mala —"Lámina para polvo" se iba a Granel— y por eso la reemplaza
+# `insumos.bodega`; pero quitarla dejaría sin enrutar a las tablets que aún no se han
+# actualizado, que se actualizan a mano por sideload.
+PALABRAS_GRANEL = ["granel", "preten", "polvo"]
+
+
+def _bodega_por_texto(detalle):
+    return "Granel" if any(p in (detalle or "").lower() for p in PALABRAS_GRANEL) else "Empaque"
+
+
+def _describir_pedido(insumo, sesion):
+    """Texto de `detalle_pedido` cuando el pedido viene por `insumo_id`.
+
+    La columna es contrato congelado con la app y es lo que hace legible el histórico y
+    los Excel, así que se sigue escribiendo: lo que cambia es QUIÉN la escribe. Antes la
+    tecleaba el operario y de ahí salía el enrutado; ahora la arma el servidor a partir
+    del catálogo, y el enrutado sale de `insumos.bodega`.
+    """
+    contexto = " ".join(p for p in (
+        sesion.producto if sesion else None,
+        sesion.marca if sesion else None,
+        sesion.presentacion if sesion else None,
+        sesion.fragancia if sesion else None,
+    ) if p)
+    texto = "%s - %s" % (insumo.nombre, contexto) if contexto else insumo.nombre
+    return texto[:255]
+
+
 @router.post("/pedido_dinamico")
 def crear_pedido_dinamico(
     datos: NuevoPedidoRequest, 
     background_tasks: BackgroundTasks, # 🔥 1. Agregamos esto aquí
     db: Session = Depends(get_db)
 ):
-    """Crea un pedido desde la tablet en piso hacia la bodega"""
+    """Crea un pedido desde la tablet en piso hacia la bodega.
+
+    Desde la v1.7.0 el pedido viaja con `insumo_id` y `request_id`. Los dos son
+    OPCIONALES: las tablets se actualizan por sideload y durante un tiempo conviven
+    versiones, así que una 1.6.0 que mande solo `detalle_pedido` sigue funcionando
+    exactamente igual que antes.
+    """
     try:
-        texto_pedido = datos.detalle_pedido.lower()
-        keywords_granel = ["granel", "preten", "polvo"]
-        es_granel = any(palabra in texto_pedido for palabra in keywords_granel)
-        categoria_asignada = "Granel" if es_granel else "Empaque"
+        sesion = db.query(SesionTrabajoDB).filter(SesionTrabajoDB.id == datos.sesion_id).first()
+
+        # IDEMPOTENCIA. Es lo que mete este flujo en la cola offline: hasta ahora pedir
+        # un insumo era la ÚNICA operación del operario que exigía red. Un reintento del
+        # SyncWorker tiene que devolver éxito, no crear un segundo pedido; el worker
+        # trata el duplicado como operación cumplida.
+        if datos.request_id:
+            ya = db.query(PedidoBodegaDB).filter(
+                PedidoBodegaDB.request_id == datos.request_id
+            ).first()
+            if ya:
+                logger.info(f"↩️ Pedido duplicado ignorado (request_id={datos.request_id})")
+                return {"mensaje": "Pedido ya registrado", "duplicado": True, "id": ya.id}
+
+        insumo = None
+        if datos.insumo_id:
+            insumo = db.query(InsumoDB).filter(InsumoDB.id == datos.insumo_id).first()
+            if insumo is None:
+                raise HTTPException(status_code=404, detail="El insumo no existe en el catálogo")
+            if not insumo.activo:
+                raise HTTPException(status_code=400, detail=f"El insumo «{insumo.nombre}» está dado de baja")
+
+        if insumo is not None:
+            # El dato manda sobre la adivinanza. `bodega` se guarda capitalizada porque
+            # es lo que `/pendientes/{rol}` lleva comparando desde siempre.
+            categoria_asignada = (insumo.bodega or "EMPAQUE").capitalize()
+            detalle = _describir_pedido(insumo, sesion)
+            unidad = insumo.unidad_medida
+        else:
+            categoria_asignada = _bodega_por_texto(datos.detalle_pedido)
+            detalle = datos.detalle_pedido
+            unidad = None
 
         nuevo_pedido = PedidoBodegaDB(
+            request_id=datos.request_id,
             session_id=datos.sesion_id,
-            detalle_pedido=datos.detalle_pedido,
+            detalle_pedido=detalle,
+            insumo_id=insumo.id if insumo else None,
             cantidad_solicitada=datos.cantidad,
+            unidad=unidad,
             categoria=categoria_asignada
         )
         db.add(nuevo_pedido)
         db.commit()
         db.refresh(nuevo_pedido)
 
-        sesion = db.query(SesionTrabajoDB).filter(SesionTrabajoDB.id == datos.sesion_id).first()
         maquina_txt = sesion.maquina if sesion else "?"
         operador_txt = sesion.operador if sesion else "?"
 
@@ -63,20 +129,30 @@ def crear_pedido_dinamico(
             notificar_insumistas_por_fcm,
             categoria_asignada.upper(),
             f"Nuevo pedido — {maquina_txt}",
-            f"{datos.cantidad} x {datos.detalle_pedido} (operador: {operador_txt})",
+            f"{datos.cantidad} x {detalle} (operador: {operador_txt})",
             nuevo_pedido.id,
         )
 
         # 📧 4. Correo a administración/bodega (asíncrono y tolerante a fallos).
         background_tasks.add_task(
             notificar_pedido_insumo,
-            maquina_txt, operador_txt, datos.detalle_pedido, datos.cantidad,
+            maquina_txt, operador_txt, detalle, datos.cantidad,
             categoria_asignada, nuevo_pedido.id,
         )
 
-        logger.info(f"📦 PEDIDO ENRUTADO A [{categoria_asignada}]: {datos.cantidad} x {datos.detalle_pedido}")
-        return {"mensaje": "Pedido enviado a bodega"}
-        
+        origen = "catálogo" if insumo else "texto libre (tablet anterior a la 1.7.0)"
+        logger.info(
+            f"📦 PEDIDO ENRUTADO A [{categoria_asignada}] por {origen}: "
+            f"{datos.cantidad} x {detalle}"
+        )
+        return {"mensaje": "Pedido enviado a bodega", "id": nuevo_pedido.id}
+
+    except HTTPException:
+        # Un 404/400 de validación no es un fallo del servidor: si se deja caer al
+        # `except Exception` sale convertido en 500 y la app lo reintentaría para
+        # siempre en vez de marcar la operación como fatal.
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
         logger.error(f"Error al crear pedido: {e}")
@@ -250,10 +326,16 @@ def registrar_entrega_proactiva(
     cantidad: int = Form(...),
     maquina: str = Form(...),
     observaciones: str = Form(None),
-    foto: UploadFile = File(None),
+    foto: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
-    """Registra una entrega de insumo sin pedido previo (planeación), con foto opcional."""
+    """Registra una entrega de insumo sin pedido previo (planeación).
+
+    LA FOTO ES OBLIGATORIA. La app ya la exigía desde su propio formulario, pero el
+    servidor la aceptaba vacía: cualquiera podía registrar por API una entrega sin
+    evidencia, y una entrega proactiva sin foto no se puede verificar después — es la
+    única prueba de dónde quedó el material.
+    """
     if tipo_producto not in ("Sólido", "Líquido"):
         raise HTTPException(status_code=400, detail="tipo_producto debe ser 'Sólido' o 'Líquido'")
 
@@ -263,15 +345,16 @@ def registrar_entrega_proactiva(
     if not maquina_db:
         raise HTTPException(status_code=404, detail=f"Máquina '{maquina}' no encontrada o inactiva")
 
-    foto_content = None
-    foto_ext = None
-    if foto and foto.filename:
-        if foto.content_type not in ("image/jpeg", "image/png"):
-            raise HTTPException(status_code=400, detail="La foto debe ser JPG o PNG")
-        foto_content = foto.file.read()
-        if len(foto_content) > 5 * 1024 * 1024:
-            raise HTTPException(status_code=400, detail="La foto no debe superar 5 MB")
-        foto_ext = "jpg" if foto.content_type == "image/jpeg" else "png"
+    if not foto or not foto.filename:
+        raise HTTPException(status_code=400, detail="La foto de evidencia es obligatoria")
+    if foto.content_type not in ("image/jpeg", "image/png"):
+        raise HTTPException(status_code=400, detail="La foto debe ser JPG o PNG")
+    foto_content = foto.file.read()
+    if not foto_content:
+        raise HTTPException(status_code=400, detail="La foto llegó vacía")
+    if len(foto_content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="La foto no debe superar 5 MB")
+    foto_ext = "jpg" if foto.content_type == "image/jpeg" else "png"
 
     try:
         nueva_entrega = EntregaProactivaDB(
