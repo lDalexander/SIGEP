@@ -15,7 +15,7 @@ import models
 from ws_manager import manager
 from services.fcm_service import notificar_insumistas_por_fcm
 from services.email_service import notificar_pedido_insumo
-from services import notificaciones_pedido
+from services import notificaciones_pedido, sesiones_usuario
 
 ENTREGAS_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -158,10 +158,35 @@ def crear_pedido_dinamico(
         logger.error(f"Error al crear pedido: {e}")
         raise HTTPException(status_code=500, detail="Error interno")
 @router.get("/pendientes/{rol}")
-def obtener_pedidos_pendientes(rol: str, db: Session = Depends(get_db)):
-    """Obtiene los pedidos según el rol del insumista"""
+def obtener_pedidos_pendientes(
+    rol: str,
+    db: Session = Depends(get_db),
+    token: str = Depends(sesiones_usuario.token_de_cabecera),
+):
+    """Pedidos pendientes de la bodega que le toca a quien pregunta.
+
+    EL ROL VIENE EN LA URL, es decir, LO ELIGE EL CLIENTE. Cualquiera con la dirección
+    podía mirar —y tomar— los pedidos de cualquier bodega. Desde la v1.7.0, si la
+    petición trae `X-User-Token` el rol se saca de la SESIÓN y se ignora el de la URL.
+
+    Sin token se sigue respetando el de la URL: las tablets se actualizan a mano por
+    sideload y durante un tiempo conviven versiones; exigirlo hoy dejaría a media planta
+    sin poder atender pedidos. El caso queda anotado en el log para poder medir cuántas
+    tablets faltan antes de volverlo obligatorio.
+    """
     try:
-        rol_seguro = rol.lower()
+        sesion = sesiones_usuario.resolver_token(db, token)
+        if sesion is not None:
+            if (sesion.rol or "").lower() != (rol or "").lower():
+                logger.warning(
+                    f"Rol de la URL ignorado: la sesión {sesion.id} es «{sesion.rol}» "
+                    f"y pidió la bandeja de «{rol}»."
+                )
+            rol = sesion.rol or rol
+        else:
+            logger.info(f"Bandeja de «{rol}» servida SIN token (tablet anterior a la 1.7.0).")
+
+        rol_seguro = (rol or "").lower()
         if "granel" in rol_seguro or "mezcla" in rol_seguro:
             categoria_buscada = "Granel"
         else:
@@ -193,20 +218,35 @@ def obtener_pedidos_pendientes(rol: str, db: Session = Depends(get_db)):
 
 @router.put("/aceptar")
 def aceptar_pedido(
-    datos: schemas.PedidoAccionRequest, 
+    datos: schemas.PedidoAccionRequest,
     background_tasks: BackgroundTasks, # 🔥 1. Agregamos el BackgroundTasks
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    token: str = Depends(sesiones_usuario.token_de_cabecera),
 ):
+    """El insumista toma el pedido.
+
+    `insumista_id` llega en el cuerpo, o sea que lo decide el cliente: con el token
+    presente se usa el de la SESIÓN, para que nadie pueda apuntarse un pedido a nombre
+    de otro —ni por error ni a propósito— y las estadísticas de bodega digan la verdad.
+    """
     pedido = db.query(models.PedidoBodegaDB).filter(models.PedidoBodegaDB.id == datos.pedido_id).first()
-    
+
     if not pedido:
         raise HTTPException(status_code=404, detail="El pedido no existe")
 
     if pedido.estado.strip().lower() != "pendiente":
         raise HTTPException(status_code=400, detail=f"Estado actual: {pedido.estado}")
 
+    sesion = sesiones_usuario.resolver_token(db, token)
+    insumista_id = sesion.usuario_id if sesion is not None else datos.insumista_id
+    if sesion is not None and datos.insumista_id != sesion.usuario_id:
+        logger.warning(
+            f"insumista_id del cuerpo ({datos.insumista_id}) ignorado: "
+            f"la sesión {sesion.id} es del usuario {sesion.usuario_id}."
+        )
+
     pedido.estado = "En Camino"
-    pedido.insumista_id = datos.insumista_id
+    pedido.insumista_id = insumista_id
     pedido.fecha_aceptacion = datetime.now()
     
     db.commit()
@@ -224,6 +264,7 @@ def entregar_pedido(
     datos: PedidoAccionRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
+    token: str = Depends(sesiones_usuario.token_de_cabecera),
 ):
     """El insumista marca el pedido como entregado y queda esperando al operario.
 
@@ -234,6 +275,16 @@ def entregar_pedido(
 
     if not pedido or pedido.estado != "En Camino":
         raise HTTPException(status_code=400, detail="El pedido no está en camino")
+
+    # Entregar un pedido que aceptó otro deja el histórico mintiendo: la entrega se
+    # apuntaría a nombre de quien lo tomó, no de quien lo llevó. Solo se comprueba con
+    # token, que es el único dato de la petición que el cliente no elige.
+    sesion = sesiones_usuario.resolver_token(db, token)
+    if sesion is not None and pedido.insumista_id and pedido.insumista_id != sesion.usuario_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Este pedido lo aceptó otro insumista; no puedes marcarlo como entregado.",
+        )
 
     pedido.estado = "Entregado_Insumista"
     pedido.fecha_entrega = datetime.now()
