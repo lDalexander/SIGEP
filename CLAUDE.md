@@ -37,6 +37,18 @@ SIGEP/
 
 ## 0. Estado actual
 
+**Chat de bodega por conversaciones y torre de control renovada** (2026-10-13, app
+posterior a la 1.7.1). La conversación pasa a ser el par (supervisor, insumista), como en
+WhatsApp: cada supervisor ve solo sus hilos y el insumista tiene un chat por supervisor,
+más «Supervisión» (`supervisor_id` NULL, lo ven todos: es lo que manda una tablet 1.7.1)
+y los avisos generales (`insumista_id` NULL). `routers/mensajes_bodega.py` gana parámetros
+**opcionales**: `GET ?supervisor_id=` (0 = Supervisión) `&difusion=`, `POST {supervisor_id}`,
+`POST /leidos?insumista_id|supervisor_id|difusion`, y el resumen trae `ultimo_texto`,
+`sin_leer` por hilo y `chats` para el insumista. Probado con el código viejo (8098) y el
+nuevo (8099) contra `prueba_insumos_v17`: la tablet 1.7.1 del insumista recibe lo mismo.
+Tag previo: `v1.20-pre-chat-conversaciones`. En la app: `ChatBodega.kt` (lista + burbujas),
+barra inferior de vistas en la torre de control y tarjeta propia para el insumista.
+
 **Módulo de insumos rehecho — v1.7.0** (2026-10-12). Tres fases cerradas y en
 producción; la app está en `versionCode` 15 (1.7.1: el supervisor entra con contraseña, no PIN),
 **instalada y verificada en planta el 2026-10-13**. Es la versión estable de referencia (tag `v1.7.1`).
@@ -581,6 +593,7 @@ heartbeat, sin errores en el log del servicio.
 | Tag previo al visor de fotos de paro | `v1.17-pre-visor-fotos-paro` (en GitHub) |
 | Tag previo a agrupar la jerarquía por producto | `v1.18-pre-jerarquia-producto` (en GitHub) |
 | Tag previo a la fragancia en la jerarquía | `v1.19-pre-jerarquia-fragancia` (en GitHub) |
+| Tag previo al chat por conversaciones | `v1.20-pre-chat-conversaciones` (en GitHub) |
 | Build previo a agrupar por producto | `~/respaldos_build_sigep/build_2026-08-31_141538` |
 | Build previo al logo original | `~/respaldos_build_sigep/build_2026-08-31_142715` |
 | Build previo a la fragancia en la jerarquía | `~/respaldos_build_sigep/build_2026-08-31_145150` |
