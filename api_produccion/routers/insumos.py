@@ -457,6 +457,9 @@ def registrar_entrega_proactiva(
     # igual, solo que sin quedar atada al catálogo.
     insumo_id: int = Form(None),
     request_id: str = Form(None),
+    # Plan de produccion al que se destina el material. Es lo que permite dejar
+    # insumos preparados para produccion que todavia no tiene maquina asignada.
+    plan_id: int = Form(None),
     foto: UploadFile = File(...),
     db: Session = Depends(get_db),
     token: str = Depends(sesiones_usuario.token_de_cabecera),
@@ -519,6 +522,7 @@ def registrar_entrega_proactiva(
             tipo_producto=tipo_producto,
             insumo=insumo,
             insumo_id=insumo_id,
+            plan_id=plan_id,
             cantidad=cantidad,
             maquina=maquina,
             observaciones=observaciones,
