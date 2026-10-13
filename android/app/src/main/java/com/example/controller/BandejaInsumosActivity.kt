@@ -667,9 +667,19 @@ class BandejaInsumosActivity : AppCompatActivity() {
      * se quedaba sin saber. Con la cola de trabajo de un turno completo, eso lleva a
      * registrar dos veces lo mismo por si acaso.
      */
+    /**
+     * Lo que este insumista entregó en SU turno, desde que inició sesión.
+     *
+     * El servidor devuelve sus últimas 20 entregas sin mirar la fecha, así que aquí salían
+     * las de días anteriores mezcladas con las de hoy. El inicio del turno es
+     * `tiempo_login`: la misma marca con la que la sesión caduca a las 12 horas.
+     */
     private fun mostrarHistorialEntregas() {
+        val inicioTurno = getSharedPreferences("DetcuadorPrefs", MODE_PRIVATE)
+            .getLong("tiempo_login", 0L)
+        val horaInicio = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(inicioTurno))
         val dialogo = AlertDialog.Builder(this)
-            .setTitle("Mis entregas")
+            .setTitle("Mis entregas del turno")
             .setMessage("Consultando…")
             .setPositiveButton("Cerrar", null)
             .show()
@@ -677,17 +687,30 @@ class BandejaInsumosActivity : AppCompatActivity() {
         lifecycleScope.launch(Dispatchers.IO) {
             val texto = try {
                 val resp = RetrofitClient.apiService.obtenerEntregasProactivas(usuarioId)
-                val lista = resp.body()
+                val todas = resp.body()
+                val formato = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                val delTurno = todas.orEmpty().filter { e ->
+                    val cuando = try { formato.parse(e.fecha_hora)?.time } catch (_: Exception) { null }
+                    cuando != null && cuando >= inicioTurno
+                }
                 when {
                     !resp.isSuccessful -> "No se pudo consultar (HTTP ${resp.code()})."
-                    lista.isNullOrEmpty() -> "Todavía no has registrado ninguna entrega."
-                    else -> lista.joinToString("\n\n") { e ->
-                        buildString {
-                            append("• ${e.cantidad} x ${e.insumo}\n")
-                            append("   ${e.maquina} · ${e.fecha_hora}")
-                            if (e.foto_path.isNullOrBlank()) append("\n   ⚠️ sin foto")
-                            if (!e.observaciones.isNullOrBlank()) append("\n   «${e.observaciones}»")
+                    delTurno.isEmpty() -> "Turno iniciado a las $horaInicio.\n\nTodavía no has registrado ninguna entrega en este turno."
+                    else -> buildString {
+                        append("Turno iniciado a las $horaInicio · ${delTurno.size} entrega(s)")
+                        // El servidor corta en 20: si las 20 son del turno puede haber más.
+                        if (todas.orEmpty().size >= 20 && delTurno.size == todas.orEmpty().size) {
+                            append("\n(se muestran las 20 más recientes)")
                         }
+                        append("\n\n")
+                        append(delTurno.joinToString("\n\n") { e ->
+                            buildString {
+                                append("• ${e.cantidad} x ${e.insumo}\n")
+                                append("   ${e.maquina} · ${e.fecha_hora.drop(11).take(5)}")
+                                if (e.foto_path.isNullOrBlank()) append("\n   ⚠️ sin foto")
+                                if (!e.observaciones.isNullOrBlank()) append("\n   «${e.observaciones}»")
+                            }
+                        })
                     }
                 }
             } catch (e: Exception) {
@@ -718,13 +741,12 @@ class BandejaInsumosActivity : AppCompatActivity() {
     }
 
     /**
-     * Chats con supervisión, uno por supervisor que te escribe, como en WhatsApp.
-     *
-     * Si un solo chat tiene mensajes nuevos se abre directamente: quien pulsa el botón
-     * después de un aviso quiere leer ESE mensaje, no elegirlo de una lista.
+     * Chats con supervisión, uno por supervisor que te escribe, como en WhatsApp. Siempre
+     * abre la lista: el insumista elige qué conversación leer (la del que le escribió
+     * sale arriba, con su globo de no leídos).
      */
     private fun abrirChats() {
-        ChatBodega.abrirLista(this, esSupervisor = false, abrirNoLeidoUnico = true) {
+        ChatBodega.abrirLista(this, esSupervisor = false) {
             refrescarAvisoChat()
         }
     }

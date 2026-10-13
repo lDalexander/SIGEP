@@ -77,15 +77,10 @@ object ChatBodega {
     // Lista de chats
     // ────────────────────────────────────────────────────────────────────────
 
-    /**
-     * @param abrirNoLeidoUnico si un único chat tiene mensajes sin leer, se abre
-     *        directamente: quien pulsa «Mensajes» tras un aviso quiere ver ESE mensaje.
-     * @param alCerrar para refrescar el contador de no leídos de quien la abrió.
-     */
+    /** @param alCerrar para refrescar el contador de no leídos de quien la abrió. */
     fun abrirLista(
         activity: AppCompatActivity,
         esSupervisor: Boolean,
-        abrirNoLeidoUnico: Boolean = false,
         alCerrar: () -> Unit = {}
     ) {
         val (dialogo, raiz) = crearDialogo(activity, R.layout.dialog_chat_lista)
@@ -96,7 +91,6 @@ object ChatBodega {
             else "Tus conversaciones con supervisión"
         raiz.findViewById<ImageButton>(R.id.btnCerrarListaChats).setOnClickListener { dialogo.dismiss() }
 
-        var primeraCarga = true
         var sondeo: Job? = null
 
         lateinit var cargar: () -> Unit
@@ -113,13 +107,6 @@ object ChatBodega {
                 adapter.actualizar(filas)
                 tvVacio.visibility = if (filas.isEmpty()) View.VISIBLE else View.GONE
                 tvVacio.text = error ?: "Todavía no hay conversaciones"
-
-                if (primeraCarga && abrirNoLeidoUnico) {
-                    filas.singleOrNull { it.noLeidos > 0 }?.let { fila ->
-                        abrirConversacion(activity, fila.hilo, esSupervisor) { cargar() }
-                    }
-                }
-                primeraCarga = false
             }
         }
 
@@ -151,8 +138,14 @@ object ChatBodega {
         val r = resp.body()
         if (!resp.isSuccessful || r == null) return emptyList<FilaChat>() to "No se pudo cargar (HTTP ${resp.code()})"
 
-        val filas = if (esSupervisor) filasSupervisor(r) else filasInsumista(r)
-        return filas to null
+        // Un dato inesperado del servidor deja la lista vacía con un aviso, nunca cierra
+        // la app: esta ventana se abre a media jornada con la tablet en la mano.
+        return try {
+            (if (esSupervisor) filasSupervisor(r) else filasInsumista(r)) to null
+        } catch (e: Exception) {
+            ErrorReporter.report("ChatBodega", "Resumen de chats ilegible", e)
+            emptyList<FilaChat>() to "No se pudo leer la lista de chats"
+        }
     }
 
     private fun filasSupervisor(r: ResumenChat): List<FilaChat> {
@@ -169,7 +162,7 @@ object ChatBodega {
             deTurno = false,
             fija = true
         )
-        val personas = r.conversaciones.map { c ->
+        val personas = r.conversaciones.orEmpty().map { c ->
             val tipo = c.rol ?: "Insumista"
             FilaChat(
                 hilo = HiloChat(
@@ -194,7 +187,8 @@ object ChatBodega {
 
     private fun filasInsumista(r: ResumenChat): List<FilaChat> {
         // Servidor anterior a las conversaciones: un único hilo con todo, como antes.
-        if (r.chats.isEmpty()) {
+        val chats = r.chats.orEmpty()
+        if (chats.isEmpty()) {
             return listOf(
                 FilaChat(
                     hilo = HiloChat("Supervisión", "Mensajes de supervisión", "👥"),
@@ -203,7 +197,7 @@ object ChatBodega {
                 )
             )
         }
-        val filas = r.chats.map { c ->
+        val filas = chats.map { c ->
             val hilo = when (c.tipo) {
                 "DIFUSION" -> HiloChat(c.nombre, "Avisos para todos · solo lectura", "📢",
                     difusion = true, puedeEscribir = false)

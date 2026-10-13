@@ -431,13 +431,18 @@ data class ChatInsumista(
 /**
  * El supervisor recibe `conversaciones` (una por insumista) y `difusion`; el insumista,
  * `chats`. Cada lado ignora lo del otro.
+ *
+ * Las listas son NULABLES a propósito: Gson no respeta los valores por defecto de
+ * Kotlin, así que un campo que el servidor no manda llega como null aunque el tipo diga
+ * lo contrario. Con `= emptyList()` la app del insumista se cerraba contra un servidor
+ * sin `chats`. Se leen siempre con `.orEmpty()`.
  */
 data class ResumenChat(
     val yo: String?,
     val sin_leer: Int = 0,
-    val conversaciones: List<ConversacionResumen> = emptyList(),
+    val conversaciones: List<ConversacionResumen>? = null,
     val difusion: UltimoMensaje? = null,
-    val chats: List<ChatInsumista> = emptyList()
+    val chats: List<ChatInsumista>? = null
 )
 
 // ── Planificación (v1.7.0) ───────────────────────────────────────────────────
