@@ -7,12 +7,13 @@ from database import get_db, logger
 from models import (
     SesionTrabajoDB, PalletDB, ParoMaquinaDB, PedidoBodegaDB, UsuarioDB,
     ComentarioTurnoDB, EntregaProactivaDB, VelocidadMaquinaDB, AdministradorDB,
+    InsumoDB, PlanInsumoDB, PlanProduccionDB,
 )
 from sqlalchemy import func
 from datetime import datetime, timedelta
 
 from routers.admin import require_nivel, NIVELES_OPERATIVOS
-from services import sesiones_usuario, notificaciones_pedido
+from services import sesiones_usuario, notificaciones_pedido, planificacion
 
 # Cualquier admin operativo (planta, bodega o superadmin) puede actuar desde la tablet
 # de supervisión. El reparto fino por áreas vive en la web; aquí el supervisor de turno
@@ -374,6 +375,50 @@ def verificar_entrega(
     except Exception as e:
         db.rollback()
         logger.error(f"Error al verificar la entrega {entrega_id}: {e}")
+        raise HTTPException(status_code=500, detail="Error interno")
+
+
+class PrioridadIn(BaseModel):
+    prioridad: str
+
+
+@router.put("/plan_insumos/{item_id}/prioridad")
+def marcar_prioridad(
+    item_id: int,
+    datos: PrioridadIn,
+    db: Session = Depends(get_db),
+    ctx=Depends(require_supervisor),
+):
+    """Marca urgente un insumo de un plan, desde la tablet.
+
+    Existe aparte del CRUD de planificación por una razón de permisos: aquel exige
+    nivel de PLANTA, y priorizar material es tanto cosa de bodega como de planta. El
+    supervisor de turno —sea del área que sea— tiene que poder decir «esto primero»
+    sin que le haga falta el nivel de quien planifica.
+
+    Es la única escritura sobre el plan que se hace desde la app: cambiar cantidades o
+    fechas se queda en la web, donde hay teclado y pantalla para revisarlo.
+    """
+    if datos.prioridad not in planificacion.PRIORIDADES:
+        raise HTTPException(
+            status_code=400,
+            detail="Prioridad inválida. Use: %s" % ", ".join(planificacion.PRIORIDADES),
+        )
+    fila = db.query(PlanInsumoDB).filter(PlanInsumoDB.id == item_id).first()
+    if fila is None:
+        raise HTTPException(status_code=404, detail="Esa línea de plan no existe")
+    try:
+        fila.prioridad = datos.prioridad
+        db.commit()
+        insumo = db.query(InsumoDB).filter(InsumoDB.id == fila.insumo_id).first()
+        logger.info(
+            f"⚡ Prioridad «{datos.prioridad}» en {insumo.nombre if insumo else fila.insumo_id} "
+            f"(plan {fila.plan_id}) por {(ctx or {}).get('username')}"
+        )
+        return {"mensaje": f"Marcado como {datos.prioridad}"}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al marcar prioridad en {item_id}: {e}")
         raise HTTPException(status_code=500, detail="Error interno")
 
 

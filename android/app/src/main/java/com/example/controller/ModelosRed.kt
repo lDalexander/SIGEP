@@ -401,6 +401,9 @@ data class ResumenChat(
 // ── Planificación (v1.7.0) ───────────────────────────────────────────────────
 
 data class PlanInsumoResumen(
+    // Id de la LÍNEA del plan (plan_insumos.id), que es lo que se prioriza.
+    // No confundir con `insumo_id`, que es el del catálogo.
+    val id: Int = 0,
     val insumo_id: Int,
     val insumo: String,
     val unidad: String?,
@@ -431,6 +434,8 @@ data class PlanProduccion(
 )
 
 data class PlanesResponse(val planes: List<PlanProduccion> = emptyList())
+
+data class PrioridadRequest(val prioridad: String)
 
 data class HistorialPedidoSupervisor(
     val id: Int,

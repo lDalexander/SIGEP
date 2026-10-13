@@ -24,6 +24,61 @@ object SigepNotificationManager {
     // Android actualice la existente en vez de apilar dos alarmas sonando.
     private const val NOTIF_ID_PEDIDO_INSUMO = 1001
 
+    /** Canal del chat. Separado del de alarmas para que se puedan silenciar aparte. */
+    const val CHANNEL_ID_MENSAJES = "sigep_mensajes_bodega"
+    private const val NOTIF_ID_MENSAJE_BODEGA = 1002
+
+    /**
+     * Aviso de un mensaje de supervisión: notificación normal, sin alarma.
+     *
+     * La alarma industrial está reservada para un pedido sin atender, que para la
+     * línea. Si un mensaje sonara igual, en dos días nadie distinguiría cuál de las
+     * dos cosas está pasando y se acabarían ignorando las dos.
+     */
+    fun mostrarMensajeBodega(context: Context, titulo: String, cuerpo: String) {
+        val gestor = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            gestor.getNotificationChannel(CHANNEL_ID_MENSAJES) == null
+        ) {
+            gestor.createNotificationChannel(
+                NotificationChannel(
+                    CHANNEL_ID_MENSAJES,
+                    "Mensajes de supervisión",
+                    NotificationManager.IMPORTANCE_DEFAULT
+                ).apply { description = "Chat entre bodega y supervisión" }
+            )
+        }
+
+        val intent = Intent(context, BandejaInsumosActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pendiente = PendingIntent.getActivity(
+            context, 2, intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val aviso = NotificationCompat.Builder(context, CHANNEL_ID_MENSAJES)
+            .setSmallIcon(android.R.drawable.ic_dialog_email)
+            .setContentTitle(titulo)
+            .setContentText(cuerpo)
+            // El texto largo se corta en una línea si no se expande, y un mensaje
+            // cortado obliga a abrir la app para saber si era importante.
+            .setStyle(NotificationCompat.BigTextStyle().bigText(cuerpo))
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setContentIntent(pendiente)
+            .setAutoCancel(true)
+            .build()
+
+        try {
+            gestor.notify(NOTIF_ID_MENSAJE_BODEGA, aviso)
+        } catch (e: SecurityException) {
+            // Sin permiso de notificaciones (Android 13+) no se puede avisar, pero el
+            // mensaje ya está guardado y se ve al abrir el chat.
+            ErrorReporter.warn("SIGEP_NOTIF", "Sin permiso para notificar: ${e.message}")
+        }
+    }
+
     fun createAlarmNotificationChannel(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

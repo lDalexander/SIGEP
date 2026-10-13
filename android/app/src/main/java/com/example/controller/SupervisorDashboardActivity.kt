@@ -27,7 +27,8 @@ import kotlinx.coroutines.withContext
  * Hasta la v1.7.0 esto era una lista de solo lectura: máquinas o historial de bodega, y
  * nada más. El supervisor veía el estado pero no podía hacer nada con él —ni mirar el
  * detalle de un turno, ni saber quién estaba de turno en bodega, ni cerrar un pedido que
- * se había quedado colgado—. Ahora las cuatro vistas son accionables.
+ * se había quedado colgado—. Ahora las CINCO vistas son accionables: planta, plan del
+ * día, insumistas, entregas por verificar y logística.
  *
  * LAS ACCIONES EXIGEN TOKEN (`RetrofitClient.tokenAdmin`), que ese login empezó a emitir
  * en la v1.7.0. Contra un servidor anterior el token llega nulo y las acciones se
@@ -46,6 +47,7 @@ class SupervisorDashboardActivity : AppCompatActivity() {
     private var adapterBodega: PedidoSupervisorAdapter? = null
     private var adapterInsumistas: InsumistaAdapter? = null
     private var adapterEntregas: EntregaVerificarAdapter? = null
+    private var adapterPlan: PlanAdapter? = null
 
     private var rolUsuario: String = ""
     private var nombreUsuario: String = ""
@@ -83,7 +85,7 @@ class SupervisorDashboardActivity : AppCompatActivity() {
         configurarSegunRol()
         cargarDatos()
 
-        // El botón ya no alterna entre dos vistas sino que rota entre cuatro, así que
+        // El botón ya no alterna entre dos vistas sino que rota entre cinco, así que
         // está disponible para todos los niveles: cada uno arranca en la suya y puede
         // mirar el resto. Quien no pueda ACTUAR seguirá sin ver los botones de acción,
         // que es donde está el permiso de verdad.
@@ -99,10 +101,11 @@ class SupervisorDashboardActivity : AppCompatActivity() {
         else activarVistaPlanta()
     }
 
-    /** Rotación fija: planta → insumistas → entregas → bodega → planta. */
+    /** Rotación fija: planta → plan → insumistas → entregas → bodega → planta. */
     private fun alternarVista() {
         when (vistaActual) {
-            "PLANTA"      -> activarVistaInsumistas()
+            "PLANTA"      -> activarVistaPlan()
+            "PLAN"        -> activarVistaInsumistas()
             "INSUMISTAS"  -> activarVistaEntregas()
             "ENTREGAS"    -> activarVistaBodega()
             else          -> activarVistaPlanta()
@@ -115,6 +118,16 @@ class SupervisorDashboardActivity : AppCompatActivity() {
         adapterBodega = null
         adapterInsumistas = null
         adapterEntregas = null
+        adapterPlan = null
+    }
+
+    private fun activarVistaPlan() {
+        vistaActual = "PLAN"
+        tvTitulo.text = "PLAN DE HOY - ¿ESTÁ CUBIERTO?"
+        tvSubtitulo.text = "Supervisor: $nombreUsuario | Toca un plan para ver qué falta"
+        limpiarAdaptadores()
+        adapterPlan = PlanAdapter(emptyList()) { plan -> mostrarInsumosDelPlan(plan) }
+        rvDashboard.adapter = adapterPlan
     }
 
     private fun activarVistaPlanta() {
@@ -305,6 +318,91 @@ class SupervisorDashboardActivity : AppCompatActivity() {
             .show()
     }
 
+    /**
+     * Qué lleva el plan y cuánto falta de cada cosa.
+     *
+     * Lo que falta va PRIMERO: con quince insumos en la lista, lo que está completo
+     * solo estorba para encontrar lo que no.
+     */
+    private fun mostrarInsumosDelPlan(plan: PlanProduccion) {
+        val que = listOfNotNull(plan.producto, plan.marca, plan.presentacion, plan.fragancia)
+            .filter { it.isNotBlank() }.joinToString(" · ").ifBlank { "Plan #${plan.id}" }
+
+        val ordenados = plan.insumos.sortedWith(
+            compareBy({ it.completo }, { it.prioridad == "Normal" }, { it.insumo })
+        )
+        if (ordenados.isEmpty()) {
+            AlertDialog.Builder(this)
+                .setTitle(que)
+                .setMessage("Este plan no tiene insumos configurados.\n\nSe cargan desde " +
+                            "Admin → Planificación, o se corrige la receta en Jerarquía.")
+                .setPositiveButton("Cerrar", null)
+                .show()
+            return
+        }
+
+        val etiquetas = ordenados.map { i ->
+            val marca = when {
+                i.completo -> "✅"
+                i.prioridad == "Urgente" -> "🔴"
+                i.prioridad == "Alta" -> "🟠"
+                else -> "⬜"
+            }
+            val unidad = i.unidad.orEmpty()
+            if (i.completo) "$marca ${i.insumo} — completo"
+            else "$marca ${i.insumo} — faltan ${i.falta} $unidad".trimEnd()
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("$que  ·  ${plan.cobertura?.toInt() ?: 0}%")
+            .setItems(etiquetas.toTypedArray()) { _, i ->
+                if (puedeActuar) elegirPrioridad(ordenados[i]) else avisarSinPermiso()
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    private fun elegirPrioridad(linea: PlanInsumoResumen) {
+        val opciones = arrayOf("Normal", "Alta", "Urgente")
+        AlertDialog.Builder(this)
+            .setTitle(linea.insumo)
+            .setMessage(
+                "Faltan ${linea.falta} ${linea.unidad.orEmpty()}\n" +
+                "Prioridad actual: ${linea.prioridad}\n\n" +
+                "Marcarlo urgente lo destaca para bodega y en el panel."
+            )
+            .setItems(opciones) { _, i -> enviarPrioridad(linea, opciones[i]) }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun enviarPrioridad(linea: PlanInsumoResumen, prioridad: String) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val resp = RetrofitClient.apiService.marcarPrioridadInsumo(
+                    linea.id, PrioridadRequest(prioridad)
+                )
+                withContext(Dispatchers.Main) {
+                    if (resp.isSuccessful) {
+                        Toast.makeText(this@SupervisorDashboardActivity,
+                            "${linea.insumo}: $prioridad", Toast.LENGTH_SHORT).show()
+                        cargarDatos()
+                    } else if (resp.code() == 401) {
+                        avisarSinPermiso()
+                    } else {
+                        Toast.makeText(this@SupervisorDashboardActivity,
+                            "No se pudo guardar (HTTP ${resp.code()})", Toast.LENGTH_LONG).show()
+                    }
+                }
+            } catch (e: Exception) {
+                ErrorReporter.warn("SupervisorPrioridad", "Fallo: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@SupervisorDashboardActivity, "Sin conexión", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
     // ────────────────────────────────────────────────────────────────────────
     // Verificación de entregas proactivas
     // ────────────────────────────────────────────────────────────────────────
@@ -487,6 +585,21 @@ class SupervisorDashboardActivity : AppCompatActivity() {
                                 "⚠️ No hay ningún insumista con sesión abierta"
                             else
                                 "Supervisor: $nombreUsuario | ${lista.size} de turno · toca para escribir"
+                        }
+                    }
+                    "PLAN" -> {
+                        val hoy = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
+                            .format(java.util.Date())
+                        val r = RetrofitClient.apiService.obtenerPlanes(hoy, hoy)
+                        withContext(Dispatchers.Main) {
+                            val lista = r.body()?.planes.orEmpty()
+                            adapterPlan?.actualizarLista(lista)
+                            val sinCubrir = lista.count { (it.cobertura ?: 0.0) < 100.0 }
+                            tvSubtitulo.text = when {
+                                lista.isEmpty() -> "No hay producción planificada para hoy"
+                                sinCubrir == 0 -> "✅ Todo el plan de hoy está cubierto"
+                                else -> "$sinCubrir de ${lista.size} plan(es) sin cubrir · toca para ver qué falta"
+                            }
                         }
                     }
                     "ENTREGAS" -> {

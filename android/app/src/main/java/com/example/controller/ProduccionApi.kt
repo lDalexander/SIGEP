@@ -222,6 +222,18 @@ interface ProduccionApi {
 
     // ── Planificación v1.7.0 ─────────────────────────────────────────────────
 
+    /**
+     * Marca urgente un insumo del plan. Exige X-Admin-Token.
+     *
+     * Va por `/supervisor/` y no por `/planificacion/` por los permisos: aquel exige
+     * nivel de planta, y priorizar material es tanto cosa de bodega como de planta.
+     */
+    @PUT("/api/supervisor/plan_insumos/{id}/prioridad")
+    suspend fun marcarPrioridadInsumo(
+        @Path("id") itemId: Int,
+        @Body request: PrioridadRequest
+    ): Response<RespuestaGenerica>
+
     @GET("/api/planificacion/planes")
     suspend fun obtenerPlanes(
         @Query("desde") desde: String? = null,

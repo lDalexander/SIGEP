@@ -55,6 +55,24 @@ class SigepFirebaseMessagingService : FirebaseMessagingService() {
         if (remoteMessage.data.isEmpty()) return
 
         val data = remoteMessage.data
+
+        // Este `return` descartaba TODO lo que no fuese un pedido, así que los mensajes
+        // del chat de bodega (v1.7.0) se tiraban a la basura antes de mostrarse: el
+        // mensaje llegaba a la base y el insumista solo lo veía si entraba a mirar.
+        // Es el mismo filtro-fantasma que había en SigepWebSocketManager.
+        //
+        // El chat NO usa la alarma industrial: esa es para un pedido que para la línea
+        // si no se atiende. Un mensaje es una notificación normal — si sonara igual,
+        // en dos días nadie distinguiría una cosa de la otra.
+        if (data["tipo"] == "MENSAJE_BODEGA") {
+            SigepNotificationManager.mostrarMensajeBodega(
+                this,
+                data["titulo"] ?: "Mensaje de supervisión",
+                data["cuerpo"] ?: ""
+            )
+            return
+        }
+
         if (data["tipo"] != "SOLICITUD_INSUMO") return
 
         val tipoInsumoMsg = data["tipo_insumo"] ?: "DESCONOCIDO"

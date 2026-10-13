@@ -185,6 +185,75 @@ class EntregaVerificarAdapter(
     }
 }
 
+/**
+ * Planes de producción del día con su cobertura de insumos.
+ *
+ * El número grande de la tarjeta es el PORCENTAJE CUBIERTO, no la cantidad planificada:
+ * lo que el supervisor necesita decidir de un vistazo es si puede arrancar esa
+ * producción, y para eso lo planificado no le dice nada por sí solo.
+ */
+class PlanAdapter(
+    private var lista: List<PlanProduccion>,
+    private val onClick: ((PlanProduccion) -> Unit)? = null
+) : RecyclerView.Adapter<PlanAdapter.ViewHolder>() {
+
+    class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+        val tvNombre: TextView = view.findViewById(R.id.tvNombreMaquina)
+        val tvEstado: TextView = view.findViewById(R.id.tvEstadoMaquina)
+        val tvOperador: TextView = view.findViewById(R.id.tvNombreOperador)
+        val tvProducto: TextView = view.findViewById(R.id.tvDetalleProducto)
+        val tvHora: TextView = view.findViewById(R.id.tvHoraInicio)
+        val tvPacas: TextView = view.findViewById(R.id.tvTotalPacas)
+    }
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
+        val view = LayoutInflater.from(parent.context).inflate(R.layout.item_maquina_status, parent, false)
+        return ViewHolder(view)
+    }
+
+    override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+        val item = lista[position]
+
+        holder.tvNombre.text = listOfNotNull(item.producto, item.marca, item.presentacion)
+            .filter { it.isNotBlank() }.joinToString(" ")
+            .ifBlank { "Plan #${item.id}" }
+        // «sin máquina» no es un dato que falte: es producción que se deja preparada
+        // para que luego la tome cualquiera. Se escribe para que no parezca un olvido.
+        holder.tvOperador.text = item.maquina ?: "sin máquina asignada"
+        holder.tvProducto.text = buildString {
+            append(item.estado ?: "Planificado")
+            item.cantidad_planificada?.let { append("  ·  $it ${item.unidad ?: ""}".trimEnd()) }
+        }
+        holder.tvHora.text = item.turno ?: item.fecha?.takeLast(5) ?: "—"
+        holder.tvPacas.text = item.cobertura?.let { "${it.toInt()}%" } ?: "—"
+
+        val cobertura = item.cobertura
+        holder.tvEstado.text = when {
+            cobertura == null -> "SIN INSUMOS"
+            item.hay_urgentes -> "URGENTE"
+            cobertura >= 100.0 -> "COMPLETO"
+            else -> "FALTAN ${item.insumos_incompletos}"
+        }
+        holder.tvEstado.setTextColor(
+            when {
+                cobertura == null -> Color.GRAY
+                item.hay_urgentes -> Color.parseColor("#EF4444")
+                cobertura >= 100.0 -> Color.parseColor("#22C55E")
+                else -> Color.parseColor("#F59E0B")
+            }
+        )
+
+        holder.itemView.setOnClickListener { onClick?.invoke(item) }
+    }
+
+    override fun getItemCount() = lista.size
+
+    fun actualizarLista(nuevaLista: List<PlanProduccion>) {
+        lista = nuevaLista
+        notifyDataSetChanged()
+    }
+}
+
 class PedidoSupervisorAdapter(private var lista: List<HistorialPedidoSupervisor>) :
     RecyclerView.Adapter<PedidoSupervisorAdapter.ViewHolder>() {
 
