@@ -12,12 +12,12 @@ import TerminalLog from './components/TerminalLog';
 import ChecklistMantenimiento from './components/ChecklistMantenimiento';
 import TopProductionChart from './components/TopProductionChart';
 import SolicitudesInsumos from './components/SolicitudesInsumos';
+import InsumosView from './components/InsumosView';
 import ComentariosTurno from './components/ComentariosTurno';
 import DetalleChecklist from './components/DetalleChecklist';
 import Footer from './components/Footer';
 import AdminApp from './components/admin/AdminApp';
 import ParosView from './components/paros/ParosView';
-import { Card, Label } from './components/ui';
 import { fechaISO } from './lib/format';
 import useApi from './lib/useApi';
 import {
@@ -414,17 +414,13 @@ function App() {
           </>
         )}
 
-        {/* La cabecera de las capturas lleva un botón «Insumos», pero no hay ninguna
-            captura de esa vista ni especificación de su contenido. El dashboard ya
-            muestra las solicitudes en su propia tarjeta. */}
+        {/* El botón «Insumos» de la cabecera llevaba desde el principio a un recuadro
+            vacío. Lo de bodega estaba repartido entre una tarjeta del dashboard (solo
+            las solicitudes) y la pestaña de administración (solo corregir cantidades),
+            así que para saber si la planta estaba abastecida había que mirar en dos
+            sitios y ninguno contestaba del todo. Aquí está entero. */}
         {vista === 'insumos' && (
-          <div className="py-10">
-            <Card titulo="Insumos">
-              <Label caja="normal" className="block py-8 text-center text-sig-dim">
-                Vista sin especificación de referencia
-              </Label>
-            </Card>
-          </div>
+          <InsumosView apiBase={API_BASE} intervalo={POLL_INTERVAL} />
         )}
 
         <Footer actualizado={ultimoRefresco} />

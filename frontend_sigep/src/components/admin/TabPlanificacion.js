@@ -82,14 +82,14 @@ function FichaPlan({ plan, editable, onCambio, avisar }) {
         {editable ? (
           <Select
             value={plan.estado}
+            opciones={ESTADOS}
+            vacio={null}
             onChange={(e) => llamar(
               () => planificacion.put(`/planes/${plan.id}`, { fecha: plan.fecha, estado: e.target.value }),
               'estado'
             )}
             disabled={ocupado === 'estado'}
-          >
-            {ESTADOS.map((x) => <option key={x} value={x}>{x}</option>)}
-          </Select>
+          />
         ) : (
           <Badge tono={plan.estado === 'Cancelado' ? 'gray' : 'amber'}>{plan.estado}</Badge>
         )}
@@ -162,11 +162,11 @@ function FichaPlan({ plan, editable, onCambio, avisar }) {
                 <td className="py-1.5">
                   {editable ? (
                     <Select
-                      defaultValue={linea.prioridad}
+                      value={borrador[`p${linea.id}`] ?? linea.prioridad}
+                      opciones={PRIORIDADES}
+                      vacio={null}
                       onChange={(e) => setBorrador((b) => ({ ...b, [`p${linea.id}`]: e.target.value }))}
-                    >
-                      {PRIORIDADES.map((p) => <option key={p} value={p}>{p}</option>)}
-                    </Select>
+                    />
                   ) : <Badge tono={linea.prioridad === 'Normal' ? 'gray' : 'amber'}>{linea.prioridad}</Badge>}
                 </td>
                 {editable && (
@@ -219,9 +219,10 @@ function FichaPlan({ plan, editable, onCambio, avisar }) {
           </Button>
 
           {anadiendo ? (
-            <Select
+            <select
               autoFocus
               defaultValue=""
+              className="sig-input"
               onChange={(e) => {
                 const id = Number(e.target.value);
                 if (!id) return;
@@ -236,7 +237,7 @@ function FichaPlan({ plan, editable, onCambio, avisar }) {
               {insumosDisponibles.map((i) => (
                 <option key={i.id} value={i.id}>{i.nombre}</option>
               ))}
-            </Select>
+            </select>
           ) : (
             <Button onClick={() => setAnadiendo(true)}>Añadir insumo</Button>
           )}
@@ -272,9 +273,9 @@ function NuevoPlan({ catalogos, productos, onCreado, avisar }) {
       await planificacion.post('/planes', {
         fecha: f.fecha,
         turno: f.turno || null,
-        // El centinela se traduce a null aquí: en la API «sin máquina» es la ausencia
-        // del dato, no un texto que luego habría que reconocer en cada consulta.
-        maquina: f.maquina && f.maquina !== SIN_MAQUINA ? f.maquina : null,
+        // En la API «sin máquina» es la ausencia del dato, no un texto que luego
+        // habría que reconocer en cada consulta.
+        maquina: f.maquina || null,
         producto: f.producto || null,
         marca: f.marca || null,
         presentacion: f.presentacion || null,
@@ -298,10 +299,8 @@ function NuevoPlan({ catalogos, productos, onCreado, avisar }) {
     return <Button onClick={() => setAbierto(true)}>+ Nuevo plan</Button>;
   }
 
-  const opciones = (lista) => (lista || []).map((x) => {
-    const v = typeof x === 'string' ? x : x.nombre;
-    return <option key={v} value={v}>{v}</option>;
-  });
+  /** `catalogos.maquinas` son objetos y el resto cadenas: `Select` quiere cadenas. */
+  const nombres = (lista) => (lista || []).map((x) => (typeof x === 'string' ? x : x.nombre));
 
   return (
     <Card titulo="Nuevo plan de producción">
@@ -310,38 +309,30 @@ function NuevoPlan({ catalogos, productos, onCreado, avisar }) {
         <div><Label>Turno</Label><Input placeholder="Mañana / Tarde…" value={f.turno || ''} onChange={cambiar('turno')} /></div>
         <div>
           <Label>Máquina</Label>
-          <Select value={f.maquina || SIN_MAQUINA} onChange={cambiar('maquina')}>
-            <option>{SIN_MAQUINA}</option>
-            {opciones(catalogos?.maquinas)}
-          </Select>
+          {/* «sin asignar» es la opción vacía, no una máquina más: así el centinela
+              nunca viaja como texto y la ausencia de máquina es lo que debe ser. */}
+          <Select
+            value={f.maquina || ''}
+            opciones={nombres(catalogos?.maquinas)}
+            vacio={SIN_MAQUINA}
+            onChange={cambiar('maquina')}
+          />
         </div>
         <div>
           <Label>Producto</Label>
-          <Select value={f.producto || ''} onChange={cambiar('producto')}>
-            <option value="">—</option>
-            {opciones(productos)}
-          </Select>
+          <Select value={f.producto || ''} opciones={nombres(productos)} onChange={cambiar('producto')} />
         </div>
         <div>
           <Label>Marca</Label>
-          <Select value={f.marca || ''} onChange={cambiar('marca')}>
-            <option value="">—</option>
-            {opciones(catalogos?.marcas)}
-          </Select>
+          <Select value={f.marca || ''} opciones={nombres(catalogos?.marcas)} onChange={cambiar('marca')} />
         </div>
         <div>
           <Label>Presentación</Label>
-          <Select value={f.presentacion || ''} onChange={cambiar('presentacion')}>
-            <option value="">—</option>
-            {opciones(catalogos?.presentaciones)}
-          </Select>
+          <Select value={f.presentacion || ''} opciones={nombres(catalogos?.presentaciones)} onChange={cambiar('presentacion')} />
         </div>
         <div>
           <Label>Fragancia</Label>
-          <Select value={f.fragancia || ''} onChange={cambiar('fragancia')}>
-            <option value="">—</option>
-            {opciones(catalogos?.fragancias)}
-          </Select>
+          <Select value={f.fragancia || ''} opciones={nombres(catalogos?.fragancias)} onChange={cambiar('fragancia')} />
         </div>
         <div><Label>Cantidad</Label><Input type="number" value={f.cantidad || ''} onChange={cambiar('cantidad')} /></div>
         <div><Label>Unidad</Label><Input placeholder="unidades / kg" value={f.unidad || ''} onChange={cambiar('unidad')} /></div>
