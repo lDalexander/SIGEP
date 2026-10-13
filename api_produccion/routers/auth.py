@@ -13,6 +13,7 @@ from sqlalchemy import func
 import schemas
 import models
 from services import seguridad, sesiones_usuario
+from routers import admin as admin_router
 
 router = APIRouter(prefix="/api", tags=["Autenticación y Estado"])
 
@@ -142,12 +143,31 @@ def login_administrador(credenciales: schemas.AdminLoginRequest, db: Session = D
             }
         )
 
-    # 3. Si todo está bien, damos luz verde
+    # 3. Si todo está bien, damos luz verde.
+    #
+    # `token` es NUEVO en la v1.7.0. Hasta ahora este endpoint —el que usa la app
+    # Android— no emitía ninguno, así que el supervisor entraba en su tablet y no podía
+    # llamar a nada protegido: todo su panel era de solo lectura sobre endpoints
+    # abiertos. Con el token puede confirmar recepciones y verificar entregas.
+    #
+    # Es el MISMO almacén en memoria que usa la web (`routers.admin._TOKENS`), con lo
+    # que eso implica y conviene no olvidar: un `systemctl restart sigep` lo vacía y el
+    # supervisor tiene que volver a entrar. Para el insumista eso no valía —se queda
+    # tirado a media jornada con la tablet en el bolsillo— y por eso su token vive en
+    # `sesiones_usuario`; aquí se acepta porque un supervisor vuelve a entrar sin
+    # drama, y porque darle una sesión persistente obligaría a que `sesiones_usuario`
+    # apuntase a dos tablas distintas.
+    #
+    # Campo añadido a la respuesta: las tablets anteriores lo ignoran (Gson descarta lo
+    # que su modelo no declara).
+    token = admin_router.emitir_token(admin)
+
     return {
         "status": "success",
         "mensaje": "Login exitoso",
         "admin_id": admin.id,
-        "nivel_acceso": admin.nivel_acceso
+        "nivel_acceso": admin.nivel_acceso,
+        "token": token
     }
 
 @router.get("/admin/supervisores")

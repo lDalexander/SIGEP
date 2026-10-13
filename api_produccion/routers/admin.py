@@ -237,14 +237,7 @@ def admin_auth(datos: AuthIn, db: Session = Depends(get_db)):
         admin.password = seguridad.hashear(datos.pin)
         db.commit()
         logger.info(f"Contraseña de {admin.username} migrada a hash en el login")
-    ahora = datetime.now()
-    _purgar_tokens(ahora)
-    token = secrets.token_urlsafe(32)
-    _TOKENS[token] = {
-        "username": admin.username,
-        "nivel": admin.nivel_acceso,
-        "ultimo_uso": ahora,
-    }
+    token = emitir_token(admin)
     logger.info(f"Admin login: {admin.username} ({admin.nivel_acceso})")
     # `inactividad_segundos` es una clave NUEVA en la respuesta: la web la usa para
     # cerrar sola antes de que el token muera, en vez de repetir aquí y allí el
@@ -255,6 +248,25 @@ def admin_auth(datos: AuthIn, db: Session = Depends(get_db)):
         "nivel_acceso": admin.nivel_acceso,
         "inactividad_segundos": int(INACTIVIDAD_MAX.total_seconds()),
     }
+
+
+def emitir_token(admin):
+    """Crea un token de admin para `admin` y lo devuelve.
+
+    Extraído de `admin_auth` porque ahora lo necesitan DOS entradas: la de la web
+    (`/api/admin/auth`) y la de la app Android (`/api/login` -> `/admin/login`, en
+    `routers/auth.py`). Teniéndolo en un solo sitio, el día que el almacén de tokens
+    deje de ser un diccionario en memoria se cambia una vez y no dos.
+    """
+    ahora = datetime.now()
+    _purgar_tokens(ahora)
+    token = secrets.token_urlsafe(32)
+    _TOKENS[token] = {
+        "username": admin.username,
+        "nivel": admin.nivel_acceso,
+        "ultimo_uso": ahora,
+    }
+    return token
 
 
 @router.post("/logout")

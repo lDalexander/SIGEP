@@ -31,6 +31,54 @@ if not firebase_admin._apps:
         )
 
 
+def notificar_usuario_por_fcm(usuario_id: int, titulo: str, cuerpo: str, tipo: str = "MENSAJE_BODEGA"):
+    """FCM data-only a las tablets de UN usuario concreto.
+
+    `notificar_insumistas_por_fcm` reparte por bodega, que es lo que quiere un pedido:
+    lo puede tomar cualquiera del turno. Un mensaje del supervisor no — va dirigido a
+    una persona, y mandarlo a toda la bodega lo convertiría en un tablón de anuncios.
+
+    Best-effort, como el otro: el mensaje ya está guardado y la app lo ve al refrescar
+    aunque el push se pierda. Abre su propia sesión de BD porque FastAPI cierra la del
+    request antes de ejecutar las BackgroundTasks.
+    """
+    if not firebase_admin._apps:
+        log.warning("FCM no inicializado, saltando envío")
+        return
+    if not usuario_id:
+        return
+
+    db = SessionLocal()
+    try:
+        filas = (
+            db.query(DispositivoFCMDB.token)
+            .filter(
+                DispositivoFCMDB.activo.is_(True),
+                DispositivoFCMDB.usuario_id == usuario_id,
+            )
+            .all()
+        )
+        tokens = [t[0] for t in filas if t[0]]
+        if not tokens:
+            log.info(f"Sin tokens FCM para el usuario {usuario_id}")
+            return
+
+        mensaje = messaging.MulticastMessage(
+            data={"tipo": tipo, "titulo": titulo, "cuerpo": cuerpo},
+            android=messaging.AndroidConfig(priority="high", ttl=300),
+            tokens=tokens,
+        )
+        respuesta = messaging.send_each_for_multicast(mensaje)
+        log.info(
+            f"📲 FCM dirigido al usuario {usuario_id}: "
+            f"{respuesta.success_count} éxitos, {respuesta.failure_count} fallos"
+        )
+    except Exception as e:
+        log.error(f"Error al enviar FCM al usuario {usuario_id}: {e}")
+    finally:
+        db.close()
+
+
 def notificar_insumistas_por_fcm(
     tipo_insumo: str,         # "GRANEL" o "EMPAQUE"
     titulo: str,
