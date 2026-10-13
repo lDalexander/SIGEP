@@ -32,7 +32,7 @@ from datetime import datetime, timedelta
 from fastapi import Header
 from sqlalchemy import or_
 
-from models import SesionUsuarioDB, UsuarioDB
+from models import EstadoTabletDB, SesionUsuarioDB, UsuarioDB
 
 # Ventana de vida de una sesión sin señales. Coincide con el texto que la app muestra.
 HORAS_SESION = 9
@@ -46,6 +46,35 @@ GC = "GC"                  # lo cerró el recolector periódico
 
 def _limite():
     return datetime.now() - timedelta(hours=HORAS_SESION)
+
+
+def _minutos_desde(momento):
+    """Minutos transcurridos, nunca negativos.
+
+    El `max(0, ...)` no es paranoia: MySQL REDONDEA los milisegundos al guardar un
+    DATETIME sin precisión fraccionaria, así que un instante escrito en .823 vuelve
+    como el segundo siguiente y queda una fracción en el futuro. Con división entera
+    eso daba «hace -1 min» en el diálogo que ve el insumista.
+    """
+    return max(0, int((datetime.now() - momento).total_seconds() // 60))
+
+
+def describir_tablet(db, device_id):
+    """Nombre legible de una tablet. `device_id` es un UUID y no le dice nada a nadie.
+
+    La propia tablet publica su nombre y su máquina en el heartbeat
+    (`estado_tablets`), así que el diálogo puede decir «la tablet de la Máquina 7» en
+    vez de un UUID de 36 caracteres. Si esa tablet nunca reportó, se cae a los últimos
+    6 caracteres: no identifica el equipo, pero al menos distingue uno de otro.
+    """
+    if not device_id:
+        return "otra tablet"
+    tablet = db.query(EstadoTabletDB).filter(EstadoTabletDB.device_id == device_id).first()
+    if tablet:
+        partes = [p for p in (tablet.nombre, tablet.maquina) if p]
+        if partes:
+            return " · ".join(partes)
+    return "…%s" % device_id[-6:]
 
 
 def abiertas_de(db, usuario_id):
@@ -107,11 +136,12 @@ def conflicto_de_sesion(db, usuario, device_id):
     if bloqueante is None:
         return None
 
-    inactivo = int((datetime.now() - bloqueante.ultimo_visto).total_seconds() // 60)
+    inactivo = _minutos_desde(bloqueante.ultimo_visto)
+    cuando = "ahora mismo" if inactivo < 1 else "hace %d min" % inactivo
     return (
-        "%s ya tiene la sesión abierta en otra tablet (%s), con actividad hace %d min. "
+        "%s ya tiene la sesión abierta en otra tablet (%s), con actividad %s. "
         "Cierra sesión allí y vuelve a intentarlo, o espera %d horas a que se libere sola."
-        % (usuario.nombre, bloqueante.device_id, inactivo, HORAS_SESION)
+        % (usuario.nombre, describir_tablet(db, bloqueante.device_id), cuando, HORAS_SESION)
     )
 
 
