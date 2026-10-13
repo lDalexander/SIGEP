@@ -12,6 +12,16 @@ const CLAVE = 'sigep_admin_sesion';
 
 export const admin = axios.create({ baseURL: '/api/admin', timeout: 8000 });
 
+/**
+ * Cliente de planificación (`/api/planificacion`).
+ *
+ * Va aparte de `admin` porque ese router no cuelga de `/api/admin`: sus LECTURAS son
+ * abiertas a propósito —las consultan las tablets del insumista y del supervisor, que
+ * no manejan token de admin— y solo las escrituras exigen nivel de planta. Comparte
+ * los interceptores de abajo, así que el token viaja igual cuando lo hay.
+ */
+export const planificacion = axios.create({ baseURL: '/api/planificacion', timeout: 8000 });
+
 /** Handler que el contenedor del admin registra para volver al login ante un 401.
  *  Recibe el motivo que dio el backend (`detail`), que puede ser el de inactividad. */
 let alCaducar = () => {};
@@ -44,22 +54,27 @@ export function borrarSesion() {
   }
 }
 
-admin.interceptors.request.use((config) => {
-  const sesion = leerSesion();
-  if (sesion?.token) config.headers['X-Admin-Token'] = sesion.token;
-  return config;
-});
+/* Los dos clientes comparten interceptores: el token en la petición y el 401 como
+   sesión caducada. Registrarlos en un bucle evita que uno se quede atrás al tocar el
+   otro, que es como se acaba teniendo una pestaña que no caduca. */
+[admin, planificacion].forEach((cliente) => {
+  cliente.interceptors.request.use((config) => {
+    const sesion = leerSesion();
+    if (sesion?.token) config.headers['X-Admin-Token'] = sesion.token;
+    return config;
+  });
 
-admin.interceptors.response.use(
-  (respuesta) => respuesta,
-  (error) => {
-    if (error.response?.status === 401) {
-      borrarSesion();
-      alCaducar(error.response?.data?.detail || null);
+  cliente.interceptors.response.use(
+    (respuesta) => respuesta,
+    (error) => {
+      if (error.response?.status === 401) {
+        borrarSesion();
+        alCaducar(error.response?.data?.detail || null);
+      }
+      return Promise.reject(error);
     }
-    return Promise.reject(error);
-  }
-);
+  );
+});
 
 /** POST /api/admin/auth — valida credenciales y guarda la sesión. */
 export async function entrar(nombre, pin) {

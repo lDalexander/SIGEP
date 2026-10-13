@@ -5,6 +5,7 @@ import TabOperarios from './TabOperarios';
 import TabProduccion from './TabProduccion';
 import TabChecklists from './TabChecklists';
 import TabJerarquia from './TabJerarquia';
+import TabPlanificacion from './TabPlanificacion';
 import TabMensajes from './TabMensajes';
 import TabUsuarios from './TabUsuarios';
 import TabCorreo from './TabCorreo';
@@ -35,6 +36,7 @@ const PESTANAS = [
   { value: 'paros',      label: 'Paros',      Componente: TabParos,      niveles: NIVELES_VER_PLANTA },
   { value: 'checklists', label: 'Checklists', Componente: TabChecklists, niveles: NIVELES_VER_PLANTA },
   { value: 'jerarquia',  label: 'Jerarquía',  Componente: TabJerarquia,  niveles: NIVELES_VER_PLANTA },
+  { value: 'planificacion', label: 'Planificación', Componente: TabPlanificacion, niveles: NIVELES_VER_PLANTA },
   { value: 'insumos',    label: 'Insumos',    Componente: TabInsumos,    niveles: NIVELES_BODEGA },
   { value: 'reportes',   label: 'Reportes',   Componente: TabFeedback,   niveles: NIVELES_SISTEMA },
   { value: 'mensajes',   label: 'Mensajes',   Componente: TabMensajes,   niveles: NIVELES_VER_PLANTA },
