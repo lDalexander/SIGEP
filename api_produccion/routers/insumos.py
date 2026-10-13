@@ -157,6 +157,52 @@ def crear_pedido_dinamico(
         db.rollback()
         logger.error(f"Error al crear pedido: {e}")
         raise HTTPException(status_code=500, detail="Error interno")
+@router.get("/catalogo")
+def obtener_catalogo(
+    bodega: str = Query(None, description="EMPAQUE o GRANEL. Sin esto, se deduce del token."),
+    db: Session = Depends(get_db),
+    token: str = Depends(sesiones_usuario.token_de_cabecera),
+):
+    """Catálogo de insumos de una bodega, para el formulario de entrega del insumista.
+
+    El operario tiene `/api/sesion/{id}/insumos_permitidos`, que filtra por el BOM del
+    turno. El insumista no tiene turno contra el que filtrar —entrega lo que haga falta,
+    donde haga falta—, así que necesita el catálogo entero de SU bodega. Sin este
+    endpoint su formulario seguiría con la lista quemada en el APK
+    (`["Cajas","Botellas","Fajillas","Etiquetas","Tapas"]`), que no coincide ni con la
+    del operario ni con la tabla.
+
+    La bodega sale del token cuando lo hay; si no, del parámetro. Un insumista de Granel
+    no tiene por qué ver el empaque, y al revés: es una lista más corta y sin ruido.
+    """
+    try:
+        sesion = sesiones_usuario.resolver_token(db, token)
+        if sesion is not None and sesion.rol:
+            bodega = "GRANEL" if "granel" in sesion.rol.lower() else "EMPAQUE"
+
+        q = db.query(InsumoDB).filter(InsumoDB.activo.is_(True))
+        destino = (bodega or "").strip().upper()
+        if destino in ("EMPAQUE", "GRANEL"):
+            q = q.filter(InsumoDB.bodega == destino)
+        # Con una bodega que no se reconoce se devuelve TODO en vez de nada: una lista
+        # vacía dejaría al insumista sin poder registrar la entrega que ya hizo.
+
+        return [
+            {
+                "id": i.id,
+                "nombre": i.nombre,
+                "categoria": i.categoria or "",
+                "unidad": i.unidad_medida or "",
+                "bodega": i.bodega or "EMPAQUE",
+                "cantidad_sugerida": 1,
+            }
+            for i in q.order_by(InsumoDB.nombre.asc()).all()
+        ]
+    except Exception as e:
+        logger.error(f"Error en /insumos/catalogo: {e}")
+        raise HTTPException(status_code=500, detail="Error interno")
+
+
 @router.get("/pendientes/{rol}")
 def obtener_pedidos_pendientes(
     rol: str,
