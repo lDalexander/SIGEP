@@ -112,7 +112,11 @@ def leer_conversacion(
                          MensajeBodegaDB.insumista_id.is_(None)))
     # Un supervisor sin `insumista_id` ve todo: es su vista de «qué se está hablando».
 
-    filas = q.order_by(MensajeBodegaDB.creado_en.desc()).limit(limite).all()
+    # El desempate por `id` NO es decorativo: `creado_en` es un DATETIME sin
+    # milisegundos, así que dos mensajes del mismo segundo —un supervisor y un
+    # insumista escribiendo a la vez, que es lo normal— salían en orden arbitrario y la
+    # conversación se leía descolocada. `id` es autoincremental: es el único orden real.
+    filas = q.order_by(MensajeBodegaDB.creado_en.desc(), MensajeBodegaDB.id.desc()).limit(limite).all()
     filas.reverse()
 
     sup_ids = {m.supervisor_id for m in filas if m.supervisor_id}
