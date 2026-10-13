@@ -1,5 +1,6 @@
 package com.example.controller
 
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.view.LayoutInflater
 import android.view.View
@@ -70,9 +71,9 @@ class MaquinaStatusAdapter(
 /**
  * Insumistas con sesión abierta. Pulsar uno abre su conversación.
  *
- * Reaprovecha el layout de las máquinas en vez de crear otro: son la misma tarjeta
- * (un título, un estado y cuatro cifras) y mantener dos XML casi iguales solo garantiza
- * que uno se quede atrás cuando se retoque el otro.
+ * Tiene su propia tarjeta (`item_insumista_turno`): la de las máquinas enseñaba
+ * «Operador», «Producto» y «Total pacas», que en una persona de bodega no dicen nada.
+ * Aquí solo importa quién es, de qué bodega, desde cuándo y si se le puede pedir algo.
  */
 class InsumistaAdapter(
     private var lista: List<InsumistaTurno>,
@@ -80,42 +81,45 @@ class InsumistaAdapter(
 ) : RecyclerView.Adapter<InsumistaAdapter.ViewHolder>() {
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
-        val tvNombre: TextView = view.findViewById(R.id.tvNombreMaquina)
-        val tvEstado: TextView = view.findViewById(R.id.tvEstadoMaquina)
-        val tvOperador: TextView = view.findViewById(R.id.tvNombreOperador)
-        val tvProducto: TextView = view.findViewById(R.id.tvDetalleProducto)
-        val tvHora: TextView = view.findViewById(R.id.tvHoraInicio)
-        val tvPacas: TextView = view.findViewById(R.id.tvTotalPacas)
+        val tvNombre: TextView = view.findViewById(R.id.tvNombreInsumista)
+        val tvEstado: TextView = view.findViewById(R.id.tvEstadoInsumista)
+        val tvTipo: TextView = view.findViewById(R.id.tvTipoInsumista)
+        val tvInicio: TextView = view.findViewById(R.id.tvInicioInsumista)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
-        val view = LayoutInflater.from(parent.context).inflate(R.layout.item_maquina_status, parent, false)
+        val view = LayoutInflater.from(parent.context).inflate(R.layout.item_insumista_turno, parent, false)
         return ViewHolder(view)
     }
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val item = lista[position]
         holder.tvNombre.text = item.nombre
-        holder.tvOperador.text = item.rol
-        holder.tvProducto.text = item.tablet ?: "—"
-        holder.tvHora.text = item.desde ?: "—"
-        holder.tvPacas.text = item.entregas_hoy.toString()
+        holder.tvTipo.text = when (item.bodega.uppercase()) {
+            "GRANEL" -> "Insumista de Granel"
+            "EMPAQUE" -> "Insumista de Empaque"
+            else -> item.rol
+        }
+        holder.tvInicio.text = item.desde ?: "—"
 
         // Los 10 minutos no son un umbral técnico: es el tiempo que un insumista tarda
         // en cruzar la planta y volver. Por encima, lo más probable es que la tablet
         // esté encendida encima de una caja y no en su mano.
         val inactivo = item.inactivo_min >= 10
         holder.tvEstado.text = when {
-            inactivo -> "SIN SEÑAL ${item.inactivo_min}m"
-            item.pedidos_activos > 0 -> "OCUPADO (${item.pedidos_activos})"
+            inactivo -> "SIN SEÑAL ${item.inactivo_min} min"
+            item.pedidos_activos > 1 -> "EN ENTREGA (${item.pedidos_activos})"
+            item.pedidos_activos == 1 -> "EN ENTREGA"
             else -> "LIBRE"
         }
-        holder.tvEstado.setTextColor(
-            when {
-                inactivo -> Color.parseColor("#EF4444")
-                item.pedidos_activos > 0 -> Color.parseColor("#F59E0B")
-                else -> Color.parseColor("#22C55E")
-            }
+        holder.tvEstado.backgroundTintList = ColorStateList.valueOf(
+            Color.parseColor(
+                when {
+                    inactivo -> "#EF4444"
+                    item.pedidos_activos > 0 -> "#F59E0B"
+                    else -> "#22C55E"
+                }
+            )
         )
 
         holder.itemView.setOnClickListener { onClick?.invoke(item) }
@@ -132,9 +136,9 @@ class InsumistaAdapter(
 /**
  * Entregas proactivas que el supervisor todavía no ha revisado.
  *
- * Reusa `item_maquina_status` como las otras dos: la tarjeta es la misma forma —título,
- * estado y cuatro cifras— y tener tres XML casi iguales solo asegura que dos se queden
- * atrás cuando se retoque el tercero.
+ * Reusa `item_maquina_status` como el plan: la tarjeta es la misma forma —título,
+ * estado y cuatro cifras— y tener XML casi iguales solo asegura que uno se quede
+ * atrás cuando se retoque el otro.
  */
 class EntregaVerificarAdapter(
     private var lista: List<EntregaPorVerificar>,
