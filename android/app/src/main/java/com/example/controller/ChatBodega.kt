@@ -12,11 +12,15 @@ import android.view.ViewGroup
 import android.view.Window
 import android.view.WindowManager
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDialog
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -31,6 +35,7 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.min
 
 /**
@@ -314,6 +319,13 @@ object ChatBodega {
         val lm = LinearLayoutManager(activity).apply { stackFromEnd = true }
         rv.layoutManager = lm
         rv.adapter = adapter
+        // Al abrirse el teclado la lista se encoge: se queda en el último mensaje, que
+        // es al que se está respondiendo, en vez de dejarlo escondido detrás.
+        rv.addOnLayoutChangeListener { _, _, _, _, bottom, _, _, _, oldBottom ->
+            if (bottom < oldBottom && adapter.itemCount > 0) {
+                rv.post { rv.scrollToPosition(adapter.itemCount - 1) }
+            }
+        }
 
         var sondeo: Job? = null
         var ultimoId = -1
@@ -525,23 +537,48 @@ object ChatBodega {
         val raiz = activity.layoutInflater.inflate(layout, null)
         // Esquinas redondeadas también para el contenido, no solo para el fondo.
         raiz.clipToOutline = true
+
+        // El TECLADO se maneja a mano, como en WhatsApp: la ventana ocupa todo el alto
+        // y este marco transparente deja abajo exactamente lo que ocupa el teclado, así
+        // la caja de texto sube con él. Con targetSdk 36 (Android 15) el sistema dibuja
+        // de borde a borde y ADJUST_RESIZE ya no encoge la ventana solo: con la altura
+        // fija de antes, el teclado tapaba la barra de escribir.
+        val margen = (16 * activity.resources.displayMetrics.density).toInt()
+        val marco = FrameLayout(activity).apply {
+            addView(raiz, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        ViewCompat.setOnApplyWindowInsetsListener(marco) { v, insets ->
+            val barras = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            val teclado = insets.getInsets(WindowInsetsCompat.Type.ime())
+            v.setPadding(0, barras.top + margen, 0, max(barras.bottom, teclado.bottom) + margen)
+            WindowInsetsCompat.CONSUMED
+        }
+
         val dialogo = AppCompatDialog(activity).apply {
             supportRequestWindowFeature(Window.FEATURE_NO_TITLE)
-            setContentView(raiz)
-            // El fondo redondeado lo pone el layout; el de la ventana se quita para que
-            // no asome un rectángulo detrás de las esquinas.
-            window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-            window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+            setContentView(marco)
+            window?.let { w ->
+                // El fondo redondeado lo pone el layout; el de la ventana se quita para
+                // que no asome un rectángulo detrás de las esquinas.
+                w.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                // Sin esto, en Android anteriores al 15 el sistema se come los insets y
+                // el marco no se entera de que hay teclado.
+                WindowCompat.setDecorFitsSystemWindows(w, false)
+                w.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+            }
         }
         return dialogo to raiz
     }
 
-    /** Casi toda la pantalla, pero sin pasar de un ancho de teléfono en las tablets. */
+    /**
+     * Ancho de teléfono como máximo en las tablets; alto completo, porque los márgenes
+     * y el hueco del teclado los pone el marco de `crearDialogo`.
+     */
     private fun dimensionar(dialogo: AppCompatDialog, activity: AppCompatActivity) {
         val m = activity.resources.displayMetrics
         val ancho = min((m.widthPixels * 0.96).toInt(), (640 * m.density).toInt())
-        val alto = (m.heightPixels * 0.9).toInt()
-        dialogo.window?.setLayout(ancho, alto)
+        dialogo.window?.setLayout(ancho, ViewGroup.LayoutParams.MATCH_PARENT)
     }
 
     private val COLORES_AVATAR = listOf(
