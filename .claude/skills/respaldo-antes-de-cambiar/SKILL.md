@@ -65,7 +65,7 @@ git push origin v1.3-pre-segmentadores
 | Vista nueva o refactor grande del frontend | **Sí** |
 | Retoque de texto, color o un componente aislado | No hace falta; basta el commit + push |
 
-Los tags vigentes están listados en `CLAUDE.md` §0 «Punto de recuperación». Al crear uno
+Los tags vigentes están listados en `docs/claude/RECUPERACION.md`. Al crear uno
 nuevo, **añadirlo a esa tabla** en el mismo trabajo.
 
 ## 4. Antes de desplegar
