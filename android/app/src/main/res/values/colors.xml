@@ -2,4 +2,20 @@
 <resources>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+
+    <!-- Paleta corporativa del menú de perfiles: el color guía, no satura. Cada perfil
+         lleva su color solo en la franja lateral y en el icono; la tarjeta es blanca. -->
+    <color name="sigep_primario">#00377B</color>
+    <color name="sigep_fondo">#F4F6F9</color>
+    <color name="sigep_superficie">#FFFFFF</color>
+    <color name="sigep_borde">#E2E8F0</color>
+    <color name="sigep_texto">#1F2937</color>
+    <color name="sigep_texto_secundario">#6B7280</color>
+
+    <color name="rol_operario">#1F7A5C</color>
+    <color name="rol_operario_suave">#E3F1EB</color>
+    <color name="rol_insumos">#C2650A</color>
+    <color name="rol_insumos_suave">#FBEEDF</color>
+    <color name="rol_supervisor">#00377B</color>
+    <color name="rol_supervisor_suave">#E0E8F3</color>
 </resources>

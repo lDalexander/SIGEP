@@ -1,80 +1,128 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:gravity="center"
-    android:padding="32dp"
-    android:background="#F0F0F0">
+    android:background="@color/sigep_fondo"
+    android:fitsSystemWindows="true">
 
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="SIGEP"
-        android:textSize="48sp"
-        android:textStyle="bold"
-        android:textColor="#1E293B"
-        android:layout_marginBottom="8dp"/>
+    <!-- Cabecera: logo + SIGEP a la izquierda, acceso Admin (engranaje) a la derecha -->
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/toolbarRoles"
+        android:layout_width="0dp"
+        android:layout_height="?attr/actionBarSize"
+        android:background="@color/sigep_superficie"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        app:contentInsetStart="8dp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
 
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Seleccione un perfil:"
-        android:textSize="18sp"
-        android:textColor="#555555"
-        android:layout_marginBottom="40dp"/>
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
-    <Button
-        android:id="@+id/btnRolOperario"
-        android:layout_width="match_parent"
-        android:layout_height="80dp"
-        android:text="👷 OPERARIO"
-        android:textSize="18sp"
-        android:textStyle="bold"
-        android:backgroundTint="#4CAF50"
-        android:layout_marginBottom="16dp"/>
+            <ImageView
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:contentDescription="Logo SIGEP"
+                android:src="@drawable/logo_sigep" />
 
-    <Button
-        android:id="@+id/btnRolInsumista"
-        android:layout_width="match_parent"
-        android:layout_height="80dp"
-        android:text="📦 GESTIÓN DE INSUMOS"
-        android:textSize="18sp"
-        android:textStyle="bold"
-        android:backgroundTint="#FF9800"
-        android:layout_marginBottom="16dp"/>
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:letterSpacing="0.06"
+                android:text="SIGEP"
+                android:textColor="@color/sigep_primario"
+                android:textSize="22sp"
+                android:textStyle="bold" />
+        </LinearLayout>
 
-    <Button
-        android:id="@+id/btnRolSupervisor"
-        android:layout_width="match_parent"
-        android:layout_height="80dp"
-        android:text="👔 SUPERVISOR"
-        android:textSize="18sp"
-        android:textStyle="bold"
-        android:backgroundTint="#3F51B5"
-        android:layout_marginBottom="1dp"/> <com.google.android.material.button.MaterialButton
-    android:id="@+id/btnAdminAccess"
-    style="@style/Widget.MaterialComponents.Button.TextButton"
-    android:layout_width="wrap_content"
-    android:layout_height="wrap_content"
-    android:layout_gravity="end"
-    android:text="Admin"
-    android:textColor="#4D4D4D"
-    android:textSize="12sp"
-    app:icon="@drawable/baseline_settings_24"
-    app:iconTint="#4D4D4D"
-    android:layout_marginBottom="16dp"/>
+        <ImageButton
+            android:id="@+id/btnAdminAccess"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="end"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Administración"
+            android:src="@drawable/ic_admin_ajustes"
+            app:tint="@color/sigep_texto_secundario" />
+    </com.google.android.material.appbar.MaterialToolbar>
 
-    <!-- El texto real lo pone MenuRolesActivity desde BuildConfig.VERSION_NAME (onCreate).
+    <View
+        android:id="@+id/divisorToolbar"
+        android:layout_width="0dp"
+        android:layout_height="1dp"
+        android:background="@color/sigep_borde"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/toolbarRoles" />
+
+    <ScrollView
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:fillViewport="true"
+        app:layout_constraintBottom_toTopOf="@id/textViewVersion"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/divisorToolbar"
+        app:layout_constraintWidth_max="640dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="vertical"
+            android:padding="32dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Seleccione un perfil"
+                android:textColor="@color/sigep_texto"
+                android:textSize="22sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:layout_marginBottom="24dp"
+                android:text="Elija cómo va a usar esta tablet"
+                android:textColor="@color/sigep_texto_secundario"
+                android:textSize="15sp" />
+
+            <include
+                android:id="@+id/btnRolOperario"
+                layout="@layout/item_tarjeta_rol" />
+
+            <include
+                android:id="@+id/btnRolInsumista"
+                layout="@layout/item_tarjeta_rol" />
+
+            <include
+                android:id="@+id/btnRolSupervisor"
+                layout="@layout/item_tarjeta_rol" />
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- El texto real lo pone MenuRolesActivity desde versionNameInstalada() (onCreate).
          Con tools:text el número solo existe en el preview y no puede quedar viejo. -->
     <TextView
         android:id="@+id/textViewVersion"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        tools:text="DETCUADOR S.A. | John Garcia | Versión 0.0.0"
-        android:textColor="#888888"
-        android:textSize="14sp" />
+        android:layout_marginBottom="16dp"
+        android:textColor="@color/sigep_texto_secundario"
+        android:textSize="13sp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        tools:text="DETCUADOR S.A. | John Garcia | Versión 0.0.0" />
 
-</LinearLayout>
+</androidx.constraintlayout.widget.ConstraintLayout>

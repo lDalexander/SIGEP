@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Tarjeta de un perfil del menú de roles. Icono, colores y textos los pone
+     MenuRolesActivity.configurarTarjeta(); aquí solo vive la estructura. -->
+<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginBottom="16dp"
+    android:clickable="true"
+    android:focusable="true"
+    app:cardBackgroundColor="@color/sigep_superficie"
+    app:cardCornerRadius="12dp"
+    app:cardElevation="1dp"
+    app:strokeColor="@color/sigep_borde"
+    app:strokeWidth="1dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:minHeight="96dp"
+        android:orientation="horizontal">
+
+        <!-- Franja lateral con el color del perfil -->
+        <View
+            android:id="@+id/franjaRol"
+            android:layout_width="5dp"
+            android:layout_height="match_parent"
+            tools:background="@color/rol_supervisor" />
+
+        <FrameLayout
+            android:id="@+id/circuloRol"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_marginStart="20dp"
+            android:background="@drawable/bg_circulo_icono"
+            tools:backgroundTint="@color/rol_supervisor_suave">
+
+            <ImageView
+                android:id="@+id/iconoRol"
+                android:layout_width="30dp"
+                android:layout_height="30dp"
+                android:layout_gravity="center"
+                android:importantForAccessibility="no"
+                tools:src="@drawable/ic_rol_supervisor"
+                tools:tint="@color/rol_supervisor" />
+        </FrameLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:paddingStart="20dp"
+            android:paddingTop="16dp"
+            android:paddingEnd="12dp"
+            android:paddingBottom="16dp">
+
+            <TextView
+                android:id="@+id/tituloRol"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/sigep_texto"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                tools:text="Supervisor" />
+
+            <TextView
+                android:id="@+id/descripcionRol"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:textColor="@color/sigep_texto_secundario"
+                android:textSize="14sp"
+                tools:text="Control de planta y maquinaria" />
+        </LinearLayout>
+
+        <ImageView
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_marginEnd="16dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_chevron_derecha"
+            app:tint="@color/sigep_texto_secundario" />
+    </LinearLayout>
+</com.google.android.material.card.MaterialCardView>

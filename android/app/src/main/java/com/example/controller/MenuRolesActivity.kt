@@ -1,11 +1,17 @@
 package com.example.controller
 
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.os.Bundle
 import android.view.LayoutInflater
-import android.widget.Button
+import android.view.View
+import android.widget.ImageView
+import android.widget.TextView
 import android.widget.Toast
+import androidx.annotation.ColorRes
+import androidx.annotation.DrawableRes
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.controller.util.versionNameInstalada
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -16,21 +22,26 @@ import kotlinx.coroutines.withContext
 
 class MenuRolesActivity : AppCompatActivity() {
 
-    private lateinit var btnOperador: Button
-    private lateinit var btnInsumista: Button
-    private lateinit var btnAdminAccess: Button
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_menu_roles)
 
-        btnOperador = findViewById(R.id.btnRolOperario)
-        btnInsumista = findViewById(R.id.btnRolInsumista)
-        val btnRolSupervisor = findViewById<Button>(R.id.btnRolSupervisor)
-        btnAdminAccess = findViewById(R.id.btnAdminAccess)
+        val btnOperador = configurarTarjeta(
+            R.id.btnRolOperario, "Operario", "Producción, paros y checklist de la máquina",
+            R.drawable.ic_rol_operario, R.color.rol_operario, R.color.rol_operario_suave
+        )
+        val btnInsumista = configurarTarjeta(
+            R.id.btnRolInsumista, "Gestión de Insumos", "Pedidos y entregas de bodega",
+            R.drawable.ic_rol_insumos, R.color.rol_insumos, R.color.rol_insumos_suave
+        )
+        val btnRolSupervisor = configurarTarjeta(
+            R.id.btnRolSupervisor, "Supervisor", "Control de planta y maquinaria",
+            R.drawable.ic_rol_supervisor, R.color.rol_supervisor, R.color.rol_supervisor_suave
+        )
+        val btnAdminAccess = findViewById<View>(R.id.btnAdminAccess)
         // versionNameInstalada() y NO BuildConfig.VERSION_NAME: esa constante se incrusta
         // en el .class y se queda vieja si el archivo no se recompila (ver VersionApp.kt).
-        findViewById<android.widget.TextView>(R.id.textViewVersion)?.text =
+        findViewById<TextView>(R.id.textViewVersion)?.text =
             "DETCUADOR S.A. | John Garcia | Versión ${versionNameInstalada()}"
 
         btnRolSupervisor.setOnClickListener {
@@ -54,6 +65,30 @@ class MenuRolesActivity : AppCompatActivity() {
         btnAdminAccess.setOnClickListener {
             mostrarDialogoAdminAuth()
         }
+    }
+
+    /** Rellena una tarjeta de item_tarjeta_rol: el color del perfil va solo en la franja y el icono. */
+    private fun configurarTarjeta(
+        idTarjeta: Int,
+        titulo: String,
+        descripcion: String,
+        @DrawableRes icono: Int,
+        @ColorRes color: Int,
+        @ColorRes colorSuave: Int
+    ): View {
+        val tarjeta = findViewById<View>(idTarjeta)
+        val colorPerfil = ContextCompat.getColor(this, color)
+        tarjeta.findViewById<View>(R.id.franjaRol).setBackgroundColor(colorPerfil)
+        tarjeta.findViewById<View>(R.id.circuloRol).backgroundTintList =
+            ColorStateList.valueOf(ContextCompat.getColor(this, colorSuave))
+        tarjeta.findViewById<ImageView>(R.id.iconoRol).apply {
+            setImageResource(icono)
+            imageTintList = ColorStateList.valueOf(colorPerfil)
+        }
+        tarjeta.findViewById<TextView>(R.id.tituloRol).text = titulo
+        tarjeta.findViewById<TextView>(R.id.descripcionRol).text = descripcion
+        tarjeta.contentDescription = "$titulo. $descripcion"
+        return tarjeta
     }
 
     private fun mostrarDialogoAdminAuth() {
