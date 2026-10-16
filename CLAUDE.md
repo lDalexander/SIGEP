@@ -37,8 +37,11 @@ SIGEP/
 
 ## 0. Estado actual
 
-- **App Android:** `1.7.1` (`versionCode` 15), instalada y verificada en planta el
-  2026-10-13. Es la versión estable de referencia (tag `v1.7.1`).
+- **App Android:** `1.8.0` (`versionCode` 16) en el código desde el 2026-10-16, **aún sin
+  instalar en planta**: reúne el chat de bodega, la bandeja del insumista y la entrega sin
+  máquina (2026-10-13, tarde), la splash animada en Compose y el menú de perfiles con
+  tarjetas. La estable de referencia en planta sigue siendo la `1.7.1` (`versionCode` 15,
+  tag `v1.7.1`, verificada el 2026-10-13).
 - **Último trabajo (2026-10-13):** chat de bodega por conversaciones (par supervisor ↔
   insumista), torre de control renovada, bandeja del insumista con 4 pestañas y entrega
   proactiva sin máquina (`maquina` NULL). Tags previos: `v1.20-pre-chat-conversaciones`,
