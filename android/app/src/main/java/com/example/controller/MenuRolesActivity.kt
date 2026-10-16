@@ -2,16 +2,22 @@ package com.example.controller
 
 import android.content.Intent
 import android.content.res.ColorStateList
+import android.graphics.Color
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
+import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.SystemBarStyle
+import androidx.activity.enableEdgeToEdge
 import androidx.annotation.ColorRes
 import androidx.annotation.DrawableRes
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.controller.util.versionNameInstalada
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -23,8 +29,15 @@ import kotlinx.coroutines.withContext
 class MenuRolesActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Barras del sistema transparentes con iconos oscuros, también en Android < 15,
+        // para que el blanco de la cabecera llegue hasta el borde de la cámara.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
+        )
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_menu_roles)
+        aplicarInsets()
 
         val btnOperador = configurarTarjeta(
             R.id.btnRolOperario, "Operario", "Producción, paros y checklist de la máquina",
@@ -65,6 +78,27 @@ class MenuRolesActivity : AppCompatActivity() {
         btnAdminAccess.setOnClickListener {
             mostrarDialogoAdminAuth()
         }
+    }
+
+    /**
+     * Sustituye, solo en esta pantalla, el relleno global de SigepApplication: ese relleno
+     * deja una franja del color de la ventana entre la cámara y la cabecera. Aquí el alto
+     * de la barra de estado va DENTRO de la cabecera blanca y el de la barra de navegación
+     * dentro del fondo gris, así que no queda ninguna franja de otro color.
+     */
+    private fun aplicarInsets() {
+        val contenido = findViewById<View>(android.R.id.content)
+        val cabecera = findViewById<View>(R.id.cabeceraRoles)
+        ViewCompat.setOnApplyWindowInsetsListener(contenido) { v, insets ->
+            val barras = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            v.setPadding(barras.left, 0, barras.right, 0)
+            cabecera.setPadding(0, barras.top, 0, 0)
+            (v as? ViewGroup)?.getChildAt(0)?.setPadding(0, 0, 0, barras.bottom)
+            insets
+        }
+        ViewCompat.requestApplyInsets(contenido)
     }
 
     /** Rellena una tarjeta de item_tarjeta_rol: el color del perfil va solo en la franja y el icono. */
