@@ -31,6 +31,7 @@ Al crear un tag nuevo, **añadirlo a esta tabla** en el mismo trabajo.
 | Tag previo a la fragancia en la jerarquía | `v1.19-pre-jerarquia-fragancia` (en GitHub) |
 | Tag previo al chat por conversaciones | `v1.20-pre-chat-conversaciones` (en GitHub) |
 | Tag previo a la entrega sin máquina | `v1.21-pre-entregas-sin-maquina` (en GitHub) |
+| Tag previo a la splash animada en Compose | `v1.22-pre-splash-compose` (en GitHub) |
 | Build previo a agrupar por producto | `~/respaldos_build_sigep/build_2026-08-31_141538` |
 | Build previo al logo original | `~/respaldos_build_sigep/build_2026-08-31_142715` |
 | Build previo a la fragancia en la jerarquía | `~/respaldos_build_sigep/build_2026-08-31_145150` |
