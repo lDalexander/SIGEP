@@ -52,7 +52,7 @@ private val TamanoGota = 96.dp
  *  1 (0.0–0.7 s)  nombre largo + SIGEP
  *  2 (0.7–1.3 s)  se va el nombre largo, SIGEP crece con rebote
  *  3 (1.3–2.5 s)  SIGEP desaparece, cae la "gota" (logo Detcuador)
- *  4 (2.5–4.2 s)  la gota se aparta a la izquierda y aparece la firma
+ *  4 (2.5–4.5 s)  la gota se aparta a la izquierda y aparece la firma
  *
  * [version] se pinta bajo la firma: en planta es la forma rápida de ver qué APK tiene
  * la tablet (ver VersionApp.kt). null = no se muestra.
@@ -70,7 +70,7 @@ fun SplashScreenAnimada(version: String? = null, onTerminado: () -> Unit) {
         faseAnimacion = 3
         delay(1_200)
         faseAnimacion = 4
-        delay(1_700)
+        delay(2_000)
         terminar()
     }
 
