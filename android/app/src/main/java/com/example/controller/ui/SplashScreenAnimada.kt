@@ -49,10 +49,10 @@ private val TamanoGota = 96.dp
 
 /**
  * Splash en 4 fases:
- *  1 (0.0–1.5 s)  nombre largo + SIGEP
- *  2 (1.5–2.5 s)  se va el nombre largo, SIGEP crece con rebote
- *  3 (2.5–3.7 s)  SIGEP desaparece, cae la "gota" (logo Detcuador)
- *  4 (3.7–5.7 s)  la gota se aparta a la izquierda y aparece la firma
+ *  1 (0.0–0.7 s)  nombre largo + SIGEP
+ *  2 (0.7–1.3 s)  se va el nombre largo, SIGEP crece con rebote
+ *  3 (1.3–2.5 s)  SIGEP desaparece, cae la "gota" (logo Detcuador)
+ *  4 (2.5–4.2 s)  la gota se aparta a la izquierda y aparece la firma
  *
  * [version] se pinta bajo la firma: en planta es la forma rápida de ver qué APK tiene
  * la tablet (ver VersionApp.kt). null = no se muestra.
@@ -64,13 +64,13 @@ fun SplashScreenAnimada(version: String? = null, onTerminado: () -> Unit) {
 
     LaunchedEffect(Unit) {
         faseAnimacion = 1
-        delay(1_500)
+        delay(700)
         faseAnimacion = 2
-        delay(1_000)
+        delay(600)
         faseAnimacion = 3
         delay(1_200)
         faseAnimacion = 4
-        delay(2_000)
+        delay(1_700)
         terminar()
     }
 
@@ -181,7 +181,15 @@ fun SplashScreenAnimada(version: String? = null, onTerminado: () -> Unit) {
                     .graphicsLayer { alpha = alphaFirma }
             ) {
                 Text(
-                    text = "Desarrollado por John Garcia | DETCUADOR S.A.",
+                    text = "Desarrollado por John Garcia",
+                    color = TextoPrincipal,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.5.sp,
+                    softWrap = false
+                )
+                Text(
+                    text = "DETCUADOR S.A.",
                     color = TextoPrincipal,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
