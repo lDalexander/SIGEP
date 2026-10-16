@@ -11,9 +11,11 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.widget.Toast
+import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
+import com.example.controller.ui.SplashScreenAnimada
 import com.example.controller.util.versionNameInstalada
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -24,15 +26,15 @@ class SplashActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_splash)
         supportActionBar?.hide()
         // versionNameInstalada() y NO BuildConfig.VERSION_NAME (ver VersionApp.kt): esta
         // pantalla es justo una de las que se quedó mostrando «1.2.3» con la 1.5.1 puesta.
-        findViewById<android.widget.TextView>(R.id.textViewDevelopedBy)?.text =
-            "Desarrollado por John Alexander Garcia | DETCUADOR S.A. | Versión ${versionNameInstalada()}"
-        // API de actualización deshabilitada temporalmente (aún no integrada).
-        // Para reactivarla, reemplazar la línea siguiente por: verificarActualizacion()
-        continuarAPrincipal()
+        val version = versionNameInstalada()
+        setContent {
+            // API de actualización deshabilitada temporalmente (aún no integrada).
+            // Para reactivarla, reemplazar continuarAPrincipal() por: verificarActualizacion()
+            SplashScreenAnimada(version = version) { continuarAPrincipal() }
+        }
     }
 
     @Suppress("unused")

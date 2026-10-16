@@ -3,6 +3,7 @@ import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
+    alias(libs.plugins.compose.compiler)
     id("com.google.gms.google-services")
     id("com.google.firebase.crashlytics")
 }
@@ -59,6 +60,8 @@ android {
     }
     buildFeatures {
         buildConfig = true
+        // Solo la splash animada (SplashScreenAnimada.kt) usa Compose; el resto sigue en XML.
+        compose = true
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
@@ -100,4 +103,13 @@ dependencies {
 
     // ProcessLifecycleOwner (heartbeat start/stop)
     implementation("androidx.lifecycle:lifecycle-process:2.6.2")
+
+    // Jetpack Compose (splash animada)
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.foundation)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.androidx.activity.compose)
+    debugImplementation(libs.androidx.compose.ui.tooling)
 }
